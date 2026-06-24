@@ -190,6 +190,22 @@ const PANEL_HTML = /* html */ `<!doctype html>
     padding: .6rem 1rem; border-radius: 8px; opacity: 0; transition: .3s; pointer-events: none; }
   #msg.show { opacity: 1; }
   #msg.err { border-color: var(--danger); color: var(--danger); }
+  .preview { margin-bottom: 1.5rem; }
+  .video-wrap { position: relative; background: #000; border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; }
+  .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .video-ph { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--muted); font-size: .9rem; text-align: center; padding: 1rem; }
+  .conn { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; margin-top: .8rem; }
+  .conn .field { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: .5rem .65rem; }
+  .conn .copyrow { display: flex; gap: .4rem; align-items: center; }
+  .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .82rem;
+    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
+    font-size: .75rem; }
+  .conn button:hover { color: var(--text); }
+  @media (max-width: 560px) { .conn { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -198,6 +214,22 @@ const PANEL_HTML = /* html */ `<!doctype html>
   <div class="status"><span class="dot" id="liveDot"></span><span id="liveTxt">comprobando…</span></div>
 </header>
 <main>
+  <section class="preview">
+    <div class="video-wrap">
+      <video id="player" muted playsinline></video>
+      <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
+    </div>
+    <div class="conn">
+      <div class="field">
+        <label>Servidor RTMP (en OBS)</label>
+        <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
+      </div>
+      <div class="field">
+        <label>Clave de retransmisión</label>
+        <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+      </div>
+    </div>
+  </section>
   <div class="grid" id="list"></div>
   <details class="add">
     <summary>+ Añadir destino</summary>
@@ -211,10 +243,13 @@ const PANEL_HTML = /* html */ `<!doctype html>
   </details>
 </main>
 <div id="msg"></div>
+<script src="/flv.min.js"></script>
 <script>
   const $ = (s) => document.querySelector(s);
   const list = $('#list');
   let msgTimer;
+  let flvUrl = '';
+  let player = null;
 
   function toast(text, isErr) {
     const m = $('#msg');
