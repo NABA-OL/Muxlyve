@@ -1,0 +1,25 @@
+{
+  "destinations": [
+    {
+      "name": "Twitch",
+      "enabled": true,
+      "url": "rtmp://live.twitch.tv/app/TU_CLAVE_DE_TWITCH"
+    },
+    {
+      "name": "Kick",
+      "enabled": true,
+      "url": "rtmps://ingest.kick.com/live/TU_CLAVE_DE_KICK"
+    },
+    {
+      "name": "YouTube",
+      "enabled": true,
+      "url": "rtmp://a.rtmp.youtube.com/live2/TU_CLAVE_DE_YOUTUBE"
+    },
+    {
+      "name": "TikTok",
+      "enabled": false,
+      "_nota": "TikTok regenera la clave cada sesion (~2h). Pega la URL+clave nueva y pon enabled:true justo antes de salir en vivo.",
+      "url": "rtmp://SERVIDOR_TIKTOK/live/CLAVE_TEMPORAL_TIKTOK"
+    }
+  ]
+}

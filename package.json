@@ -1,0 +1,24 @@
+{
+  "name": "multi-stream",
+  "version": "0.1.0",
+  "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "validate": "node scripts/validate.mjs",
+    "test": "bash scripts/smoke-test.sh"
+  },
+  "keywords": [
+    "rtmp",
+    "restream",
+    "streaming",
+    "ffmpeg",
+    "obs"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "node-media-server": "^2.6.0"
+  }
+}

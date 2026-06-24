@@ -1,0 +1,13 @@
+node_modules/
+.env
+config/destinations.json
+config/destinations.json.bak
+*.log
+media/
+.DS_Store
+
+# AI Agent Context Files
+CLAUDE.md
+CONTEXT.md
+agents.md
+AI.md
