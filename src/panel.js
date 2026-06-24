@@ -273,6 +273,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
   function render(state) {
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
+    updatePreview(state.live);
     list.innerHTML = '';
     for (const d of state.destinations) {
       const isTikTok = /tiktok/i.test(d.name);
@@ -331,6 +332,41 @@ const PANEL_HTML = /* html */ `<!doctype html>
     try { render(await api('GET', '/api/state')); } catch {}
   }
 
+  function copy(id) {
+    const text = $('#' + id).textContent;
+    if (!text || text === '—') return;
+    navigator.clipboard.writeText(text).then(() => toast('Copiado'), () => toast('No se pudo copiar', true));
+  }
+
+  // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
+  // cuando OBS publica (si no, el FLV no existe y daría error).
+  function updatePreview(live) {
+    const ph = $('#videoPh');
+    if (live && !player && flvUrl && window.flvjs && flvjs.isSupported()) {
+      const video = $('#player');
+      player = flvjs.createPlayer({ type: 'flv', url: flvUrl, isLive: true });
+      player.attachMediaElement(video);
+      player.load();
+      player.play().catch(() => {});
+      ph.style.display = 'none';
+    } else if (!live && player) {
+      player.destroy();
+      player = null;
+      ph.textContent = 'Esperando señal de OBS…';
+      ph.style.display = 'flex';
+    }
+  }
+
+  async function loadConfig() {
+    try {
+      const c = await api('GET', '/api/config');
+      flvUrl = c.flvUrl || '';
+      $('#rtmpUrl').textContent = c.rtmpUrl || '—';
+      $('#streamKey').textContent = c.streamKey || '—';
+    } catch {}
+  }
+
+  loadConfig();
   refresh();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
 </script>

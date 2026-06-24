@@ -121,7 +121,8 @@ Pensado para que funcione local hoy y migre a un VPS mañana sin reescribir.
 
 Observadas en Restream como referencia. Ordenadas por **valor / esfuerzo** — implementar de arriba a abajo.
 
-### 7.1 Previsualización del stream en el panel — 🟢 FÁCIL (ganar barato)
+### 7.1 Previsualización del stream en el panel — ✅ HECHO
+
 - `node-media-server` **ya expone HTTP-FLV** en el puerto HTTP (`http://localhost:8000/live/<STREAM_KEY>.flv`).
 - Preview = reproducir ese FLV en el panel con `flv.js` (una etiqueta `<video>` + la lib). Sin recodificar, sin coste extra.
 - Mostrar también la URL de ingest (`rtmp://localhost:1935/live`) y la `STREAM_KEY` con botón "copiar" (como Restream).
