@@ -49,6 +49,18 @@ cp config/destinations.example.json config/destinations.json
 docker compose up --build
 ```
 
+## Cifrado de claves (opcional, recomendado)
+
+Define `MASTER_KEY` en tu `.env` para cifrar las claves de stream en reposo (AES-256-GCM):
+
+```bash
+# genera una clave fuerte
+openssl rand -base64 32
+# pégala en .env -> MASTER_KEY=...
+```
+
+Con `MASTER_KEY` definida, `config/destinations.json` guarda las claves como `urlEnc` (cifradas), nunca en texto plano. Tras definirla, guarda cualquier destino en el panel para migrar las claves existentes. Sin `MASTER_KEY` el motor sigue funcionando pero guarda en texto plano (con aviso).
+
 ## Configurar OBS
 
 En OBS → Ajustes → Emisión:

@@ -4,6 +4,7 @@ config/destinations.json
 config/destinations.json.bak
 *.log
 media/
+dist-app/
 .DS_Store
 
 # AI Agent Context Files

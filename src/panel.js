@@ -3,14 +3,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, isRelaying, applyChange, stopByName } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry } from './relays.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// flv.js auto-hospedado (sin CDN): cargado una vez al arrancar.
-const FLV_JS = readFileSync(path.join(__dirname, 'public', 'flv.min.js'));
+const PUBLIC = path.join(__dirname, 'public');
+// Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar.
+const FLV_JS = readFileSync(path.join(PUBLIC, 'flv.min.js'));
+const LOGO_SVG = readFileSync(path.join(PUBLIC, 'logo.svg'));
+const ICON_SVG = readFileSync(path.join(PUBLIC, 'icon.svg'));
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -18,17 +21,24 @@ function json(res, code, data) {
   res.end(body);
 }
 
-// Estado que ve el panel: emisión activa + cada destino con su flag de reenvío en vivo.
+// Estado que ve el panel: emisión activa, uptime y cada destino con su estado/métricas.
 function buildState() {
-  const destinations = loadAll().map((d) => ({
-    name: d.name,
-    url: d.url || '',
-    enabled: Boolean(d.enabled),
-    note: d._nota || '',
-    playable: isPlayable(d),
-    relaying: isRelaying(d.name),
-  }));
-  return { live: isLive(), destinations };
+  const destinations = loadAll().map((d) => {
+    const info = relayInfo(d.name);
+    return {
+      name: d.name,
+      url: d.url || '',
+      enabled: Boolean(d.enabled),
+      note: d._nota || '',
+      playable: isPlayable(d),
+      relaying: info.status === 'live' || info.status === 'connecting',
+      status: info.status,
+      attempts: info.attempts,
+      metrics: info.metrics,
+      lagging: info.lagging,
+    };
+  });
+  return { live: isLive(), uptime: uptimeSeconds(), destinations };
 }
 
 function readBody(req) {
@@ -87,6 +97,15 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
+  // POST /api/retry?name=X  -> reintento manual de un destino 'failed'
+  if (req.method === 'POST' && url.pathname === '/api/retry') {
+    const name = url.searchParams.get('name');
+    const dest = loadAll().find((d) => d.name === name);
+    if (!dest) return json(res, 404, { error: 'Destino no encontrado.' });
+    retry(dest);
+    return json(res, 200, buildState());
+  }
+
   // DELETE /api/destinations?name=X
   if (req.method === 'DELETE' && url.pathname === '/api/destinations') {
     const name = url.searchParams.get('name');
@@ -116,6 +135,10 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
         return res.end(FLV_JS);
       }
+      if (url.pathname === '/logo.svg' || url.pathname === '/icon.svg') {
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+        return res.end(url.pathname === '/logo.svg' ? LOGO_SVG : ICON_SVG);
+      }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(PANEL_HTML);
@@ -139,11 +162,12 @@ const PANEL_HTML = /* html */ `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Multi_Stream — Panel</title>
+<link rel="icon" href="/icon.svg">
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
     --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
-    --danger: #f85149; --live: #2ea043; --off: #484f58;
+    --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -151,10 +175,10 @@ const PANEL_HTML = /* html */ `<!doctype html>
   header { display: flex; align-items: center; justify-content: space-between;
     gap: 1rem; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
     background: var(--surface); position: sticky; top: 0; z-index: 5; }
-  h1 { font-size: 1.15rem; margin: 0; letter-spacing: -0.01em; }
-  h1 span { color: var(--accent); }
+  .logo { height: 34px; display: block; }
   .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem;
     color: var(--muted); }
+  .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
     box-shadow: 0 0 0 0 transparent; transition: .3s; }
   .dot.on { background: var(--live); box-shadow: 0 0 0 4px rgba(46,160,67,.18); }
@@ -166,8 +190,14 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .card-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .8rem; }
   .card-head .name { font-weight: 600; font-size: 1.05rem; flex: 1; }
   .pill { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px;
-    background: var(--surface-2); color: var(--muted); }
-  .pill.relaying { background: rgba(46,160,67,.15); color: var(--live); }
+    background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .pill.live { background: rgba(46,160,67,.15); color: var(--live); }
+  .pill.reconnecting { background: rgba(240,162,58,.15); color: var(--warn); }
+  .pill.failed { background: rgba(248,81,73,.15); color: var(--danger); }
+  .pill.lagging { background: rgba(240,162,58,.15); color: var(--warn); }
+  .metrics { font-size: .72rem; color: var(--muted); margin-left: auto;
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .retry { background: var(--danger); color: #fff; }
   label { display: block; font-size: .75rem; color: var(--muted); margin: 0 0 .25rem; }
   input[type=text] { width: 100%; background: var(--bg); border: 1px solid var(--border);
     color: var(--text); border-radius: 8px; padding: .55rem .65rem; font-size: .9rem;
@@ -210,8 +240,12 @@ const PANEL_HTML = /* html */ `<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Multi<span>_</span>Stream</h1>
-  <div class="status"><span class="dot" id="liveDot"></span><span id="liveTxt">comprobando…</span></div>
+  <img src="/logo.svg" alt="Multi_Stream" class="logo">
+  <div class="status">
+    <span class="dot" id="liveDot"></span>
+    <span id="liveTxt">comprobando…</span>
+    <span class="uptime" id="uptime"></span>
+  </div>
 </header>
 <main>
   <section class="preview">
@@ -270,19 +304,52 @@ const PANEL_HTML = /* html */ `<!doctype html>
     return data;
   }
 
+  function fmtUptime(s) {
+    if (s == null) return '';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const p = (n) => String(n).padStart(2, '0');
+    return (h ? p(h) + ':' : '') + p(m) + ':' + p(sec);
+  }
+
+  // Devuelve { cls, text } para la píldora de estado de un destino.
+  function pillFor(d) {
+    if (d.status === 'live') {
+      return d.lagging
+        ? { cls: 'lagging', text: '⚠ rezagado' }
+        : { cls: 'live', text: '● reenviando' };
+    }
+    if (d.status === 'connecting') return { cls: 'reconnecting', text: '⟳ conectando…' };
+    if (d.status === 'reconnecting') return { cls: 'reconnecting', text: '⟳ reconectando… intento ' + d.attempts };
+    if (d.status === 'failed') return { cls: 'failed', text: '✕ falló' };
+    return { cls: '', text: d.enabled ? 'activo' : 'apagado' };
+  }
+
+  function metricsFor(d) {
+    if (d.status !== 'live' || !d.metrics) return '';
+    const parts = [];
+    if (d.metrics.bitrate != null) parts.push(d.metrics.bitrate + ' kbps');
+    if (d.metrics.fps != null) parts.push(d.metrics.fps + ' fps');
+    if (d.metrics.speed != null) parts.push(d.metrics.speed + 'x');
+    return parts.join(' · ');
+  }
+
   function render(state) {
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
+    $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     updatePreview(state.live);
     list.innerHTML = '';
     for (const d of state.destinations) {
       const isTikTok = /tiktok/i.test(d.name);
+      const pill = pillFor(d);
+      const metrics = metricsFor(d);
       const card = document.createElement('div');
       card.className = 'card' + (isTikTok ? ' tiktok' : '');
       card.innerHTML = \`
         <div class="card-head">
           <span class="name"></span>
-          <span class="pill\${d.relaying ? ' relaying' : ''}">\${d.relaying ? '● reenviando' : (d.enabled ? 'activo' : 'apagado')}</span>
+          <span class="pill \${pill.cls}"></span>
+          <span class="metrics"></span>
         </div>
         <div class="field">
           <label>URL RTMP\${isTikTok ? ' — pega aquí la clave temporal de TikTok' : ''}</label>
@@ -291,22 +358,31 @@ const PANEL_HTML = /* html */ `<!doctype html>
         <div class="row">
           <button class="toggle\${d.enabled ? ' on' : ''}">\${d.enabled ? 'ON' : 'OFF'}</button>
           <button class="save">Guardar</button>
+          \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
-        \${d.note ? '<p class="note">' + '⚠ ' + '</p>' : ''}
+        \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;
+      card.querySelector('.pill').textContent = pill.text;
+      card.querySelector('.metrics').textContent = metrics;
       const urlInput = card.querySelector('.url');
       urlInput.value = d.url;
       if (d.note) card.querySelector('.note').textContent = '⚠ ' + d.note;
 
-      card.querySelector('.toggle').onclick = () =>
-        save(d.name, urlInput.value, !d.enabled);
-      card.querySelector('.save').onclick = () =>
-        save(d.name, urlInput.value, d.enabled);
+      card.querySelector('.toggle').onclick = () => save(d.name, urlInput.value, !d.enabled);
+      card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled);
       card.querySelector('.del').onclick = () => del(d.name);
+      const retryBtn = card.querySelector('.retry');
+      if (retryBtn) retryBtn.onclick = () => doRetry(d.name);
       list.appendChild(card);
     }
+  }
+
+  async function doRetry(name) {
+    try { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name)));
+      toast('Reintentando ' + name); }
+    catch (e) { toast(e.message, true); }
   }
 
   async function save(name, url, enabled) {
