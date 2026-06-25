@@ -50,7 +50,7 @@ Recomendación: **no muchas páginas**. Una landing principal con secciones ancl
 2. **Qué hace / problema** — el dolor (Restream cobra y pone marca de agua) → tu solución.
 3. **Características** — tarjetas: sin marca de agua, corre en tu máquina, reconexión automática, preview en vivo, pago único.
 4. **Plataformas** — los 4 logos (Twitch/Kick/YouTube/TikTok).
-5. **Precio** — pago único, qué incluye, botón de compra (Freemius).
+5. **Precios** — tres planes (mensual / anual / vitalicia — modelo híbrido, ver `PRICING.md`), con la **vitalicia destacada** como el diferenciador ("paga una vez vs mensualidad eterna de Restream"). Toggle mensual/anual como hace Restream. Botón de compra (Freemius).
 6. **Descarga / requisitos** — enlace al instalador (Windows; Mac "próximamente").
 7. **Footer** — legales, créditos FFmpeg (LGPL), contacto.
 

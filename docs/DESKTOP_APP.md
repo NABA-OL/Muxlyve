@@ -149,10 +149,20 @@ Sin firma, Windows (SmartScreen) y Mac (Gatekeeper) marcan la app como "peligros
 - electron-updater + publicación de versiones.
 - Firma de código Windows.
 
+### Fase C.5 — UI mejorada + grabador de clips ✅ HECHO
+- **Layout 50/50**: preview + config OBS en la mitad izquierda (sticky al scroll), destinos en la mitad derecha.
+- **Grabador de clips**: buffer rodante de últimos 30s/1min/2min disponible. Mientras OBS transmite, FFmpeg copia segmentos continuamente en `/tmp`. Al pulsar "Guardar clip", concatena los últimos N segmentos en MP4 sin recodificar (misma bitrate/codec que OBS).
+- **Selector de carpeta**: usuario elige dónde guardar clips. En Electron, abre el selector nativo del SO; en modo servidor, permite escribir la ruta a mano. La carpeta se recuerda entre sesiones (`localStorage`).
+- **Fix: edición de URLs** → el poll cada 2s ya no resetea los campos mientras escribes.
+- **FFmpeg en Mac**: `resolveFfmpeg()` detecta Homebrew (`/opt/homebrew/bin/ffmpeg` o `/usr/local/bin/ffmpeg`) antes de usar `ffmpeg-static` (que tiene TLS limitado en macOS).
+
 ### Fase D — Mac
 - Build para macOS, firma + notarización Apple.
+- **FFmpeg bundleado**: descargar binario macOS de evermeet.cx, meterlo en `resources/ffmpeg`, declarar en electron-builder `extraResources`. El `.app` incluye ffmpeg — usuario no necesita Homebrew.
 
-### Fase E — Pulido de producto
+### Fase E — Pulido de producto 🔲 PENDIENTE
+- **Splash screen con animación**: ventana custom al arrancar (spinner + logo + "Cargando…") mientras se inicia el motor. Cierra cuando esté listo.
+- **Instalador custom NSIS** (Windows): script personalizado con logo branded, colores de marca, mensajes custom (en lugar del default de electron-builder).
 - Onboarding, "Acerca de" con licencias de FFmpeg, pantalla de ajustes, manejo de errores amable.
 
 ---
