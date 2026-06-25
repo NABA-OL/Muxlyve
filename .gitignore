@@ -5,6 +5,8 @@ config/destinations.json.bak
 *.log
 media/
 dist-app/
+build/mac/
+build/icon.icns
 .DS_Store
 
 # AI Agent Context Files

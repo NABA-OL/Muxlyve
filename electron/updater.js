@@ -1,5 +1,6 @@
-import { autoUpdater } from 'electron-updater';
+import { createRequire } from 'node:module';
 import { dialog } from 'electron';
+const { autoUpdater } = createRequire(import.meta.url)('electron-updater');
 
 export function initUpdater(win) {
   // Solo correr en builds empaquetados; en dev no hay releases que buscar.
