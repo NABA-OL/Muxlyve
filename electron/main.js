@@ -1,11 +1,13 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { checkLicense } from './license.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT = Number(process.env.PANEL_PORT || 8080);
+const ICON_PATH = path.join(__dirname, '../build/icon.ico');
 const PANEL_URL = `http://127.0.0.1:${PANEL_PORT}/`;
 
 let win = null;
@@ -36,6 +38,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0d1117',
     title: 'Multi_Stream',
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,

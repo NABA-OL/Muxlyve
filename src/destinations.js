@@ -71,7 +71,7 @@ function encode(d) {
 // Valida que la URL sea un destino RTMP real y no un placeholder de la plantilla.
 export function isValidUrl(url) {
   if (typeof url !== 'string') return false;
-  if (!/^rtmps?:\/\//i.test(url)) return false;
+  if (!/^(rtmps?|srt):\/\//i.test(url)) return false;
   return !PLACEHOLDERS.some((p) => url.includes(p));
 }
 

@@ -32,7 +32,7 @@ const MAX_ATTEMPTS = 6;
 const BASE_DELAY = 2000; // ms
 const MAX_DELAY = 30000; // tope del backoff
 const STABLE_MS = 15000; // vivo este tiempo sin morir => resetea intentos
-const LAG_SPEED = 0.9; // speed < 0.9x sostenido => rezagado
+const LAG_SPEED = 0.85; // speed < 0.85x sostenido => rezagado
 const STALE_MS = 6000; // sin progreso este tiempo => rezagado
 
 function maskUrl(url) {
@@ -85,7 +85,8 @@ function startRelay(dest) {
   if (prev && (prev.status === 'connecting' || prev.status === 'live')) return; // ya corre
 
   // -c copy = reenvío sin recodificar (carga mínima de CPU)
-  const args = ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', 'flv', dest.url];
+  const fmt = dest.url.startsWith('srt://') ? 'mpegts' : 'flv';
+  const args = ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', fmt, dest.url];
   const proc = spawn(FFMPEG, args);
 
   const entry = {

@@ -68,7 +68,7 @@ function validateDestination(input) {
   if (url.length > MAX_URL) return { error: `URL máxima ${MAX_URL} caracteres.` };
   // Solo exigimos URL válida si se quiere habilitar (TikTok puede quedar deshabilitado con placeholder).
   if (enabled && !isValidUrl(url)) {
-    return { error: 'Para activar, la URL debe empezar por rtmp:// o rtmps:// y no ser un placeholder.' };
+    return { error: 'Para activar, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.' };
   }
   return { dest: { name, url, enabled } };
 }
@@ -168,27 +168,57 @@ const PANEL_HTML = /* html */ `<!doctype html>
     --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
     --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
     --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
+    --header-h: 68px;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  /* ── Header ── */
   header { display: flex; align-items: center; justify-content: space-between;
-    gap: 1rem; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
-    background: var(--surface); position: sticky; top: 0; z-index: 5; }
+    gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+    background: var(--surface); position: sticky; top: 0; z-index: 5;
+    height: var(--header-h); }
   .logo { height: 34px; display: block; }
-  .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem;
-    color: var(--muted); }
+  .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
   .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
     box-shadow: 0 0 0 0 transparent; transition: .3s; }
   .dot.on { background: var(--live); box-shadow: 0 0 0 4px rgba(46,160,67,.18); }
-  main { max-width: 760px; margin: 0 auto; padding: 1.5rem; }
-  .grid { display: grid; gap: 1rem; }
+
+  /* ── Two-column layout ── */
+  main { padding: 1.25rem 1.5rem; }
+  .layout { display: grid; grid-template-columns: 360px 1fr; gap: 1.25rem; align-items: start; }
+  .left-col { position: sticky; top: calc(var(--header-h) + 1.25rem); }
+  .right-col { display: flex; flex-direction: column; gap: 1rem; }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    .left-col { position: static; }
+  }
+
+  /* ── Preview ── */
+  .preview { margin-bottom: 1rem; }
+  .video-wrap { position: relative; background: #000; border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; }
+  .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .video-ph { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--muted); font-size: .88rem; text-align: center; padding: 1rem; }
+  .conn { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
+  .conn .field { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: .5rem .65rem; }
+  .conn .copyrow { display: flex; gap: .4rem; align-items: center; }
+  .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
+    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
+    font-size: .75rem; border: none; border-radius: 6px; cursor: pointer; }
+  .conn button:hover { color: var(--text); }
+
+  /* ── Destination cards ── */
   .card { background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; padding: 1.1rem 1.2rem; }
   .card.tiktok { border-color: var(--accent); }
   .card-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .8rem; }
-  .card-head .name { font-weight: 600; font-size: 1.05rem; flex: 1; }
+  .card-head .name { font-weight: 600; font-size: 1rem; flex: 1; }
   .pill { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px;
     background: var(--surface-2); color: var(--muted); white-space: nowrap; }
   .pill.live { background: rgba(46,160,67,.15); color: var(--live); }
@@ -200,42 +230,36 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .retry { background: var(--danger); color: #fff; }
   label { display: block; font-size: .75rem; color: var(--muted); margin: 0 0 .25rem; }
   input[type=text] { width: 100%; background: var(--bg); border: 1px solid var(--border);
-    color: var(--text); border-radius: 8px; padding: .55rem .65rem; font-size: .9rem;
+    color: var(--text); border-radius: 8px; padding: .5rem .65rem; font-size: .88rem;
     font-family: ui-monospace, monospace; }
   input[type=text]:focus { outline: none; border-color: var(--accent); }
-  .row { display: flex; gap: .6rem; align-items: flex-end; margin-top: .8rem; }
+  .row { display: flex; gap: .6rem; align-items: flex-end; margin-top: .75rem; }
   .row .field { flex: 1; }
-  button { cursor: pointer; border: none; border-radius: 8px; padding: .55rem .9rem;
+  button { cursor: pointer; border: none; border-radius: 8px; padding: .5rem .85rem;
     font-size: .85rem; font-weight: 600; transition: .15s; }
   button:active { transform: translateY(1px); }
-  .toggle { min-width: 92px; background: var(--off); color: var(--text); }
+  .toggle { min-width: 100px; background: var(--off); color: var(--text); }
   .toggle.on { background: var(--accent-2); }
+  .auto-note { font-size: .72rem; color: var(--muted); margin-top: .45rem; }
   .save { background: var(--accent); color: #fff; }
   .del { background: transparent; color: var(--danger); border: 1px solid var(--border); }
   .note { font-size: .78rem; color: var(--muted); margin-top: .6rem; }
-  .add { margin-top: 1.25rem; }
-  .add summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+
+  /* ── Add form ── */
+  .add { margin-top: .25rem; }
+  .add summary { cursor: pointer; color: var(--accent); font-weight: 600;
+    padding: .75rem 0; list-style: none; }
+  .add summary::-webkit-details-marker { display: none; }
+  .add-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem 1.2rem; margin-top: .5rem; }
+
+  /* ── Toast ── */
   #msg { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
     background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    padding: .6rem 1rem; border-radius: 8px; opacity: 0; transition: .3s; pointer-events: none; }
+    padding: .6rem 1rem; border-radius: 8px; opacity: 0; transition: .3s; pointer-events: none;
+    white-space: nowrap; z-index: 10; }
   #msg.show { opacity: 1; }
   #msg.err { border-color: var(--danger); color: var(--danger); }
-  .preview { margin-bottom: 1.5rem; }
-  .video-wrap { position: relative; background: #000; border: 1px solid var(--border);
-    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; }
-  .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .video-ph { position: absolute; inset: 0; display: flex; align-items: center;
-    justify-content: center; color: var(--muted); font-size: .9rem; text-align: center; padding: 1rem; }
-  .conn { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; margin-top: .8rem; }
-  .conn .field { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: .5rem .65rem; }
-  .conn .copyrow { display: flex; gap: .4rem; align-items: center; }
-  .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .82rem;
-    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
-    font-size: .75rem; }
-  .conn button:hover { color: var(--text); }
-  @media (max-width: 560px) { .conn { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -248,33 +272,41 @@ const PANEL_HTML = /* html */ `<!doctype html>
   </div>
 </header>
 <main>
-  <section class="preview">
-    <div class="video-wrap">
-      <video id="player" muted playsinline></video>
-      <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
-    </div>
-    <div class="conn">
-      <div class="field">
-        <label>Servidor RTMP (en OBS)</label>
-        <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
-      </div>
-      <div class="field">
-        <label>Clave de retransmisión</label>
-        <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
-      </div>
-    </div>
-  </section>
-  <div class="grid" id="list"></div>
-  <details class="add">
-    <summary>+ Añadir destino</summary>
-    <div class="card" style="margin-top:.8rem">
-      <div class="field"><label>Nombre</label><input type="text" id="newName" placeholder="MiPlataforma"></div>
-      <div class="row">
-        <div class="field"><label>URL RTMP</label><input type="text" id="newUrl" placeholder="rtmp://servidor/app/CLAVE"></div>
-        <button class="save" onclick="addDest()">Añadir</button>
-      </div>
-    </div>
-  </details>
+  <div class="layout">
+    <!-- Columna izquierda: preview + config OBS -->
+    <aside class="left-col">
+      <section class="preview">
+        <div class="video-wrap">
+          <video id="player" muted playsinline></video>
+          <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
+        </div>
+        <div class="conn">
+          <div class="field">
+            <label>Servidor RTMP (en OBS)</label>
+            <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
+          </div>
+          <div class="field">
+            <label>Clave de retransmisión</label>
+            <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+          </div>
+        </div>
+      </section>
+    </aside>
+    <!-- Columna derecha: destinos -->
+    <section class="right-col">
+      <div id="list"></div>
+      <details class="add">
+        <summary>+ Añadir destino</summary>
+        <div class="add-card">
+          <div class="field"><label>Nombre</label><input type="text" id="newName" placeholder="MiPlataforma"></div>
+          <div class="row">
+            <div class="field"><label>URL (rtmp:// · rtmps:// · srt://)</label><input type="text" id="newUrl" placeholder="rtmp://servidor/app/CLAVE"></div>
+            <button class="save" onclick="addDest()">Añadir</button>
+          </div>
+        </div>
+      </details>
+    </section>
+  </div>
 </main>
 <div id="msg"></div>
 <script src="/flv.min.js"></script>
@@ -356,11 +388,12 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <input type="text" class="url" value="">
         </div>
         <div class="row">
-          <button class="toggle\${d.enabled ? ' on' : ''}">\${d.enabled ? 'ON' : 'OFF'}</button>
+          <button class="toggle\${d.enabled ? ' on' : ''}">\${d.enabled ? 'Auto ON' : 'Auto OFF'}</button>
           <button class="save">Guardar</button>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
+        \${d.enabled && !state.live ? '<p class="auto-note">▶ Arrancará cuando OBS empiece a transmitir.</p>' : ''}
         \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;

@@ -9,7 +9,8 @@ const PANEL_PORT = Number(process.env.PANEL_PORT || 8080);
 const STREAM_KEY = process.env.STREAM_KEY || 'mistream';
 
 const config = {
-  rtmp: { port: RTMP_PORT, chunk_size: 60000, gop_cache: true, ping: 30, ping_timeout: 60 },
+  // ping cada 10s, timeout en 15s: OBS que se cierra sin avisar se detecta ~15s después.
+  rtmp: { port: RTMP_PORT, chunk_size: 60000, gop_cache: true, ping: 10, ping_timeout: 15 },
   http: { port: HTTP_PORT, allow_origin: '*' },
 };
 
@@ -26,11 +27,12 @@ nms.on('prePublish', (id, StreamPath) => {
   const destinations = loadAll();
   const active = destinations.filter(isPlayable);
   if (active.length === 0) {
-    console.warn('[ingest] OBS conectado pero NO hay destinos activos. Actívalos en el panel.');
-    return;
+    console.warn('[ingest] OBS conectado. Sin destinos activos — actívalos en el panel para iniciar el reenvío.');
+  } else {
+    console.log(`[ingest] OBS conectado. Auto-iniciando ${active.length} destino(s).`);
   }
-  console.log(`[ingest] OBS conectado. Reenviando a ${active.length} destino(s).`);
-  // Pequeño delay para que el stream de origen esté listo antes de leerlo.
+  // Siempre llama onPublish para que isLive() sea true y applyChange funcione
+  // aunque el usuario encienda destinos DESPUÉS de que OBS ya esté conectado.
   setTimeout(() => onPublish(sourceUrl, destinations), 1500);
 });
 
