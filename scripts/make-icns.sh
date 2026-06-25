@@ -1,8 +1,8 @@
 #!/bin/bash
-# Genera build/icon.icns desde src/public/icon.svg usando sips + iconutil (macOS built-in).
+# Genera build/icon.icns desde src/public/icon-muxlyve.svg usando sips + iconutil (macOS built-in).
 set -e
 
-SVG="src/public/icon.svg"
+SVG="src/public/icon-muxlyve.svg"
 OUT="build/icon.icns"
 TMP="build/tmp.iconset"
 

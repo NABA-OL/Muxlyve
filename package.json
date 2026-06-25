@@ -25,7 +25,7 @@
   "license": "MIT",
   "build": {
     "appId": "com.naba.multistream",
-    "productName": "Multi_Stream",
+    "productName": "Muxlyve",
     "directories": {
       "output": "dist-app",
       "buildResources": "build"
@@ -63,12 +63,12 @@
       "category": "public.app-category.video"
     },
     "dmg": {
-      "title": "Multi_Stream"
+      "title": "Muxlyve"
     },
     "publish": {
       "provider": "github",
       "owner": "NABA-OL",
-      "repo": "Multi_Stream"
+      "repo": "Muxlyve"
     }
   },
   "dependencies": {

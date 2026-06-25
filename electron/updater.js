@@ -13,7 +13,7 @@ export function initUpdater(win) {
     dialog.showMessageBox(win, {
       type: 'info',
       title: 'Actualización disponible',
-      message: `Multi_Stream ${info.version} está disponible.`,
+      message: `Muxlyve ${info.version} está disponible.`,
       detail: 'Se descargará en segundo plano mientras transmites.',
       buttons: ['Descargar', 'Ahora no'],
       defaultId: 0,
@@ -26,7 +26,7 @@ export function initUpdater(win) {
     dialog.showMessageBox(win, {
       type: 'info',
       title: 'Actualización lista',
-      message: `Multi_Stream ${info.version} descargada.`,
+      message: `Muxlyve ${info.version} descargada.`,
       detail: 'Reinicia la app para aplicar la actualización. Puedes hacerlo ahora o después.',
       buttons: ['Reiniciar ahora', 'Después'],
       defaultId: 1,

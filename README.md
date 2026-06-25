@@ -1,4 +1,4 @@
-# Multi_Stream
+# Muxlyve
 
 App propia de **retransmisión (restreaming)**: recibe una sola señal desde OBS y la reenvía a Twitch, Kick, YouTube y TikTok Live a la vez — **sin marca de agua**, corriendo en tu máquina.
 
@@ -7,7 +7,7 @@ El reenvío se hace con FFmpeg en modo copia (`-c copy`), sin recodificar: carga
 ## Estructura
 
 ```
-Multi_Stream/
+Muxlyve/
 ├── src/index.js                      # Motor: ingest RTMP + reenvío FFmpeg
 ├── config/
 │   ├── destinations.example.json     # Plantilla de destinos

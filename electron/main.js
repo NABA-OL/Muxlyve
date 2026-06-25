@@ -40,7 +40,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1100, height: 760, minWidth: 900, minHeight: 600,
     backgroundColor: '#0d1117',
-    title: 'Multi_Stream',
+    title: 'Muxlyve',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
@@ -65,7 +65,7 @@ function showActivationWindow() {
       resizable: false,
       center: true,
       backgroundColor: '#0d1117',
-      title: 'Multi_Stream — Activar licencia',
+      title: 'Muxlyve — Activar licencia',
       icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
       autoHideMenuBar: true,
       webPreferences: {

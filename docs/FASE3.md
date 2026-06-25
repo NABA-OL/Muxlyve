@@ -1,4 +1,4 @@
-# Multi_Stream — Plan de Fase 3 (Robustez, métricas y seguridad)
+# Muxlyve — Plan de Fase 3 (Robustez, métricas y seguridad)
 
 Estado al iniciar la Fase 3: el MVP (Fase 1) y casi toda la Fase 2 están hechos — ingest, reenvío en caliente, panel web con preview, toggle ON/OFF y campo de clave temporal de TikTok. Esta fase convierte el proyecto en algo **fiable para salir en vivo de verdad** y prepara el terreno para el producto.
 
@@ -113,4 +113,4 @@ El JSON en disco no contiene claves legibles; el panel sigue funcionando igual.
 
 ## Prompt sugerido para Code
 
-> Implementa la Fase 3 del proyecto Multi_Stream según `docs/FASE3.md`. Empieza por la sección 1 (reconexión automática de relays con backoff exponencial y estados) porque es la más crítica para uso en vivo. Mantén el estilo del código actual (ESM, sin dependencias nuevas salvo que sea imprescindible). Usa el logo en `src/public/logo.svg` / `icon.svg` al integrar la UI. Añade los estados al `/api/state` y píntalos en el panel.
+> Implementa la Fase 3 del proyecto Muxlyve según `docs/FASE3.md`. Empieza por la sección 1 (reconexión automática de relays con backoff exponencial y estados) porque es la más crítica para uso en vivo. Mantén el estilo del código actual (ESM, sin dependencias nuevas salvo que sea imprescindible). Usa el logo en `src/public/logo-muxlyve.svg` / `icon-muxlyve.svg` al integrar la UI. Añade los estados al `/api/state` y píntalos en el panel.
