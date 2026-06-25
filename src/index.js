@@ -50,7 +50,7 @@ startPanel(PANEL_PORT, {
 });
 
 console.log('============================================');
-console.log(' Multi_Stream — motor de retransmision');
+console.log(' Muxlyve — motor de retransmision');
 console.log('============================================');
 console.log(` Ingest RTMP:  rtmp://localhost:${RTMP_PORT}/live`);
 console.log(` Clave OBS:    ${STREAM_KEY}`);

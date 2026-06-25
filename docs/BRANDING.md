@@ -1,14 +1,26 @@
-# Multi_Stream — Identidad visual
+# Muxlyve — Identidad visual
 
-Guía de marca mínima para mantener coherencia en el panel, el README y un futuro sitio del producto.
+Guía de marca para mantener coherencia en la app, la web y los documentos.
 
-## Concepto
+## Nombre de marca
 
-El logo representa el corazón del producto: **una sola fuente que se reparte en varios destinos**. Un nodo de origen (izquierda) del que salen cuatro líneas curvas hacia cuatro nodos de destino, cada uno con el color de una plataforma. Es la misma idea del diagrama de arquitectura, convertida en marca.
+**Muxlyve** — unión de **Muxly** + **Live**. (Antes "Multi_Stream", que era nombre de trabajo.)
+- Escritura: `Muxlyve`, con la sílaba final **"ve"** en color de acento morado: Muxly + `ve`.
+- Pronunciación/idea: "Muxly Live".
 
-Archivos:
-- `src/public/logo.svg` — logo horizontal con wordmark (para cabeceras).
-- `src/public/icon.svg` — icono cuadrado 64×64 (para favicon, app icon, redes).
+## Concepto del logo
+
+Isotipo: una **cabeza de lobo esquemática vista de frente**, formada por un **nodo/señal central** (un triángulo de *play* = la transmisión en vivo, el hocico) del que salen **rayos hacia afuera** en forma de estrella/brújula. Doble lectura: la **señal que se divide y cubre todas las direcciones**, y la **manada** del lobo. Las orejas y la cara son triángulos geométricos. Ojos en espacio negativo, mirada al frente.
+
+Archivos (nuevos):
+- `src/public/logo-muxlyve.svg` — logo horizontal con wordmark (cabeceras).
+- `src/public/icon-muxlyve.svg` — icono cuadrado 64×64 (favicon, app icon, redes).
+
+> Los archivos viejos `logo.svg` / `icon.svg` (concepto fuente→4 destinos) quedan obsoletos; usar los nuevos `-muxlyve`.
+
+## Animación del wordmark (web, top bar)
+
+En la barra superior, el wordmark **Muxlyve** se **expande aleatoriamente** a **Muxly Live** (revela la sílaba "Li" oculta entre "Muxly" y "ve") y vuelve a contraerse, cada cierto intervalo aleatorio (~1.5–4s). Refuerza el significado del nombre. Implementar con transición CSS de ancho/opacidad; respetar `prefers-reduced-motion`.
 
 ## Paleta
 
@@ -20,7 +32,7 @@ Archivos:
 | Borde | `#2a3140` | Separadores |
 | Texto | `#e6edf3` | Texto principal |
 | Texto apagado | `#8b949e` | Etiquetas, ayudas |
-| **Acento (marca)** | `#7c5cff` | Morado — color principal de Multi_Stream |
+| **Acento (marca)** | `#7c5cff` | Morado — color principal de Muxlyve |
 | Acento 2 | `#4da3ff` | Azul — degradado del logo |
 | Éxito / en vivo | `#2ea043` | Verde — reenviando, ON |
 | Aviso | `#f0a23a` | Ámbar — reconectando |
@@ -36,7 +48,7 @@ El degradado de marca va de `#7c5cff` (morado) a `#4da3ff` (azul), en diagonal.
 
 ## Wordmark
 
-`Multi_Stream` siempre con el guion bajo en color de acento: Multi · `_` morado · Stream. En contextos de una sola palabra, usar el icono.
+`Muxlyve` con la sílaba final **"ve"** en color de acento morado: `Muxly` (texto principal) + `ve` (morado). En contextos compactos o cuadrados, usar solo el icono del lobo.
 
 ## Tono
 
@@ -44,4 +56,4 @@ Serio pero cercano: herramienta de creador, no software corporativo. Mensajes cl
 
 ## Uso en el panel
 
-Integrar `logo.svg` en la cabecera (reemplazar el `<h1>` de texto), y `icon.svg` como favicon (`<link rel="icon" href="/icon.svg">`). El panel ya usa esta paleta, así que la integración es directa.
+Integrar `logo-muxlyve.svg` en la cabecera (reemplazar el `<h1>` de texto), y `icon-muxlyve.svg` como favicon (`<link rel="icon" href="/icon-muxlyve.svg">`). El panel ya usa esta paleta, así que la integración es directa.

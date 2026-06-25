@@ -1,10 +1,10 @@
 services:
   multistream:
     build: .
-    container_name: multi_stream
+    container_name: Muxlyve
     ports:
-      - "1935:1935"   # Ingest RTMP (OBS apunta aqui)
-      - "8000:8000"   # API / panel HTTP
+      - "1935:1935" # Ingest RTMP (OBS apunta aqui)
+      - "8000:8000" # API / panel HTTP
     env_file:
       - .env
     volumes:

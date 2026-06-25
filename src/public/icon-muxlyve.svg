@@ -1,0 +1,35 @@
+<svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Muxlyve">
+  <defs>
+    <linearGradient id="mxw" x1="100" y1="24" x2="100" y2="168" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c5cff"/><stop offset="1" stop-color="#4da3ff"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#mxw)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Rayos / brújula (más cortos en lados y abajo) -->
+    <path d="M100 60 L100 28 M100 28 L95 37 M100 28 L105 37"/>      <!-- N -->
+    <path d="M116 62 L146 40 M146 40 L135 41 M146 40 L145 52"/>     <!-- NE -->
+    <path d="M84 62 L54 40 M54 40 L65 41 M54 40 L55 52"/>           <!-- NW -->
+    <path d="M124 96 L162 96"/>                                     <!-- E -->
+    <path d="M76 96 L40 96"/>                                       <!-- W -->
+    <path d="M100 134 L100 162 M100 162 L95 153 M100 162 L105 153"/><!-- S -->
+    <path d="M114 120 L144 146"/>                                   <!-- SE -->
+    <path d="M86 120 L56 146"/>                                     <!-- SW -->
+    <!-- Orejas: triángulos altos y separados -->
+    <path d="M84 66 L70 30 L96 58 Z"/>
+    <path d="M116 66 L130 30 L104 58 Z"/>
+    <!-- Cara del lobo, más angosta y corta -->
+    <path d="M82 66 L100 62 L118 66 L122 96 L110 122 L100 134 L90 122 L78 96 Z"/>
+    <!-- Ojos -->
+    <path d="M86 86 L94 90 L86 94"/>
+    <path d="M114 86 L106 90 L114 94"/>
+    <!-- Hocico / señal en vivo (rombo) -->
+    <path d="M100 98 L106 106 L100 116 L94 106 Z"/>
+  </g>
+  <!-- Remates geométricos distintos -->
+  <g fill="url(#mxw)" stroke="none">
+    <polygon points="162,96 152,90 152,102"/>          <!-- E: punta -->
+    <polygon points="144,146 133,144 142,135"/>        <!-- SE: triángulo -->
+    <rect x="34" y="90" width="12" height="12" rx="1.5"/>  <!-- W: cuadrado -->
+    <rect x="50" y="140" width="12" height="12" rx="1.5"/> <!-- SW: cuadrado -->
+  </g>
+</svg>

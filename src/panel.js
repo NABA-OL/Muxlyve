@@ -12,8 +12,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
 // Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar.
 const FLV_JS = readFileSync(path.join(PUBLIC, 'flv.min.js'));
-const LOGO_SVG = readFileSync(path.join(PUBLIC, 'logo.svg'));
-const ICON_SVG = readFileSync(path.join(PUBLIC, 'icon.svg'));
+const LOGO_SVG = readFileSync(path.join(PUBLIC, 'logo-muxlyve.svg'));
+const ICON_SVG = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -177,9 +177,9 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
         return res.end(FLV_JS);
       }
-      if (url.pathname === '/logo.svg' || url.pathname === '/icon.svg') {
+      if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/icon-muxlyve.svg') {
         res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        return res.end(url.pathname === '/logo.svg' ? LOGO_SVG : ICON_SVG);
+        return res.end(url.pathname === '/logo-muxlyve.svg' ? LOGO_SVG : ICON_SVG);
       }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -203,8 +203,8 @@ const PANEL_HTML = /* html */ `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Multi_Stream — Panel</title>
-<link rel="icon" href="/icon.svg">
+<title>Muxlyve — Panel</title>
+<link rel="icon" href="/icon-muxlyve.svg">
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
@@ -212,7 +212,16 @@ const PANEL_HTML = /* html */ `<!doctype html>
     --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
     --header-h: 68px;
   }
-  * { box-sizing: border-box; }
+  [data-theme="light"] {
+    --bg: #f0f2f5; --surface: #ffffff; --surface-2: #e8eaef; --border: #d0d4de;
+    --text: #1a1a2e; --muted: #5a6070; --accent: #7c5cff; --accent-2: #1a8a35;
+    --danger: #cc2222; --live: #1a8a35; --warn: #b07020; --off: #a8adb8;
+  }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 
@@ -227,17 +236,71 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
     box-shadow: 0 0 0 0 transparent; transition: .3s; }
   .dot.on { background: var(--live); box-shadow: 0 0 0 4px rgba(46,160,67,.18); }
+  .header-actions { display: flex; align-items: center; gap: .3rem; }
 
-  /* ── Two-column layout ── */
-  main { padding: 1.25rem 1.5rem; }
-  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
-  .left-col { position: sticky; top: calc(var(--header-h) + 1.25rem);
-    max-height: calc(100vh - var(--header-h) - 2.5rem); overflow-y: auto; }
-  .right-col { display: flex; flex-direction: column; gap: 1rem; }
-  @media (max-width: 860px) {
-    .layout { grid-template-columns: 1fr; }
-    .left-col { position: static; max-height: none; }
+  /* ── Canvas fondo ── */
+  #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 0; opacity: .55; }
+  header, main, .prefs-overlay { position: relative; z-index: 1; }
+
+  /* ── Sidebar colapsable ── */
+  html, body { height: 100%; overflow: hidden; }
+  main { padding: 0; display: flex; height: calc(100vh - var(--header-h)); overflow: hidden; }
+  .main-col { flex: 1 1 0; min-width: 0; overflow-y: auto; padding: 1.25rem 1.5rem; }
+  .sidebar-col {
+    flex: 0 0 360px; width: 360px; min-width: 0;
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    transition: flex-basis .22s cubic-bezier(.4,0,.2,1), width .22s cubic-bezier(.4,0,.2,1);
+    overflow: hidden;
   }
+  .sidebar-col.collapsed { flex-basis: 0; width: 0; }
+  .sidebar-inner { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 360px;
+    display: flex; flex-direction: column; gap: 1rem; }
+  .sidebar-toggle-btn {
+    background: transparent; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); cursor: pointer; padding: .35rem .5rem;
+    display: flex; align-items: center; line-height: 1; font-weight: 400;
+    transition: color .15s, border-color .15s;
+  }
+  .sidebar-toggle-btn:hover { color: var(--text); border-color: var(--muted); }
+  .sidebar-toggle-btn.panel-open { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Toggle switch ── */
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch .thumb {
+    position: absolute; inset: 0; background: var(--off); border-radius: 12px;
+    cursor: pointer; transition: background .2s;
+  }
+  .switch .thumb::before {
+    content: ''; position: absolute; width: 18px; height: 18px;
+    left: 3px; top: 3px; background: #fff; border-radius: 50%;
+    transition: transform .2s;
+  }
+  .switch input:checked ~ .thumb { background: var(--accent); }
+  .switch input:checked ~ .thumb::before { transform: translateX(18px); }
+
+  /* ── Modal de Preferencias ── */
+  .prefs-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.5); z-index: 50;
+    align-items: center; justify-content: center;
+    backdrop-filter: blur(3px);
+  }
+  .prefs-overlay.open { display: flex; }
+  .prefs-modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 1.5rem; width: 420px; max-width: 90vw;
+    box-shadow: 0 24px 64px rgba(0,0,0,.5);
+  }
+  .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+  .prefs-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  .prefs-close { background: transparent; color: var(--muted); border: 1px solid transparent;
+    font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
+  .prefs-close:hover { color: var(--text); background: var(--surface-2); }
+  .prefs-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .75rem; }
 
   /* ── Grabador de clips ── */
   .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
@@ -316,20 +379,44 @@ const PANEL_HTML = /* html */ `<!doctype html>
   #msg.err { border-color: var(--danger); color: var(--danger); }
 </style>
 </head>
-<body>
+<canvas id="bgCanvas" aria-hidden="true"></canvas>
 <header>
-  <img src="/logo.svg" alt="Multi_Stream" class="logo">
+  <img src="/logo-muxlyve.svg" alt="Muxlyve" class="logo">
   <div class="status">
     <span class="dot" id="liveDot"></span>
     <span id="liveTxt">comprobando…</span>
     <span class="uptime" id="uptime"></span>
   </div>
+  <div class="header-actions">
+    <button class="sidebar-toggle-btn" id="themeToggle" onclick="toggleTheme()" title="Cambiar tema">
+      <!-- sun: mostrar cuando modo oscuro activo (click → claro) -->
+      <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+      </svg>
+      <!-- moon: mostrar cuando modo claro activo (click → oscuro) -->
+      <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+    </button>
+    <button class="sidebar-toggle-btn" id="prefsBtn" onclick="openPrefs()" title="Preferencias">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+    </button>
+    <button class="sidebar-toggle-btn panel-open" id="sidebarToggle" onclick="toggleSidebar()" title="Mostrar/ocultar conexiones">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="1" y="1" width="14" height="14" rx="2.5"/>
+        <line x1="10" y1="1.5" x2="10" y2="14.5"/>
+      </svg>
+    </button>
+  </div>
 </header>
 <main>
-  <div class="layout">
-    <!-- Columna izquierda: preview + config OBS -->
-    <aside class="left-col">
-      <section class="preview">
+  <!-- Principal: preview + config OBS + grabador -->
+  <div class="main-col">
+    <section class="preview">
         <div class="video-wrap">
           <video id="player" muted playsinline></video>
           <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
@@ -346,21 +433,6 @@ const PANEL_HTML = /* html */ `<!doctype html>
         </div>
         <!-- Grabador de clips -->
         <div class="rec-section">
-          <h3>Buffer de clip</h3>
-          <div class="rec-dur">
-            <button class="sel" data-dur="30" onclick="setRecDur(30)">30 s</button>
-            <button data-dur="60" onclick="setRecDur(60)">1 min</button>
-            <button data-dur="120" onclick="setRecDur(120)">2 min</button>
-          </div>
-          <div class="field" style="margin-bottom:.5rem">
-            <label>Carpeta de destino</label>
-            <div class="copyrow" style="gap:.4rem">
-              <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
-                     style="font-family:ui-monospace,monospace;font-size:.78rem"
-                     oninput="localStorage.setItem('ms_clips_dir', this.value)">
-              <button id="browseBtn" onclick="browseFolder()" title="Elegir carpeta">…</button>
-            </div>
-          </div>
           <div class="row">
             <button id="recToggle" disabled onclick="toggleRec()">Activar buffer</button>
             <button id="clipSaveBtn" style="display:none" onclick="doSaveClip()">Guardar clip</button>
@@ -368,9 +440,10 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <div class="rec-status" id="recStatus">Conecta OBS para usar el buffer.</div>
         </div>
       </section>
-    </aside>
-    <!-- Columna derecha: destinos -->
-    <section class="right-col">
+  </div>
+  <!-- Sidebar colapsable: destinos -->
+  <aside class="sidebar-col" id="sidebarCol">
+    <div class="sidebar-inner">
       <div id="list"></div>
       <details class="add">
         <summary>+ Añadir destino</summary>
@@ -382,9 +455,38 @@ const PANEL_HTML = /* html */ `<!doctype html>
           </div>
         </div>
       </details>
-    </section>
-  </div>
+    </div>
+  </aside>
 </main>
+<!-- Modal de Preferencias -->
+<div class="prefs-overlay" id="prefsOverlay" onclick="if(event.target===this)closePrefs()">
+  <div class="prefs-modal">
+    <div class="prefs-head">
+      <h2>Preferencias</h2>
+      <button class="prefs-close" onclick="closePrefs()">✕</button>
+    </div>
+    <div class="prefs-section">
+      <h3>Grabador de clips</h3>
+      <div style="margin-bottom:.85rem">
+        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.4rem">Duración del buffer</label>
+        <div class="rec-dur">
+          <button class="sel" data-dur="30" onclick="setRecDur(30)">30 s</button>
+          <button data-dur="60" onclick="setRecDur(60)">1 min</button>
+          <button data-dur="120" onclick="setRecDur(120)">2 min</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Carpeta de destino de clips</label>
+        <div class="copyrow" style="gap:.4rem;margin-top:.35rem">
+          <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
+                 style="font-family:ui-monospace,monospace;font-size:.78rem"
+                 oninput="localStorage.setItem('ms_clips_dir', this.value)">
+          <button id="browseBtn" onclick="browseFolder()" title="Elegir carpeta">…</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="msg"></div>
 <script src="/flv.min.js"></script>
 <script>
@@ -497,7 +599,10 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <input type="text" class="url" value="">
         </div>
         <div class="row">
-          <button class="toggle\${d.enabled ? ' on' : ''}">\${d.enabled ? 'Auto ON' : 'Auto OFF'}</button>
+          <label class="switch" title="\${d.enabled ? 'Desactivar' : 'Activar'}">
+            <input type="checkbox" class="toggle-cb"\${d.enabled ? ' checked' : ''}>
+            <span class="thumb"></span>
+          </label>
           <button class="save">Guardar</button>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
@@ -512,7 +617,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
       urlInput.value = d.url;
       if (d.note) card.querySelector('.note').textContent = '⚠ ' + d.note;
 
-      card.querySelector('.toggle').onclick = () => save(d.name, urlInput.value, !d.enabled);
+      card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked);
       card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled);
       card.querySelector('.del').onclick = () => del(d.name);
       const retryBtn = card.querySelector('.retry');
@@ -625,6 +730,81 @@ const PANEL_HTML = /* html */ `<!doctype html>
   // Restaura la carpeta guardada en sesiones anteriores
   const savedDir = localStorage.getItem('ms_clips_dir');
   if (savedDir) $('#clipsDir').value = savedDir;
+
+  // ── Canvas fondo: nodos conectados ──
+  (function initBg() {
+    const canvas = document.getElementById('bgCanvas');
+    const ctx = canvas.getContext('2d');
+    const N = 18, D = 170, FPS = 15, MS = 1000 / FPS;
+    let nodes = [], last = 0;
+    function resize() {
+      canvas.width = innerWidth; canvas.height = innerHeight;
+      nodes = Array.from({length: N}, () => ({
+        x: Math.random() * canvas.width, y: Math.random() * canvas.height,
+        vx: (Math.random() - .5) * .35, vy: (Math.random() - .5) * .35,
+      }));
+    }
+    function draw(ts) {
+      requestAnimationFrame(draw);
+      if (ts - last < MS) return;
+      last = ts;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const light = document.documentElement.dataset.theme === 'light';
+      const nodeColor = light ? 'rgba(124,92,255,.45)' : 'rgba(124,92,255,.55)';
+      for (let i = 0; i < N; i++) {
+        const a = nodes[i];
+        a.x += a.vx; a.y += a.vy;
+        if (a.x < 0 || a.x > canvas.width) a.vx *= -1;
+        if (a.y < 0 || a.y > canvas.height) a.vy *= -1;
+        for (let j = i + 1; j < N; j++) {
+          const b = nodes[j], dx = a.x - b.x, dy = a.y - b.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < D) {
+            const alpha = (.12 * (1 - dist / D)).toFixed(3);
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+            ctx.strokeStyle = 'rgba(124,92,255,' + alpha + ')'; ctx.lineWidth = .8; ctx.stroke();
+          }
+        }
+        ctx.beginPath(); ctx.arc(a.x, a.y, 1.8, 0, Math.PI * 2);
+        ctx.fillStyle = nodeColor; ctx.fill();
+      }
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    requestAnimationFrame(draw);
+  })();
+
+  // ── Tema claro/oscuro ──
+  function toggleTheme() {
+    const isLight = document.documentElement.dataset.theme === 'light';
+    const next = isLight ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next === 'dark' ? '' : 'light';
+    $('#iconSun').style.display = next === 'dark' ? '' : 'none';
+    $('#iconMoon').style.display = next === 'dark' ? 'none' : '';
+    localStorage.setItem('ms_theme', next);
+  }
+  const savedTheme = localStorage.getItem('ms_theme');
+  if (savedTheme === 'light') {
+    document.documentElement.dataset.theme = 'light';
+    $('#iconSun').style.display = 'none';
+    $('#iconMoon').style.display = '';
+  }
+
+  function openPrefs() { $('#prefsOverlay').classList.add('open'); }
+  function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePrefs(); });
+
+  function toggleSidebar() {
+    const sidebar = $('#sidebarCol');
+    const btn = $('#sidebarToggle');
+    const nowCollapsed = sidebar.classList.toggle('collapsed');
+    btn.classList.toggle('panel-open', !nowCollapsed);
+    localStorage.setItem('ms_sidebar_collapsed', nowCollapsed ? '1' : '0');
+  }
+  if (localStorage.getItem('ms_sidebar_collapsed') === '1') {
+    $('#sidebarCol').classList.add('collapsed');
+    $('#sidebarToggle').classList.remove('panel-open');
+  }
 
   loadConfig();
   refresh();

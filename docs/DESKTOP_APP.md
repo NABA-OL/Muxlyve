@@ -1,4 +1,4 @@
-# Multi_Stream — Plan: convertir en app de escritorio instalable
+# Muxlyve — Plan: convertir en app de escritorio instalable
 
 Pivote de producto: en lugar de algo que el usuario abre en el navegador (`localhost`), una **aplicación instalable** (Windows primero, Mac después) que se abre como cualquier programa, funciona **offline** para transmitir, guarda las credenciales **cifradas en la máquina del usuario**, se **auto-actualiza** y se desbloquea con una **licencia de pago único**.
 
@@ -30,7 +30,7 @@ La app actual ya es un **motor Node + un panel web local**. Una app Electron es 
 
 ### Estructura propuesta
 ```
-Multi_Stream/
+Muxlyve/
 ├── electron/
 │   ├── main.js          # Proceso principal: arranca motor + crea ventana
 │   ├── preload.js       # Puente seguro UI <-> Node
@@ -187,4 +187,4 @@ Sin firma, Windows (SmartScreen) y Mac (Gatekeeper) marcan la app como "peligros
 
 ## 10. Prompt sugerido para Code (Fase A)
 
-> Quiero convertir Multi_Stream en una app de escritorio con Electron, reutilizando el motor actual (`src/`). Lee `docs/DESKTOP_APP.md`. Implementa la **Fase A**: integra Electron (`electron/main.js` que arranque el motor actual y abra una ventana cargando el panel), empaqueta el binario de FFmpeg dentro de la app y haz que `relays.js` use esa ruta en vez del FFmpeg del sistema, y configura electron-builder para generar un instalador `.exe` de Windows. No toques la lógica de reenvío. Aún sin licencia ni firma — solo que se instale y funcione como app nativa.
+> Quiero convertir Muxlyve en una app de escritorio con Electron, reutilizando el motor actual (`src/`). Lee `docs/DESKTOP_APP.md`. Implementa la **Fase A**: integra Electron (`electron/main.js` que arranque el motor actual y abra una ventana cargando el panel), empaqueta el binario de FFmpeg dentro de la app y haz que `relays.js` use esa ruta en vez del FFmpeg del sistema, y configura electron-builder para generar un instalador `.exe` de Windows. No toques la lógica de reenvío. Aún sin licencia ni firma — solo que se instale y funcione como app nativa.

@@ -1,4 +1,4 @@
-# Multi_Stream — Fase B: licencia con Freemius
+# Muxlyve — Fase B: licencia con Freemius
 
 Activación y validación de licencia en la app de escritorio usando **Freemius** como pasarela (pago único, licencia flexible 1–2 equipos). Requiere que ya esté hecha la Fase A (app Electron empaquetada).
 
