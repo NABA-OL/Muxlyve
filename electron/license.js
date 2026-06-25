@@ -11,8 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Backend de licencias — actualizar cuando la web esté desplegada.
-const LICENSE_API = process.env.MS_LICENSE_API || 'https://api.muxlyve.app';
+const LICENSE_API = process.env.MS_LICENSE_API || 'https://muxlyve.vercel.app';
 
 const GRACE_DAYS = 30;       // días sin revalidar online
 const OFFLINE_EXTRA = 7;     // días extra si el backend no responde
