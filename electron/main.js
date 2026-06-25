@@ -14,7 +14,7 @@ import { initUpdater } from './updater.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 8080);
 const PANEL_URL   = `http://127.0.0.1:${PANEL_PORT}/`;
-const ICON_PATH   = path.join(__dirname, '../build/icon.ico');
+const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
 const PRELOAD     = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
 
