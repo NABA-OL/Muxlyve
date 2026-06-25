@@ -12,7 +12,8 @@
     "test": "bash scripts/smoke-test.sh",
     "electron": "electron .",
     "dist": "electron-builder --win",
-    "dist:publish": "electron-builder --win --publish always"
+    "dist:publish": "electron-builder --win --publish always",
+    "dist:mac": "node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
   },
   "keywords": [
     "rtmp",
@@ -51,6 +52,18 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icon.icns",
+      "extraResources": [
+        { "from": "build/mac/ffmpeg", "to": "ffmpeg" },
+        { "from": "build/mac/libs", "to": "libs" }
+      ],
+      "category": "public.app-category.video"
+    },
+    "dmg": {
+      "title": "Multi_Stream"
     },
     "publish": {
       "provider": "github",
