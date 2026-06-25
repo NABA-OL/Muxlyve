@@ -1,6 +1,6 @@
 {
   "name": "multi-stream",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
   "type": "module",
   "main": "electron/main.js",
