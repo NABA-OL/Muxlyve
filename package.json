@@ -46,7 +46,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon-muxlyve.ico"
     },
     "nsis": {
       "oneClick": false,
