@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Backend de licencias — actualizar cuando la web esté desplegada.
-const LICENSE_API = process.env.MS_LICENSE_API || 'https://api.multi-stream.app';
+const LICENSE_API = process.env.MS_LICENSE_API || 'https://api.muxlyve.app';
 
 const GRACE_DAYS = 30;       // días sin revalidar online
 const OFFLINE_EXTRA = 7;     // días extra si el backend no responde
@@ -26,7 +26,7 @@ function dataPath(filename) {
 export function getMachineId() {
   const p = dataPath('machine-id.json');
   if (existsSync(p)) {
-    try { return JSON.parse(readFileSync(p, 'utf8')).id; } catch {}
+    try { return JSON.parse(readFileSync(p, 'utf8')).id; } catch { }
   }
   const id = randomUUID();
   writeFileSync(p, JSON.stringify({ id }), 'utf8');

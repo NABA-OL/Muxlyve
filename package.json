@@ -1,6 +1,6 @@
 {
-  "name": "multi-stream",
-  "version": "0.1.4",
+  "name": "muxlyve",
+  "version": "0.1.5",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
   "author": "NABA-OL <nabaol.dev@gmail.com>",
   "type": "module",
@@ -57,8 +57,14 @@
       "target": "dmg",
       "icon": "build/icon.icns",
       "extraResources": [
-        { "from": "build/mac/ffmpeg", "to": "ffmpeg" },
-        { "from": "build/mac/libs", "to": "libs" }
+        {
+          "from": "build/mac/ffmpeg",
+          "to": "ffmpeg"
+        },
+        {
+          "from": "build/mac/libs",
+          "to": "libs"
+        }
       ],
       "category": "public.app-category.video"
     },
