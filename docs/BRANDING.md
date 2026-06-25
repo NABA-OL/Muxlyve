@@ -12,11 +12,13 @@ Guía de marca para mantener coherencia en la app, la web y los documentos.
 
 Isotipo: una **cabeza de lobo esquemática vista de frente**, formada por un **nodo/señal central** (un triángulo de *play* = la transmisión en vivo, el hocico) del que salen **rayos hacia afuera** en forma de estrella/brújula. Doble lectura: la **señal que se divide y cubre todas las direcciones**, y la **manada** del lobo. Las orejas y la cara son triángulos geométricos. Ojos en espacio negativo, mirada al frente.
 
-Archivos (nuevos):
-- `src/public/logo-muxlyve.svg` — logo horizontal con wordmark (cabeceras).
-- `src/public/icon-muxlyve.svg` — icono cuadrado 64×64 (favicon, app icon, redes).
+Archivos (finales, refinados en Inkscape):
+- `src/public/logo-muxlyve.svg` — logo horizontal con wordmark, **para fondos oscuros** (texto claro `#e6edf3`).
+- `src/public/logo-muxlyve-light.svg` — misma marca, **para fondos claros** (texto oscuro).
+- `src/public/icon-muxlyve.svg` — isotipo cuadrado (favicon, app icon, redes). Funciona sobre cualquier fondo.
 
-> Los archivos viejos `logo.svg` / `icon.svg` (concepto fuente→4 destinos) quedan obsoletos; usar los nuevos `-muxlyve`.
+> Regla de uso: en superficies oscuras (la app, el panel) → `logo-muxlyve.svg`. En superficies claras (secciones blancas de la web, documentos impresos) → `logo-muxlyve-light.svg`. El icono es único.
+> Los archivos viejos `logo.svg` / `icon.svg` (concepto fuente→4 destinos) quedan obsoletos.
 
 ## Animación del wordmark (web, top bar)
 

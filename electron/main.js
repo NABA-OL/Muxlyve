@@ -15,10 +15,34 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 8080);
 const PANEL_URL   = `http://127.0.0.1:${PANEL_PORT}/`;
 const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
-const PRELOAD     = path.join(__dirname, 'preload.cjs');
+const PRELOAD       = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
+const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 
 let win = null;
+let splash = null;
+
+// ── Splash screen ─────────────────────────────────────────────────────────────
+function showSplash() {
+  splash = new BrowserWindow({
+    width: 360, height: 210,
+    frame: false,
+    resizable: false,
+    center: true,
+    backgroundColor: '#0d1117',
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+    skipTaskbar: true,
+    alwaysOnTop: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  splash.loadFile(SPLASH_HTML);
+}
+
+function closeSplash() {
+  if (!splash) return;
+  splash.webContents.executeJavaScript('document.body.style.opacity="0"').catch(() => {});
+  setTimeout(() => { if (splash) { splash.close(); splash = null; } }, 300);
+}
 
 // ── Panel readiness ────────────────────────────────────────────────────────────
 function waitForPanel(timeoutMs = 15000) {
@@ -39,6 +63,7 @@ function waitForPanel(timeoutMs = 15000) {
 function createWindow() {
   win = new BrowserWindow({
     width: 1100, height: 760, minWidth: 900, minHeight: 600,
+    show: false,
     backgroundColor: '#0d1117',
     title: 'Muxlyve',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
@@ -49,6 +74,7 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  win.once('ready-to-show', () => win.show());
   win.loadURL(PANEL_URL);
   win.on('closed', () => { win = null; });
 }
@@ -128,6 +154,8 @@ app.whenReady().then(async () => {
     process.env.MS_CONFIG_DIR = app.getPath('userData');
   }
 
+  showSplash();
+
   // Arranca el motor (NMS + relays + panel) por efecto de import.
   await import('../src/index.js');
   try {
@@ -135,6 +163,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[electron]', err.message);
   }
+  closeSplash();
   createWindow();
   if (app.isPackaged) initUpdater(win);
 

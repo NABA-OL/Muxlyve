@@ -6,8 +6,9 @@ Guía de diseño visual para la web (landing + descarga). Acompaña a `WEBSITE.m
 
 La web reutiliza la identidad ya definida en `BRANDING.md` de la app:
 
-- **Logo:** `src/public/logo-muxlyve.svg` (horizontal con wordmark) de la app.
-- **Ícono:** `src/public/icon-muxlyve.svg` (cuadrado, para favicon y og:image).
+- **Logo (fondo oscuro):** `src/public/logo-muxlyve.svg` (horizontal con wordmark).
+- **Logo (fondo claro):** `src/public/logo-muxlyve-light.svg` — usar en secciones con fondo blanco/claro.
+- **Ícono:** `src/public/icon-muxlyve.svg` (cuadrado, para favicon y og:image). Único, sirve en cualquier fondo.
 - **Concepto de marca:** cabeza de lobo esquemática dentro de una brújula de flechas — la señal (la manada) que se reparte en todas direcciones. Ver `BRANDING.md`.
 
 > Acción para Code: **copiar** `logo-muxlyve.svg` e `icon-muxlyve.svg` desde el repo de la app a `public/` del repo web. Así son el mismo logo en los dos lados.

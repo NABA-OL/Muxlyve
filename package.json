@@ -12,7 +12,7 @@
     "test": "bash scripts/smoke-test.sh",
     "electron": "electron .",
     "dist": "electron-builder --win",
-    "dist:publish": "node -r dotenv/config ./node_modules/.bin/electron-builder --win --publish always",
+    "dist:publish": "node -r dotenv/config ./node_modules/.bin/electron-builder --publish always",
     "dist:mac": "node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
   },
   "keywords": [
@@ -24,7 +24,7 @@
   ],
   "license": "MIT",
   "build": {
-    "appId": "com.naba.multistream",
+    "appId": "com.naba.muxlyve",
     "productName": "Muxlyve",
     "directories": {
       "output": "dist-app",
@@ -51,7 +51,19 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "menuCategory": "Muxlyve",
+      "shortcutName": "Muxlyve",
+      "installerIcon": "build/icon-muxlyve.ico",
+      "uninstallerIcon": "build/icon-muxlyve.ico",
+      "installerHeaderIcon": "build/icon-muxlyve.ico",
+      "uninstallDisplayName": "Muxlyve",
+      "runAfterFinish": true,
+      "language": "1034",
+      "include": "build/installer.nsh"
     },
     "mac": {
       "target": "dmg",

@@ -12,8 +12,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
 // Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar.
 const FLV_JS = readFileSync(path.join(PUBLIC, 'flv.min.js'));
-const LOGO_SVG = readFileSync(path.join(PUBLIC, 'logo-muxlyve.svg'));
-const ICON_SVG = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
+const LOGO_SVG       = readFileSync(path.join(PUBLIC, 'logo-muxlyve.svg'));
+const LOGO_SVG_LIGHT = readFileSync(path.join(PUBLIC, 'logo-muxlyve-light.svg'));
+const ICON_SVG       = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -177,9 +178,10 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
         return res.end(FLV_JS);
       }
-      if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/icon-muxlyve.svg') {
+      if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/logo-muxlyve-light.svg' || url.pathname === '/icon-muxlyve.svg') {
         res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        return res.end(url.pathname === '/logo-muxlyve.svg' ? LOGO_SVG : ICON_SVG);
+        if (url.pathname === '/icon-muxlyve.svg') return res.end(ICON_SVG);
+        return res.end(url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
       }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -230,7 +232,18 @@ const PANEL_HTML = /* html */ `<!doctype html>
     gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
     background: var(--surface); position: sticky; top: 0; z-index: 5;
     height: var(--header-h); }
-  .logo { height: 34px; display: block; }
+  .logo-wrap { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; text-decoration: none; }
+  .logo-icon { height: 32px; width: 32px; object-fit: contain; }
+  .wordmark { font-size: 1.1rem; font-weight: 700; letter-spacing: -.03em; cursor: default; user-select: none; color: var(--text); }
+  .wm-ve { color: var(--accent); }
+  .wm-li {
+    display: inline-block; overflow: hidden; max-width: 0; opacity: 0;
+    transition: max-width .7s cubic-bezier(.4,0,.2,1), opacity .55s;
+    vertical-align: bottom;
+  }
+  .wm-li { color: var(--accent); }
+  .wm-li.show { max-width: 2.4ch; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .wm-li { transition: none; } }
   .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
   .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
@@ -381,7 +394,10 @@ const PANEL_HTML = /* html */ `<!doctype html>
 </head>
 <canvas id="bgCanvas" aria-hidden="true"></canvas>
 <header>
-  <img src="/logo-muxlyve.svg" alt="Muxlyve" class="logo">
+  <div class="logo-wrap">
+    <img src="/icon-muxlyve.svg" alt="" class="logo-icon">
+    <span class="wordmark" role="img" aria-label="Muxlyve">Muxly<span class="wm-li" id="wmLi"> Li</span><span class="wm-ve">ve</span></span>
+  </div>
   <div class="status">
     <span class="dot" id="liveDot"></span>
     <span id="liveTxt">comprobando…</span>
@@ -788,6 +804,21 @@ const PANEL_HTML = /* html */ `<!doctype html>
     document.documentElement.dataset.theme = 'light';
     $('#iconSun').style.display = 'none';
     $('#iconMoon').style.display = '';
+  }
+
+  // ── Wordmark animation: Muxlyve → Muxly Live ──
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    (function() {
+      const li = document.getElementById('wmLi');
+      if (!li) return;
+      function cycle() {
+        li.classList.toggle('show');
+        setTimeout(cycle, li.classList.contains('show')
+          ? 2500 + Math.random() * 2000
+          : 5000 + Math.random() * 5000);
+      }
+      setTimeout(cycle, 2500 + Math.random() * 1500);
+    })();
   }
 
   function openPrefs() { $('#prefsOverlay').classList.add('open'); }
