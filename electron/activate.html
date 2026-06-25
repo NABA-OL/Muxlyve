@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi_Stream — Activar licencia</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #2a3140;
+    --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff;
+    --danger: #f85149; --ok: #2ea043;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 100vh; padding: 1.5rem;
+    -webkit-app-region: drag; user-select: none;
+  }
+  .logo { margin-bottom: 1.75rem; -webkit-app-region: no-drag; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1.75rem 1.75rem 1.5rem;
+    width: 100%; max-width: 380px; -webkit-app-region: no-drag;
+  }
+  h1 { font-size: 1.1rem; font-weight: 600; margin-bottom: .2rem; }
+  .sub { font-size: .83rem; color: var(--muted); margin-bottom: 1.4rem; }
+  label { font-size: .73rem; color: var(--muted); display: block; margin-bottom: .3rem; }
+  input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: .6rem .75rem;
+    font-size: .9rem; font-family: ui-monospace, monospace; letter-spacing: .06em;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  input::placeholder { color: var(--muted); letter-spacing: 0; }
+  button {
+    width: 100%; margin-top: .85rem; padding: .65rem;
+    border: none; border-radius: 8px; background: var(--accent);
+    color: #fff; font-size: .9rem; font-weight: 600;
+    cursor: pointer; transition: opacity .15s, transform .1s;
+  }
+  button:hover:not(:disabled) { opacity: .88; }
+  button:active:not(:disabled) { transform: scale(.99); }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { margin-top: .85rem; font-size: .8rem; min-height: 1.1em; color: var(--danger); }
+  #status.ok { color: var(--ok); }
+  .footer {
+    margin-top: 1.2rem; font-size: .77rem;
+    color: var(--muted); text-align: center; -webkit-app-region: no-drag;
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+  .sep { margin: .3rem 0; }
+</style>
+</head>
+<body>
+<div class="logo">
+  <svg width="170" height="46" viewBox="0 0 240 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Multi_Stream">
+    <defs>
+      <linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#7c5cff"/>
+        <stop offset="100%" stop-color="#4da3ff"/>
+      </linearGradient>
+    </defs>
+    <rect x="4" y="10" width="44" height="44" rx="11" fill="url(#lg)"/>
+    <text x="26" y="40" font-family="system-ui,sans-serif" font-size="24" font-weight="700" fill="#fff" text-anchor="middle">M</text>
+    <text x="62" y="43" font-family="system-ui,sans-serif" font-size="27" font-weight="700" fill="url(#lg)">Multi_Stream</text>
+  </svg>
+</div>
+
+<div class="card">
+  <h1>Activar licencia</h1>
+  <p class="sub">Pega tu clave para desbloquear la app en este equipo.</p>
+  <label for="keyInput">Clave de licencia</label>
+  <input id="keyInput" type="text" placeholder="MS-XXXX-XXXX-XXXX"
+         autocomplete="off" spellcheck="false" autocorrect="off">
+  <button id="activateBtn" onclick="activate()">Activar</button>
+  <div id="status"></div>
+</div>
+
+<div class="footer">
+  <div class="sep">¿No tienes licencia? <a href="#" onclick="openBuy(event)">Comprar Multi_Stream</a></div>
+  <div>Solo necesitas internet para activar — transmites offline.</div>
+</div>
+
+<script>
+  const STORE_URL = 'https://multi-stream.app/#buy';
+
+  function openBuy(e) {
+    e.preventDefault();
+    window.open(STORE_URL, '_blank');
+  }
+
+  function setStatus(msg, isOk = false) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = isOk ? 'ok' : '';
+  }
+
+  async function activate() {
+    const key = document.getElementById('keyInput').value.trim();
+    if (!key) { setStatus('Pega tu clave primero.'); return; }
+
+    const btn = document.getElementById('activateBtn');
+    btn.disabled = true;
+    btn.textContent = 'Verificando…';
+    setStatus('');
+
+    try {
+      const result = await window.msLicense.activate(key);
+      if (result.ok) {
+        const msg = result.email
+          ? `Activado como ${result.email}. Abriendo la app…`
+          : '¡Activado! Abriendo la app…';
+        setStatus(msg, true);
+        btn.textContent = '✓ Activado';
+      } else {
+        setStatus(result.error || 'Clave inválida.');
+        btn.disabled = false;
+        btn.textContent = 'Activar';
+      }
+    } catch {
+      setStatus('Error inesperado. Intenta de nuevo.');
+      btn.disabled = false;
+      btn.textContent = 'Activar';
+    }
+  }
+
+  document.getElementById('keyInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') activate();
+  });
+
+  // Auto-format: uppercase mientras el usuario escribe (MS-XXXX-...)
+  document.getElementById('keyInput').addEventListener('input', (e) => {
+    const s = e.target.selectionStart;
+    e.target.value = e.target.value.toUpperCase();
+    e.target.setSelectionRange(s, s);
+  });
+</script>
+</body>
+</html>

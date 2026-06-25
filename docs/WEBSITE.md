@@ -105,19 +105,21 @@ Solo presentación (qué hace, capturas, "próximamente"). Sirve para empezar a 
 Sección de descarga del instalador (incluso en beta gratuita para primeros usuarios).
 
 ### Fase 3 — Pagos + licencias
-Integrar pasarela + webhook + generación de key + correo (Resend) + Mongo.
+Integrar **Freemius** (checkout embebido + generación/validación de key + correo automático con la key). El Mongo propio queda opcional (registro/analítica vía webhook de Freemius).
 
 ### Fase 4 — Gestión de licencia
 Página de autoservicio (ver equipos, liberar, reenviar key).
 
 ---
 
-## Decisiones pendientes (compartidas con DESKTOP_APP.md)
-1. Mercado inicial (global vs Colombia) → pasarela.
-2. Pasarela final.
-3. Precio del pago único.
-4. ¿Reusar tu Mongo actual o una nueva para `licenses`?
-5. Nombre/dominio de la web.
+## Decisiones tomadas
+- **Pasarela: Freemius** (Merchant of Record, soporta Colombia, hecho para licencias de software). Lemon Squeezy descartado por exigir Stripe (no disponible en Colombia).
+- **Cobro: Payoneer** como método para recibir los pagos de Freemius.
+- **Backend de licencias:** lo cubre Freemius; el Mongo propio es opcional.
+
+## Decisiones aún pendientes
+1. Precio del pago único.
+2. Nombre/dominio de la web.
 
 ---
 
