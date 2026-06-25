@@ -154,4 +154,55 @@ Observadas en Restream como referencia. Ordenadas por **valor / esfuerzo** — i
 
 ---
 
+---
+
+## 8. App de Escritorio (Electron)
+
+### Fase A — Empaquetado Windows ✅ HECHO
+- Electron wrapper que arranca el motor (NMS + FFmpeg + panel).
+- `electron-builder` genera instalador `.exe` (NSIS).
+- Ícono propio (`build/icon.ico`), sin barra de menú, ventana mínima 900×600.
+- `ffmpeg-static` desempaquetado del `.asar` para que Windows lo ejecute.
+
+### Fase B — Licencias online ✅ HECHO
+- `electron/license.js`: machine ID (UUID persistente en `userData`), cifrado con `safeStorage` (DPAPI Windows).
+- Flujo: activar clave → `POST /api/licenses/activate` → token firmado en disco.
+- Grace period 30 días offline + 7 días extra sin red.
+- `electron/activate.html` + `electron/preload.cjs`: pantalla de activación antes de abrir el panel.
+- Bypass dev: `!app.isPackaged` (siempre) o `MS_DEV_UNLOCK=1` (var de entorno).
+
+### Fase C — Actualizaciones automáticas + firma de código 🔲 PENDIENTE
+- `electron-updater` + servidor de releases (GitHub Releases o Vercel).
+- Certificado de firma de código EV (Windows): elimina el aviso "SmartScreen desconoce este editor".
+- Sin firma: el `.exe` funciona pero Windows muestra alerta en primera ejecución.
+
+### Fase D — macOS 🔲 PENDIENTE (futuro)
+- `electron-builder` target `dmg` + `mas`.
+- Requiere cuenta Apple Developer ($99/año) + notarización.
+
+---
+
+## 9. Seguridad pendiente — App de Escritorio
+
+### 🔲 Obfuscar o reemplazar `MS_DEV_UNLOCK`
+**Problema:** la variable de entorno `MS_DEV_UNLOCK=1` que permite saltarse el sistema de licencias está en texto plano dentro del `.asar`. Cualquiera que descomprima el instalador con `asar extract` puede leer el nombre de la variable y usarla para desactivar la protección.
+
+**Impacto:** bajo hoy (producto no publicado). Alto cuando haya usuarios reales pagando.
+
+**Solución propuesta (Fase C o antes de lanzamiento público):**
+- Reemplazar la comprobación de string simple por una comprobación de HMAC o hash:
+  ```js
+  // En lugar de:
+  if (process.env.MS_DEV_UNLOCK === '1') ...
+  // Usar algo como:
+  const OWNER_HASH = '...sha256 de un secret que solo tú conoces...';
+  if (sha256(process.env.MS_OWNER_TOKEN) === OWNER_HASH) ...
+  ```
+- O usar `electron-builder`'s `asar` encryption (requiere pago).
+- O simplemente activar la app con una licencia real propia (elimina necesidad del bypass).
+
+**Alternativa más simple:** activar con tu propia clave de licencia real y eliminar el bypass completamente del código de producción.
+
+---
+
 *Documento de planificación — proyecto Multi_Stream. Puedo desarrollar cualquier sección en detalle (arquitectura del código, configuración de FFmpeg, estructura del repo, o empezar el MVP).*
