@@ -9,6 +9,7 @@ import {
   releaseLicense,
   getLicenseInfo,
 } from './license.js';
+import { initUpdater } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 8080);
@@ -135,6 +136,7 @@ app.whenReady().then(async () => {
     console.error('[electron]', err.message);
   }
   createWindow();
+  if (app.isPackaged) initUpdater(win);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

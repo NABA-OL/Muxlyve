@@ -72,7 +72,7 @@ La **generación de la key pasa SIEMPRE por el webhook de la pasarela** (server-
 
 ## Páginas de la web
 
-1. **Inicio (landing):** qué es, para qué sirve, "sin marca de agua", plataformas soportadas (Twitch/Kick/YouTube/TikTok), capturas/demo, precio, botón comprar.
+1. **Inicio (landing):** qué es, para qué sirve, "sin marca de agua", plataformas soportadas (Twitch/Kick/YouTube/TikTok), capturas/demo, sección de **precios** (modelo híbrido: mensual / anual / vitalicia — ver `PRICING.md`), botón comprar.
 2. **Comprar / checkout:** pide correo → pasarela → confirmación con la key.
 3. **Descargar:** instalador de Windows (y Mac a futuro), requisitos, versión actual.
 4. **Gestionar licencia (opcional):** ver mis equipos, liberar uno, reenviar la key al correo.
@@ -117,9 +117,12 @@ Página de autoservicio (ver equipos, liberar, reenviar key).
 - **Cobro: Payoneer** como método para recibir los pagos de Freemius.
 - **Backend de licencias:** lo cubre Freemius; el Mongo propio es opcional.
 
+- **Modelo de precios: híbrido** (suscripción mensual/anual + pago único vitalicio). Ver `PRICING.md`.
+
 ## Decisiones aún pendientes
-1. Precio del pago único.
-2. Nombre/dominio de la web.
+1. Precios finales de cada plan (mensual / anual / vitalicia).
+2. ¿Versión demo gratis (ej. 2 plataformas)?
+3. Nombre/dominio de la web.
 
 ---
 

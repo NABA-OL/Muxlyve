@@ -85,11 +85,20 @@ Pensado para que funcione local hoy y migre a un VPS mañana sin reescribir.
 - Indicadores de estado: conectado / transmitiendo / error por plataforma.
 - Cifrado de credenciales guardadas.
 
-### Fase 3 — Robustez (2–4 semanas)
+### Fase 3 — Robustez ✅ HECHO
 - Reconexión automática si una plataforma cae.
 - Logs y métricas (bitrate, caídas, tiempo en vivo).
 - Manejo de errores claros ("clave de TikTok expirada", "Twitch rechazó la conexión").
 - Empaquetado en Docker.
+
+### Fase C.5 — UI mejorada + grabador de clips ✅ HECHO (6/24/2026)
+- **Layout 50/50**: preview/config OBS (izquierda, sticky) vs destinos (derecha).
+- **Grabador de clips**: buffer rodante 30s/1min/2min, usuario elige carpeta de destino, sin recodificación (mismo codec/bitrate que OBS).
+- **Selector de carpeta**: Electron + ruta manual, recuerda última carpeta entre sesiones.
+- **Auto-start/stop fixes**: relay auto-inicia cuando se activa en caliente, para cuando OBS se desconecta.
+- **Edición de URLs**: ya no resetea mientras escribes.
+- **SRT support**: Kick ahora funciona con SRT, FFmpeg usa `-f mpegts` automáticamente.
+- **FFmpeg en Mac**: detecta Homebrew auto, no requiere `FFMPEG_PATH` manual.
 
 ### Fase 4 — Camino a producto (futuro)
 - Despliegue en VPS/nube (el ingest deja de usar tu subida; subes 1 sola vez al servidor y él hace el fan-out).
@@ -179,6 +188,12 @@ Observadas en Restream como referencia. Ordenadas por **valor / esfuerzo** — i
 ### Fase D — macOS 🔲 PENDIENTE (futuro)
 - `electron-builder` target `dmg` + `mas`.
 - Requiere cuenta Apple Developer ($99/año) + notarización.
+- **FFmpeg bundleado**: `ffmpeg-static` no tiene soporte TLS completo en macOS → falla con RTMPS (Kick). Solución:
+  1. Antes del build (`predist:mac`): descargar el binario estático de ffmpeg para macOS desde evermeet.cx (arm64 + x86_64, ~70 MB) o hacer lipo para universal binary.
+  2. Declarar en electron-builder: `extraResources: [{ from: "build/mac/ffmpeg", to: "ffmpeg" }]`.
+  3. En `resolveFfmpeg()` (ya preparado): si `process.resourcesPath/ffmpeg` existe, usarlo.
+  4. El `.app` incluye el binario → no requiere Homebrew al usuario final.
+- **Fix temporal (ya implementado)**: si el usuario tiene Homebrew, `resolveFfmpeg()` lo detecta automáticamente en `/opt/homebrew/bin/ffmpeg` o `/usr/local/bin/ffmpeg`.
 
 ---
 

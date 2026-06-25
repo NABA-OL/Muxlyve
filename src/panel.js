@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -38,7 +38,7 @@ function buildState() {
       lagging: info.lagging,
     };
   });
-  return { live: isLive(), uptime: uptimeSeconds(), destinations };
+  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo() };
 }
 
 function readBody(req) {
@@ -115,6 +115,48 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
+  // POST /api/record/start  { duration: 30|60|120 }
+  if (req.method === 'POST' && url.pathname === '/api/record/start') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
+    if (!isLive()) return json(res, 409, { error: 'OBS no está transmitiendo.' });
+    startRecording(dur);
+    return json(res, 200, buildState());
+  }
+
+  // POST /api/record/stop
+  if (req.method === 'POST' && url.pathname === '/api/record/stop') {
+    stopRecording();
+    return json(res, 200, buildState());
+  }
+
+  // POST /api/record/save  { duration: 30|60|120, outputDir?: string }
+  if (req.method === 'POST' && url.pathname === '/api/record/save') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
+    const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
+    try {
+      const filePath = await saveClip(dur, outputDir);
+      return json(res, 200, { ok: true, path: filePath });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/pick-folder  → abre el selector nativo de carpetas (solo Electron)
+  if (req.method === 'GET' && url.pathname === '/api/pick-folder') {
+    try {
+      const { dialog, BrowserWindow } = await import('electron');
+      const win = BrowserWindow.getFocusedWindow();
+      const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de clips' });
+      return json(res, 200, { path: result.canceled ? null : result.filePaths[0] });
+    } catch {
+      return json(res, 501, { error: 'Selector solo disponible en la app de escritorio.' });
+    }
+  }
+
   return json(res, 404, { error: 'No encontrado.' });
 }
 
@@ -188,13 +230,25 @@ const PANEL_HTML = /* html */ `<!doctype html>
 
   /* ── Two-column layout ── */
   main { padding: 1.25rem 1.5rem; }
-  .layout { display: grid; grid-template-columns: 360px 1fr; gap: 1.25rem; align-items: start; }
-  .left-col { position: sticky; top: calc(var(--header-h) + 1.25rem); }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
+  .left-col { position: sticky; top: calc(var(--header-h) + 1.25rem);
+    max-height: calc(100vh - var(--header-h) - 2.5rem); overflow-y: auto; }
   .right-col { display: flex; flex-direction: column; gap: 1rem; }
   @media (max-width: 860px) {
     .layout { grid-template-columns: 1fr; }
-    .left-col { position: static; }
+    .left-col { position: static; max-height: none; }
   }
+
+  /* ── Grabador de clips ── */
+  .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .rec-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .65rem; }
+  .rec-dur { display: flex; gap: .4rem; margin-bottom: .65rem; }
+  .rec-dur button { flex: 1; padding: .3rem .4rem; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--bg); color: var(--muted); font-size: .8rem; cursor: pointer; }
+  .rec-dur button.sel { border-color: var(--accent); color: var(--accent); background: rgba(124,92,255,.1); }
+  .rec-status { font-size: .78rem; color: var(--muted); margin-top: .5rem; min-height: 1.2em; }
+  .rec-status.on { color: var(--live); }
 
   /* ── Preview ── */
   .preview { margin-bottom: 1rem; }
@@ -290,6 +344,29 @@ const PANEL_HTML = /* html */ `<!doctype html>
             <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
           </div>
         </div>
+        <!-- Grabador de clips -->
+        <div class="rec-section">
+          <h3>Buffer de clip</h3>
+          <div class="rec-dur">
+            <button class="sel" data-dur="30" onclick="setRecDur(30)">30 s</button>
+            <button data-dur="60" onclick="setRecDur(60)">1 min</button>
+            <button data-dur="120" onclick="setRecDur(120)">2 min</button>
+          </div>
+          <div class="field" style="margin-bottom:.5rem">
+            <label>Carpeta de destino</label>
+            <div class="copyrow" style="gap:.4rem">
+              <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
+                     style="font-family:ui-monospace,monospace;font-size:.78rem"
+                     oninput="localStorage.setItem('ms_clips_dir', this.value)">
+              <button id="browseBtn" onclick="browseFolder()" title="Elegir carpeta">…</button>
+            </div>
+          </div>
+          <div class="row">
+            <button id="recToggle" disabled onclick="toggleRec()">Activar buffer</button>
+            <button id="clipSaveBtn" style="display:none" onclick="doSaveClip()">Guardar clip</button>
+          </div>
+          <div class="rec-status" id="recStatus">Conecta OBS para usar el buffer.</div>
+        </div>
       </section>
     </aside>
     <!-- Columna derecha: destinos -->
@@ -365,11 +442,43 @@ const PANEL_HTML = /* html */ `<!doctype html>
     return parts.join(' · ');
   }
 
+  function fmtDur(s) { return s < 60 ? s + 's' : (s / 60) + ' min'; }
+
+  function updateRecorder(state) {
+    const rec = state.recorder || { active: false, duration: 60 };
+    const toggle = $('#recToggle');
+    const saveBtn = $('#clipSaveBtn');
+    const status = $('#recStatus');
+    if (!state.live && !rec.active) {
+      toggle.disabled = true;
+      toggle.textContent = 'Activar buffer';
+      toggle.dataset.active = '0';
+      saveBtn.style.display = 'none';
+      status.className = 'rec-status';
+      status.textContent = 'Conecta OBS para usar el buffer.';
+    } else if (rec.active) {
+      toggle.disabled = false;
+      toggle.textContent = 'Detener buffer';
+      toggle.dataset.active = '1';
+      saveBtn.style.display = '';
+      status.className = 'rec-status on';
+      status.textContent = '● Grabando — último ' + fmtDur(rec.duration) + ' disponible';
+    } else {
+      toggle.disabled = false;
+      toggle.textContent = 'Activar buffer';
+      toggle.dataset.active = '0';
+      saveBtn.style.display = 'none';
+      status.className = 'rec-status';
+      status.textContent = state.live ? 'Buffer inactivo.' : 'OBS detuvo la emisión.';
+    }
+  }
+
   function render(state) {
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     updatePreview(state.live);
+    updateRecorder(state);
     list.innerHTML = '';
     for (const d of state.destinations) {
       const isTikTok = /tiktok/i.test(d.name);
@@ -438,6 +547,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
     catch (e) { toast(e.message, true); }
   }
   async function refresh() {
+    if (document.activeElement?.classList.contains('url')) return;
     try { render(await api('GET', '/api/state')); } catch {}
   }
 
@@ -474,6 +584,47 @@ const PANEL_HTML = /* html */ `<!doctype html>
       $('#streamKey').textContent = c.streamKey || '—';
     } catch {}
   }
+
+  let recDurSel = 30;
+  function setRecDur(dur) {
+    recDurSel = dur;
+    document.querySelectorAll('.rec-dur button').forEach(b =>
+      b.classList.toggle('sel', Number(b.dataset.dur) === dur));
+  }
+
+  async function toggleRec() {
+    const active = $('#recToggle').dataset.active === '1';
+    try {
+      await api('POST', active ? '/api/record/stop' : '/api/record/start', { duration: recDurSel });
+      refresh();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  async function browseFolder() {
+    try {
+      const r = await api('GET', '/api/pick-folder');
+      if (r.path) { $('#clipsDir').value = r.path; localStorage.setItem('ms_clips_dir', r.path); }
+    } catch (e) {
+      // No es Electron: oculta el botón y deja que el usuario escriba a mano
+      $('#browseBtn').style.display = 'none';
+    }
+  }
+
+  async function doSaveClip() {
+    const btn = $('#clipSaveBtn');
+    const outputDir = $('#clipsDir').value.trim() || null;
+    btn.disabled = true; btn.textContent = 'Guardando…';
+    try {
+      const r = await api('POST', '/api/record/save', { duration: recDurSel, outputDir });
+      const name = r.path ? r.path.split(/[\\/]/).pop() : '';
+      toast('✓ Clip guardado' + (name ? ': ' + name : ''));
+    } catch (e) { toast(e.message, true); }
+    finally { btn.disabled = false; btn.textContent = 'Guardar clip'; }
+  }
+
+  // Restaura la carpeta guardada en sesiones anteriores
+  const savedDir = localStorage.getItem('ms_clips_dir');
+  if (savedDir) $('#clipsDir').value = savedDir;
 
   loadConfig();
   refresh();

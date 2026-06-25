@@ -1,21 +1,37 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+import { tmpdir, homedir } from 'node:os';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { isPlayable } from './destinations.js';
 
 // Ruta al binario de FFmpeg. Prioridad:
 //  1. FFMPEG_PATH (override explícito).
-//  2. ffmpeg-static (binario empaquetado dentro de la app de escritorio).
-//  3. 'ffmpeg' del PATH del sistema (modo servidor / desarrollo sin Electron).
-// Empaquetado con electron-builder, ffmpeg-static queda en app.asar.unpacked.
+//  2. macOS: Homebrew (/opt/homebrew o /usr/local) — mejor soporte TLS que ffmpeg-static.
+//  3. macOS empaquetado: binario bundleado en Resources/ffmpeg (Fase D).
+//  4. ffmpeg-static (funciona en Windows; TLS limitado en macOS).
+//  5. 'ffmpeg' del PATH del sistema.
 function resolveFfmpeg() {
   if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+
+  if (process.platform === 'darwin') {
+    // Homebrew: Apple Silicon usa /opt/homebrew, Intel usa /usr/local
+    for (const p of ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg']) {
+      if (existsSync(p)) return p;
+    }
+    // Binario bundleado en el instalador macOS (Fase D)
+    if (process.resourcesPath) {
+      const bundled = path.join(process.resourcesPath, 'ffmpeg');
+      if (existsSync(bundled)) return bundled;
+    }
+  }
+
   try {
     const require = createRequire(import.meta.url);
     const p = require('ffmpeg-static');
     if (p) return p.replace('app.asar', 'app.asar.unpacked');
-  } catch {
-    // ffmpeg-static no instalado: caemos al ffmpeg del sistema.
-  }
+  } catch {}
+
   return 'ffmpeg';
 }
 
@@ -160,6 +176,7 @@ export function onPublish(url, destinations) {
 // OBS dejó de publicar: para todo y olvida el origen.
 export function onUnpublish() {
   for (const name of [...relays.keys()]) stopRelay(name);
+  stopRecording();
   sourceUrl = null;
   liveSince = null;
 }
@@ -188,4 +205,82 @@ export function retry(dest) {
 // El destino cambió de nombre o se borró: para el relay viejo por su nombre anterior.
 export function stopByName(name) {
   stopRelay(name);
+}
+
+// ── Grabador de buffer rodante ────────────────────────────────────────────
+// Escribe segmentos de 10s en un directorio temporal con wrap circular.
+// Cuando el usuario pide "guardar clip", concatenamos los últimos N segmentos en un MP4.
+const REC_DIR  = path.join(tmpdir(), 'ms_rec');
+const SEG_SECS = 10;
+
+let recProc     = null;
+let recDuration = 60; // 30 | 60 | 120
+
+export function recorderInfo() {
+  return { active: recProc !== null, duration: recDuration };
+}
+
+export function startRecording(durationSecs) {
+  if (!sourceUrl) return; // sin emisión activa no hay nada que grabar
+  if (recProc) stopRecording();
+  recDuration = durationSecs || 60;
+  mkdirSync(REC_DIR, { recursive: true });
+  const wrap = Math.ceil(recDuration / SEG_SECS) + 2; // segmentos extra de margen
+  const proc = spawn(FFMPEG, [
+    '-i', sourceUrl,
+    '-c', 'copy',
+    '-f', 'segment',
+    '-segment_time', String(SEG_SECS),
+    '-segment_wrap', String(wrap),
+    '-reset_timestamps', '1',
+    path.join(REC_DIR, 'seg%d.ts'),
+  ]);
+  recProc = proc;
+  proc.stderr.on('data', () => {}); // drain: no loguear progreso del grabador
+  proc.on('exit', () => { if (recProc === proc) recProc = null; });
+  console.log(`[recorder] buffer iniciado (${recDuration}s)`);
+}
+
+export function stopRecording() {
+  if (!recProc) return;
+  recProc.kill('SIGKILL');
+  recProc = null;
+  console.log('[recorder] buffer detenido');
+}
+
+export function saveClip(durationSecs, outputDir) {
+  const dur = durationSecs || recDuration;
+  const numSegs = Math.ceil(dur / SEG_SECS) + 1;
+
+  let files = [];
+  try {
+    files = readdirSync(REC_DIR)
+      .filter(f => /^seg\d+\.ts$/.test(f))
+      .map(f => { const p = path.join(REC_DIR, f); return { p, mtime: statSync(p).mtimeMs }; })
+      .sort((a, b) => a.mtime - b.mtime)
+      .slice(-numSegs)
+      .map(f => f.p);
+  } catch { files = []; }
+
+  if (!files.length) return Promise.reject(new Error('Sin segmentos. Espera unos segundos tras activar el buffer.'));
+
+  const videosFolder = process.platform === 'darwin' ? 'Movies' : 'Videos';
+  const clipsDir = outputDir || process.env.MS_CLIPS_DIR || path.join(homedir(), videosFolder, 'MultiStream');
+  mkdirSync(clipsDir, { recursive: true });
+
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const outFile = path.join(clipsDir, `clip_${ts}.mp4`);
+
+  // FFmpeg espera rutas con / en la lista de concat (incluso en Windows)
+  const listFile = path.join(REC_DIR, 'concat.txt');
+  writeFileSync(listFile, files.map(f => `file '${f.replace(/\\/g, '/')}'`).join('\n'), 'utf8');
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(FFMPEG, [
+      '-f', 'concat', '-safe', '0', '-i', listFile,
+      '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-y', outFile,
+    ]);
+    proc.stderr.on('data', () => {});
+    proc.on('exit', code => code === 0 ? resolve(outFile) : reject(new Error('FFmpeg error al exportar (code ' + code + ')')));
+  });
 }
