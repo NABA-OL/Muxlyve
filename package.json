@@ -12,6 +12,7 @@
     "test": "bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
     "dist": "electron-builder --win",
+    "predist:publish": "node -r dotenv/config scripts/create-draft-release.mjs",
     "dist:publish": "node -r dotenv/config node_modules/electron-builder/cli.js --publish always",
     "dist:mac": "node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
   },
