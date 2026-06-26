@@ -768,6 +768,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
   let recDurSel = 30;
   function setRecDur(dur) {
     recDurSel = dur;
+    localStorage.setItem('ms_rec_dur', dur);
     document.querySelectorAll('.rec-dur button').forEach(b =>
       b.classList.toggle('sel', Number(b.dataset.dur) === dur));
   }
@@ -802,9 +803,11 @@ const PANEL_HTML = /* html */ `<!doctype html>
     finally { btn.disabled = false; btn.textContent = 'Guardar clip'; }
   }
 
-  // Restaura la carpeta guardada en sesiones anteriores
+  // Restaura preferencias guardadas en sesiones anteriores
   const savedDir = localStorage.getItem('ms_clips_dir');
   if (savedDir) $('#clipsDir').value = savedDir;
+  const savedDur = Number(localStorage.getItem('ms_rec_dur'));
+  if ([30, 60, 120].includes(savedDur)) setRecDur(savedDur);
 
   // ── Canvas fondo: nodos conectados ──
   (function initBg() {
