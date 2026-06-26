@@ -61,12 +61,9 @@ function makePkce() {
 
 async function exchangeCode(platform, code, redirectUri, verifier) {
   const cfg = PLATFORMS[platform];
-  const envKey = cfg.envKey || platform.toUpperCase();
-  const clientId = BUNDLED[`${envKey}_CLIENT_ID`] || '';
-  const clientSecret = BUNDLED[`${envKey}_CLIENT_SECRET`] || '';
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: clientId(cfg),
     code,
     grant_type: 'authorization_code',
     redirect_uri: redirectUri,
@@ -74,7 +71,7 @@ async function exchangeCode(platform, code, redirectUri, verifier) {
   if (cfg.pkce) {
     params.set('code_verifier', verifier);
   } else {
-    params.set('client_secret', clientSecret);
+    params.set('client_secret', clientSecret(cfg));
   }
 
   const res = await fetch(cfg.tokenUrl, {
@@ -91,11 +88,10 @@ async function exchangeCode(platform, code, redirectUri, verifier) {
 
 async function fetchUsername(platform, accessToken) {
   try {
-    const envKey = (PLATFORMS[platform]?.envKey || platform.toUpperCase());
-    const clientId = BUNDLED[`${envKey}_CLIENT_ID`] || '';
+    const cfg = PLATFORMS[platform];
     if (platform === 'twitch') {
       const r = await fetch('https://api.twitch.tv/helix/users', {
-        headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': clientId },
+        headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': clientId(cfg) },
       });
       if (!r.ok) return null;
       const d = await r.json();
@@ -114,21 +110,23 @@ async function fetchUsername(platform, accessToken) {
   return null;
 }
 
-// IDs registrados como app Muxlyve. Los usuarios no necesitan configurar nada.
-// Las vars de entorno sobreescriben para desarrollo/testing.
-const BUNDLED = {
-  TWITCH_CLIENT_ID:     process.env.TWITCH_CLIENT_ID     || '',
-  GOOGLE_CLIENT_ID:     process.env.GOOGLE_CLIENT_ID     || '',
-  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',
-};
+// IDs registrados como app Muxlyve. Rellena los || '' con los valores reales antes del build.
+// process.env se lee en tiempo de llamada (no en import) para que userData/.env ya esté cargado.
+function clientId(cfg) {
+  const key = cfg.envKey || 'UNKNOWN';
+  return process.env[`${key}_CLIENT_ID`] || '';
+}
+function clientSecret(cfg) {
+  const key = cfg.envKey || 'UNKNOWN';
+  return process.env[`${key}_CLIENT_SECRET`] || '';
+}
 
 export async function connect(platform, panelPort) {
   const cfg = PLATFORMS[platform];
   if (!cfg) return { ok: false, error: `Plataforma desconocida: ${platform}` };
 
-  const envKey = cfg.envKey || platform.toUpperCase();
-  const clientId = BUNDLED[`${envKey}_CLIENT_ID`] || '';
-  if (!clientId) {
+  const id = clientId(cfg);
+  if (!id) {
     return { ok: false, error: `Client ID de ${cfg.name} no configurado. Contacta soporte.` };
   }
 
@@ -137,7 +135,7 @@ export async function connect(platform, panelPort) {
   const pkcePair = cfg.pkce ? makePkce() : null;
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: id,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: cfg.scope,
