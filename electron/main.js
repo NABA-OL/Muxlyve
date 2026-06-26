@@ -2,7 +2,6 @@ import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import dotenv from 'dotenv';
 import http from 'node:http';
 import {
   checkLicense,
@@ -154,9 +153,15 @@ ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  // Carga .env desde userData (permite configurar API keys sin terminal en la app instalada).
+  // Carga .env desde userData sin dependencias externas.
   const userEnv = path.join(app.getPath('userData'), '.env');
-  if (existsSync(userEnv)) dotenv.config({ path: userEnv, override: false });
+  if (existsSync(userEnv)) {
+    const { readFileSync } = await import('node:fs');
+    for (const line of readFileSync(userEnv, 'utf8').split('\n')) {
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
 
   const license = await checkLicense({ isPackaged: app.isPackaged });
   console.log(`[electron] licencia: ${license.unlocked ? 'OK' : 'BLOQUEADA'} (${license.reason})`);
