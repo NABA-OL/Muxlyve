@@ -315,6 +315,23 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .prefs-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
     text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .75rem; }
 
+  /* ── Modal licencia ── */
+  .lic-modal { width: 380px; }
+  .lic-row { display: flex; flex-direction: column; gap: .3rem; margin-bottom: 1rem; }
+  .lic-label { font-size: .72rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  .lic-value { font-size: .9rem; color: var(--text); font-family: ui-monospace, monospace; word-break: break-all; }
+  .lic-danger { margin-top: .5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .lic-status-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .lic-badge { font-size: .68rem; font-weight: 700; padding: .15rem .55rem; border-radius: 20px; text-transform: uppercase; letter-spacing: .06em; }
+  .lic-badge.active   { background: rgba(46,160,67,.15);  color: #3fb950; border: 1px solid rgba(46,160,67,.3); }
+  .lic-badge.cancelled{ background: rgba(210,153,34,.15); color: #d29922; border: 1px solid rgba(210,153,34,.3); }
+  .lic-badge.lifetime { background: rgba(124,92,255,.15); color: #7c5cff; border: 1px solid rgba(124,92,255,.3); }
+  .lic-manage-btn { width: 100%; padding: .45rem; background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; margin-bottom: .5rem; transition: background .15s; }
+  .lic-manage-btn:hover { background: var(--surface-2); }
+  .lic-danger-btn { width: 100%; padding: .5rem; background: transparent; border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; font-size: .85rem; cursor: pointer; transition: background .15s; }
+  .lic-danger-btn:hover { background: rgba(235,64,52,.12); }
+  .lic-note { font-size: .72rem; color: var(--muted); margin: .5rem 0 0; line-height: 1.4; }
+
   /* ── Grabador de clips ── */
   .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
   .rec-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
@@ -421,6 +438,11 @@ const PANEL_HTML = /* html */ `<!doctype html>
         <circle cx="12" cy="12" r="3"/>
       </svg>
     </button>
+    <button class="sidebar-toggle-btn" id="licBtn" onclick="openLic()" title="Licencia">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+      </svg>
+    </button>
     <button class="sidebar-toggle-btn panel-open" id="sidebarToggle" onclick="toggleSidebar()" title="Mostrar/ocultar conexiones">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <rect x="1" y="1" width="14" height="14" rx="2.5"/>
@@ -500,6 +522,40 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <button id="browseBtn" onclick="browseFolder()" title="Elegir carpeta">…</button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+<div class="prefs-overlay" id="licOverlay" onclick="if(event.target===this)closeLic()">
+  <div class="prefs-modal lic-modal">
+    <div class="prefs-head">
+      <h2>Licencia</h2>
+      <button class="prefs-close" onclick="closeLic()">✕</button>
+    </div>
+    <div class="lic-row">
+      <span class="lic-label">Correo</span>
+      <span class="lic-value" id="licEmail">…</span>
+    </div>
+    <div class="lic-status-row">
+      <div>
+        <div class="lic-label" style="margin-bottom:.25rem">Plan</div>
+        <span class="lic-value" id="licPlan">—</span>
+      </div>
+      <span class="lic-badge active" id="licBadge">—</span>
+    </div>
+    <div class="lic-row" id="licRenewRow">
+      <span class="lic-label" id="licRenewLabel">Se renueva</span>
+      <span class="lic-value" id="licRenewDate">—</span>
+    </div>
+    <div class="lic-row">
+      <span class="lic-label">Activado</span>
+      <span class="lic-value" id="licDate">—</span>
+    </div>
+    <div class="lic-danger">
+      <button class="lic-manage-btn" id="licManageBtn"
+        onclick="window.open('https://users.freemius.com','_blank')"
+        style="display:none">Gestionar suscripción ↗</button>
+      <button class="lic-danger-btn" onclick="releaseLic()">Liberar este equipo</button>
+      <p class="lic-note">Podrás activar la app en otro equipo. Necesitarás tu clave para volver a activarla aquí.</p>
     </div>
   </div>
 </div>
@@ -823,7 +879,52 @@ const PANEL_HTML = /* html */ `<!doctype html>
 
   function openPrefs() { $('#prefsOverlay').classList.add('open'); }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePrefs(); });
+
+  async function openLic() {
+    $('#licOverlay').classList.add('open');
+    $('#licEmail').textContent = '…';
+    const info = await window.msLicense?.getStatus().catch(() => window.msLicense?.getInfo());
+    if (!info) { $('#licEmail').textContent = '—'; return; }
+
+    $('#licEmail').textContent = info.email || '—';
+
+    const planLabels = { monthly: 'Mensual', annual: 'Anual', lifetime: 'Vitalicio' };
+    $('#licPlan').textContent = planLabels[info.plan] || info.plan || 'Vitalicio';
+
+    const badge = $('#licBadge');
+    if (info.plan === 'lifetime') {
+      badge.textContent = 'Vitalicio'; badge.className = 'lic-badge lifetime';
+    } else if (info.status === 'cancelled') {
+      badge.textContent = 'Cancelada'; badge.className = 'lic-badge cancelled';
+    } else {
+      badge.textContent = 'Activa'; badge.className = 'lic-badge active';
+    }
+
+    const renewRow = $('#licRenewRow');
+    if (info.plan === 'lifetime') {
+      renewRow.style.display = 'none';
+    } else {
+      renewRow.style.display = '';
+      const ts = info.status === 'cancelled' ? info.expiresAt : info.renewsAt;
+      $('#licRenewLabel').textContent = info.status === 'cancelled' ? 'Se cancela el' : 'Se renueva el';
+      $('#licRenewDate').textContent = ts
+        ? new Date(ts).toLocaleDateString('es', { year: 'numeric', month: 'long', day: 'numeric' })
+        : '—';
+    }
+
+    $('#licDate').textContent = info.activatedAt
+      ? new Date(info.activatedAt).toLocaleDateString('es', { year: 'numeric', month: 'long', day: 'numeric' })
+      : '—';
+
+    $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
+  }
+  function closeLic() { $('#licOverlay').classList.remove('open'); }
+  async function releaseLic() {
+    if (!confirm('¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.')) return;
+    await window.msLicense?.release();
+  }
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); } });
 
   function toggleSidebar() {
     const sidebar = $('#sidebarCol');

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -8,6 +8,7 @@ import {
   activateLicense,
   releaseLicense,
   getLicenseInfo,
+  refreshLicenseStatus,
 } from './license.js';
 import { initUpdater } from './updater.js';
 
@@ -68,7 +69,7 @@ function createWindow() {
     title: 'Muxlyve',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -138,6 +139,7 @@ ipcMain.handle('license:release', async () => {
 });
 
 ipcMain.handle('license:info', () => getLicenseInfo());
+ipcMain.handle('license:status', () => refreshLicenseStatus());
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
@@ -166,6 +168,26 @@ app.whenReady().then(async () => {
   closeSplash();
   createWindow();
   if (app.isPackaged) initUpdater(win);
+
+  // Revalidar licencia cada 6 h en segundo plano.
+  if (app.isPackaged || process.env.MS_FORCE_LICENSE === '1') {
+    setInterval(async () => {
+      const r = await checkLicense({ isPackaged: true });
+      if (!r.unlocked) {
+        console.log('[license] revalidación: BLOQUEADA —', r.reason);
+        await dialog.showMessageBox({
+          type: 'warning',
+          title: 'Suscripción inactiva',
+          message: r.reason === 'subscription-cancelled'
+            ? 'Tu suscripción fue cancelada. La app se cerrará.'
+            : 'Tu licencia ya no es válida. La app se cerrará.',
+          buttons: ['Cerrar'],
+        });
+        app.relaunch();
+        app.quit();
+      }
+    }, 6 * 60 * 60 * 1000);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

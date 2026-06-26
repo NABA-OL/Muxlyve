@@ -176,7 +176,7 @@
     <h1>Activar licencia</h1>
     <p class="sub">Pega tu clave para desbloquear la app en este equipo.</p>
     <label for="keyInput">Clave de licencia</label>
-    <input id="keyInput" type="text" placeholder="MS-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false"
+    <input id="keyInput" type="text" placeholder="sk-XxxX-xxXX-XXxx" autocomplete="off" spellcheck="false"
       autocorrect="off">
     <button id="activateBtn" onclick="activate()">Activar</button>
     <div id="status"></div>
@@ -194,6 +194,21 @@
       e.preventDefault();
       window.open(STORE_URL, '_blank');
     }
+
+    // Al cargar: si la suscripción está cancelada, reemplaza el formulario.
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const info = await window.msLicense?.getInfo();
+        if (info?.status === 'cancelled') {
+          document.querySelector('.card').innerHTML = `
+            <h1 style="margin-bottom:.5rem">Suscripción cancelada</h1>
+            <p class="sub">Tu suscripción fue cancelada. Para seguir usando Muxlyve, renuévala o adquiere un nuevo plan.</p>
+            <button onclick="window.open('${STORE_URL}','_blank')">Renovar suscripción</button>
+            <p class="sub" style="margin-top:.9rem;font-size:.75rem">¿Ya renovaste? Libera este equipo desde otro dispositivo o espera a que la validación se actualice.</p>
+          `;
+        }
+      } catch { /* sin licencia en caché — mostrar formulario normal */ }
+    });
 
     function setStatus(msg, isOk = false) {
       const el = document.getElementById('status');
@@ -234,11 +249,8 @@
       if (e.key === 'Enter') activate();
     });
 
-    // Auto-format: uppercase mientras el usuario escribe (MS-XXXX-...)
     document.getElementById('keyInput').addEventListener('input', (e) => {
-      const s = e.target.selectionStart;
-      e.target.value = e.target.value.toUpperCase();
-      e.target.setSelectionRange(s, s);
+      e.target.value = e.target.value.trim();
     });
   </script>
 </body>

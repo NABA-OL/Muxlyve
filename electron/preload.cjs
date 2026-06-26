@@ -3,7 +3,8 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('msLicense', {
-  activate: (key) => ipcRenderer.invoke('license:activate', key),
-  release:  ()    => ipcRenderer.invoke('license:release'),
-  getInfo:  ()    => ipcRenderer.invoke('license:info'),
+  activate:  (key) => ipcRenderer.invoke('license:activate', key),
+  release:   ()    => ipcRenderer.invoke('license:release'),
+  getInfo:   ()    => ipcRenderer.invoke('license:info'),
+  getStatus: ()    => ipcRenderer.invoke('license:status'),
 });
