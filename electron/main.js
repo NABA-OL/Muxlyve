@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import dotenv from 'dotenv';
 import http from 'node:http';
 import {
   checkLicense,
@@ -153,6 +154,10 @@ ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
+  // Carga .env desde userData (permite configurar API keys sin terminal en la app instalada).
+  const userEnv = path.join(app.getPath('userData'), '.env');
+  if (existsSync(userEnv)) dotenv.config({ path: userEnv, override: false });
+
   const license = await checkLicense({ isPackaged: app.isPackaged });
   console.log(`[electron] licencia: ${license.unlocked ? 'OK' : 'BLOQUEADA'} (${license.reason})`);
 
