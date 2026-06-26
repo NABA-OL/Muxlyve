@@ -44,7 +44,6 @@
     "asarUnpack": [
       "node_modules/ffmpeg-static/**"
     ],
-    "asarIntegrity": true,
     "win": {
       "target": "nsis",
       "icon": "build/icon-muxlyve.ico"
