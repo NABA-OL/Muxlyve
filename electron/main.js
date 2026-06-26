@@ -151,6 +151,12 @@ ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PO
 ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
+ipcMain.handle('app:get-login-item', () => app.getLoginItemSettings().openAtLogin);
+ipcMain.handle('app:set-login-item', (_, val) => {
+  app.setLoginItemSettings({ openAtLogin: !!val });
+  return app.getLoginItemSettings().openAtLogin;
+});
+
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   // Carga .env desde userData sin dependencias externas.
@@ -216,6 +222,11 @@ app.whenReady().then(async () => {
     await waitForPanel();
   } catch (err) {
     console.error('[electron] panel no respondió:', err.message);
+  }
+  // Señal al splash: completa animación a 100%, luego fade.
+  if (splash) {
+    splash.webContents.executeJavaScript('window.finishLoad && window.finishLoad()').catch(() => {});
+    await new Promise(r => setTimeout(r, 1050)); // 500ms barra + 300ms hold + margen
   }
   closeSplash();
   createWindow();

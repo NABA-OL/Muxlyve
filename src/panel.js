@@ -338,6 +338,20 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .prefs-close:hover { color: var(--text); background: var(--surface-2); }
   .prefs-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
     text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .75rem; }
+  .pref-row { display: flex; align-items: center; justify-content: space-between;
+    padding: .5rem 0; border-bottom: 1px solid var(--border); }
+  .pref-row:last-child { border-bottom: none; }
+  .pref-row label:first-child { font-size: .85rem; color: var(--text); }
+  .pref-row .pref-desc { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
+  .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+  .sys-toggle input { opacity: 0; width: 0; height: 0; }
+  .sys-toggle-track { position: absolute; inset: 0; background: var(--surface-2);
+    border-radius: 20px; border: 1px solid var(--border); transition: background .2s; cursor: pointer; }
+  .sys-toggle input:checked + .sys-toggle-track { background: var(--accent); border-color: var(--accent); }
+  .sys-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    transition: transform .2s; }
+  .sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(16px); }
 
   /* ── Modal licencia ── */
   .lic-modal { width: 380px; }
@@ -608,6 +622,19 @@ const PANEL_HTML = /* html */ `<!doctype html>
     <div class="prefs-head">
       <h2>Preferencias</h2>
       <button class="prefs-close" onclick="closePrefs()">✕</button>
+    </div>
+    <div class="prefs-section" id="sysSection" style="display:none">
+      <h3>Sistema</h3>
+      <div class="pref-row">
+        <div>
+          <div>Iniciar con el sistema</div>
+          <div class="pref-desc">Abre Muxlyve al iniciar sesión</div>
+        </div>
+        <label class="sys-toggle">
+          <input type="checkbox" id="loginItemChk" onchange="toggleLoginItem(this.checked)">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
     </div>
     <div class="prefs-section">
       <h3>Grabador de clips</h3>
@@ -1198,8 +1225,19 @@ const PANEL_HTML = /* html */ `<!doctype html>
     })();
   }
 
-  function openPrefs() { $('#prefsOverlay').classList.add('open'); }
+  async function openPrefs() {
+    $('#prefsOverlay').classList.add('open');
+    if (window.msApp) {
+      $('#sysSection').style.display = '';
+      try {
+        $('#loginItemChk').checked = await window.msApp.getLoginItem();
+      } catch {}
+    }
+  }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
+  async function toggleLoginItem(val) {
+    if (window.msApp) { try { await window.msApp.setLoginItem(val); } catch {} }
+  }
 
   async function openLic() {
     $('#licOverlay').classList.add('open');
