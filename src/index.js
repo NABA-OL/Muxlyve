@@ -3,9 +3,9 @@ import { loadAll, isPlayable } from './destinations.js';
 import { onPublish, onUnpublish } from './relays.js';
 import { startPanel } from './panel.js';
 
-const RTMP_PORT = Number(process.env.RTMP_PORT || 1935);
-const HTTP_PORT = Number(process.env.HTTP_PORT || 8000);
-const PANEL_PORT = Number(process.env.PANEL_PORT || 8080);
+const RTMP_PORT = Number(process.env.RTMP_PORT || 19350);
+const HTTP_PORT = Number(process.env.HTTP_PORT || 19000);
+const PANEL_PORT = Number(process.env.PANEL_PORT || 19080);
 const STREAM_KEY = process.env.STREAM_KEY || 'mistream';
 
 const config = {

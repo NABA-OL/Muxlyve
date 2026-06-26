@@ -194,6 +194,9 @@ export function startPanel(port, config = {}) {
     }
   });
   // Solo localhost: el panel nunca debe quedar expuesto en la red.
+  server.on('error', (err) => {
+    console.error(`[panel] ERROR al iniciar en puerto ${port}:`, err.code, err.message);
+  });
   server.listen(port, '127.0.0.1', () => {
     console.log(` Panel web:    http://localhost:${port}`);
   });

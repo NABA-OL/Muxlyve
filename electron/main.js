@@ -13,7 +13,7 @@ import {
 import { initUpdater } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PANEL_PORT  = Number(process.env.PANEL_PORT || 8080);
+const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
 const PANEL_URL   = `http://127.0.0.1:${PANEL_PORT}/`;
 const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
 const PRELOAD       = path.join(__dirname, 'preload.cjs');
@@ -50,7 +50,12 @@ function waitForPanel(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const tryOnce = () => {
-      const req = http.get(`${PANEL_URL}api/state`, (res) => { res.resume(); resolve(); });
+      const req = http.get(`${PANEL_URL}api/state`, (res) => {
+        res.resume();
+        if (res.statusCode === 200) resolve();
+        else if (Date.now() > deadline) reject(new Error(`panel respondió ${res.statusCode} — posible conflicto de puerto`));
+        else setTimeout(tryOnce, 250);
+      });
       req.on('error', () => {
         if (Date.now() > deadline) reject(new Error('el panel no arrancó a tiempo'));
         else setTimeout(tryOnce, 250);
@@ -159,14 +164,24 @@ app.whenReady().then(async () => {
   showSplash();
 
   // Arranca el motor (NMS + relays + panel) por efecto de import.
-  await import('../src/index.js');
+  try {
+    await import('../src/index.js');
+  } catch (err) {
+    console.error('[electron] ERROR al arrancar el motor:', err.message, err.stack);
+    dialog.showErrorBox('Error al iniciar Muxlyve', `No se pudo arrancar el motor:\n${err.message}`);
+    app.quit();
+    return;
+  }
   try {
     await waitForPanel();
   } catch (err) {
-    console.error('[electron]', err.message);
+    console.error('[electron] panel no respondió:', err.message);
   }
   closeSplash();
   createWindow();
+  win.webContents.on('did-fail-load', (_, code, desc, url) => {
+    console.error('[electron] did-fail-load:', code, desc, url);
+  });
   if (app.isPackaged) initUpdater(win);
 
   // Revalidar licencia cada 6 h en segundo plano.
