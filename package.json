@@ -1,6 +1,6 @@
 {
   "name": "muxlyve",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
   "author": "NABA-OL <nabaol.dev@gmail.com>",
   "type": "module",
