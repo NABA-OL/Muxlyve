@@ -7,8 +7,12 @@
 !define MUI_FINISHPAGE_TEXT "Muxlyve se instaló correctamente en tu equipo.$\r$\n$\r$\nHaz clic en Finalizar para cerrar este asistente."
 !define MUI_FINISHPAGE_RUN_TEXT "Abrir Muxlyve"
 
+; Header image — aparece en páginas de progreso / componentes
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "${PROJECT_DIR}\build\installer-header.bmp"
+!define MUI_HEADERIMAGE_RIGHT
+
 !macro customInit
-  ; Forzar vista de registro de 64 bits
   SetRegView 64
 !macroend
 

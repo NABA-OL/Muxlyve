@@ -82,9 +82,21 @@ export function isPlayable(dest) {
 
 // Lee la lista completa (incluye deshabilitados/incompletos), con url descifrada en memoria.
 export function loadAll() {
-  const file = existsSync(CONFIG_PATH) ? CONFIG_PATH : EXAMPLE_PATH;
+  if (!existsSync(CONFIG_PATH)) {
+    // Primera ejecución en este perfil: semilla desde el ejemplo y lo ancla en userData
+    // para que reinstalaciones futuras encuentren el archivo (con las ediciones del usuario).
+    try {
+      const data = JSON.parse(readFileSync(EXAMPLE_PATH, 'utf-8'));
+      const list = Array.isArray(data.destinations) ? data.destinations : [];
+      try { saveAll(list); } catch { /* si userData no es escribible, continúa en memoria */ }
+      return list.map(decode);
+    } catch (err) {
+      console.error('[config] No se pudo leer destinations.example.json:', err.message);
+      return [];
+    }
+  }
   try {
-    const data = JSON.parse(readFileSync(file, 'utf-8'));
+    const data = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
     const list = Array.isArray(data.destinations) ? data.destinations : [];
     return list.map(decode);
   } catch (err) {

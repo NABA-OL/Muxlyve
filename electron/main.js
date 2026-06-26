@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import {
@@ -159,6 +159,31 @@ app.whenReady().then(async () => {
   // Config dir fuera de app.asar cuando está empaquetado.
   if (app.isPackaged && !process.env.MS_CONFIG_DIR) {
     process.env.MS_CONFIG_DIR = app.getPath('userData');
+  }
+
+  // Migración única: recupera destinations.json de ubicaciones legacy si no está en userData.
+  if (app.isPackaged) {
+    const userDest = path.join(app.getPath('userData'), 'destinations.json');
+    if (!existsSync(userDest)) {
+      const legacyPaths = [
+        // junto al ejecutable / recursos (versiones muy antiguas)
+        path.join(process.resourcesPath, '..', 'config', 'destinations.json'),
+        // directorio de trabajo
+        path.join(process.cwd(), 'config', 'destinations.json'),
+      ];
+      for (const legacy of legacyPaths) {
+        if (existsSync(legacy)) {
+          try {
+            mkdirSync(app.getPath('userData'), { recursive: true });
+            copyFileSync(legacy, userDest);
+            console.log(`[config] Migrado destinations.json desde ${legacy}`);
+          } catch (e) {
+            console.warn('[config] No se pudo migrar:', e.message);
+          }
+          break;
+        }
+      }
+    }
   }
 
   showSplash();
