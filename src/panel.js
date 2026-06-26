@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
 import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
+import { ingestInfo, audioBus } from './monitor.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -39,7 +40,7 @@ function buildState() {
       lagging: info.lagging,
     };
   });
-  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo() };
+  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), ingest: ingestInfo() };
 }
 
 function readBody(req) {
@@ -78,6 +79,19 @@ async function handleApi(req, res, url) {
   // GET /api/state
   if (req.method === 'GET' && url.pathname === '/api/state') {
     return json(res, 200, buildState());
+  }
+
+  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
+  if (req.method === 'GET' && url.pathname === '/api/audio') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
+    audioBus.on('level', onLevel);
+    req.on('close', () => audioBus.off('level', onLevel));
+    return;
   }
 
   // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
@@ -156,6 +170,12 @@ async function handleApi(req, res, url) {
     } catch {
       return json(res, 501, { error: 'Selector solo disponible en la app de escritorio.' });
     }
+  }
+
+  // GET /oauth/:platform — callback de OAuth; Electron intercepta antes, esto es fallback visual.
+  if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>');
   }
 
   return json(res, 404, { error: 'No encontrado.' });
@@ -352,6 +372,17 @@ const PANEL_HTML = /* html */ `<!doctype html>
     color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }
   .about-close-btn:hover { background: var(--border); }
 
+  /* ── Barra de ingest: stats + VU meter ── */
+  .ingest-bar { display: flex; align-items: center; gap: .75rem; margin-top: .6rem;
+    padding: .5rem .65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+  .ingest-pill { font-size: .72rem; font-weight: 600; color: var(--muted); font-family: ui-monospace, monospace;
+    white-space: nowrap; letter-spacing: .02em; }
+  .vu { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .vu-ch { height: 7px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .vu-fill { display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, #2ea043 0%, #2ea043 65%, #d29922 82%, #f85149 100%);
+    border-radius: 4px; transition: width 80ms linear; }
+
   /* ── Grabador de clips ── */
   .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
   .rec-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
@@ -427,6 +458,52 @@ const PANEL_HTML = /* html */ `<!doctype html>
     white-space: nowrap; z-index: 10; }
   #msg.show { opacity: 1; }
   #msg.err { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Cuentas OAuth ── */
+  #authSection { border-top: 1px solid var(--border); padding-top: .85rem; margin-top: .85rem; }
+  .auth-hd { font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: .55rem; }
+  .auth-row { display: flex; align-items: center; gap: .45rem; padding: .38rem 0;
+    border-bottom: 1px solid var(--border); }
+  .auth-row:last-child { border-bottom: none; }
+  .p-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .auth-name { flex: 1; font-size: .82rem; }
+  .auth-user { font-size: .72rem; color: var(--muted); font-family: ui-monospace,monospace;
+    max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .auth-soon { font-size: .68rem; color: var(--off); font-style: italic; }
+  .auth-conn { font-size: .7rem; padding: .18rem .5rem; }
+  .auth-disc { font-size: .68rem; padding: .14rem .38rem;
+    background: transparent; border-color: var(--border); color: var(--muted); }
+  .auth-disc:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Platform blocks ── */
+  .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; }
+  .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
+    cursor: pointer; user-select: none; background: var(--surface); transition: background .15s; }
+  .pb-head:hover { background: var(--surface-2); }
+  .pb-chevron { color: var(--muted); transition: transform .2s; flex-shrink: 0;
+    font-style: normal; font-size: .6rem; display: inline-block; }
+  .pb-block.open .pb-chevron { transform: rotate(90deg); }
+  .pb-body { display: none; border-top: 1px solid var(--border); padding: .65rem .9rem; }
+  .pb-block.open .pb-body { display: block; }
+  .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
+  .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
+    max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pb-soon-tag { font-size: .65rem; color: var(--off); font-style: italic; }
+  /* Compact RTMP card inside platform block */
+  .pb-rtmp { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: .6rem .7rem; margin-bottom: .55rem; }
+  .pb-rtmp label { font-size: .7rem; }
+  .pb-rtmp input[type=text] { font-size: .82rem; padding: .38rem .5rem; }
+  .pb-rtmp .row { margin-top: .5rem; gap: .4rem; }
+  .pb-rtmp .save { padding: .38rem .6rem; font-size: .78rem; }
+  .pb-rtmp .del { padding: .38rem .6rem; font-size: .78rem; }
+  .pb-rtmp .auto-note { font-size: .68rem; }
+  .pb-add-rtmp-btn { background: transparent; border: 1px dashed var(--border); color: var(--muted);
+    width: 100%; padding: .38rem; font-size: .76rem; border-radius: 8px; font-weight: 400; }
+  .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pb-add-rtmp-form { margin-top: .45rem; }
+  .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }
 </style>
 </head>
 <canvas id="bgCanvas" aria-hidden="true"></canvas>
@@ -479,6 +556,13 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <video id="player" muted playsinline></video>
           <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
         </div>
+        <div class="ingest-bar" id="ingestBar" style="display:none">
+          <span class="ingest-pill" id="ingestVideo">—</span>
+          <div class="vu" title="Nivel de audio (L / R)">
+            <div class="vu-ch"><span class="vu-fill" id="vuL"></span></div>
+            <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
+          </div>
+        </div>
         <div class="conn">
           <div class="field">
             <label>Servidor RTMP (en OBS)</label>
@@ -502,9 +586,11 @@ const PANEL_HTML = /* html */ `<!doctype html>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
     <div class="sidebar-inner">
-      <div id="list"></div>
-      <details class="add">
-        <summary>+ Añadir destino</summary>
+      <div id="platformList"></div>
+      <div id="customList"></div>
+
+      <details class="add" id="addDestDetails">
+        <summary>+ Añadir destino personalizado</summary>
         <div class="add-card">
           <div class="field"><label>Nombre</label><input type="text" id="newName" placeholder="MiPlataforma"></div>
           <div class="row">
@@ -601,8 +687,28 @@ const PANEL_HTML = /* html */ `<!doctype html>
 <div id="msg"></div>
 <script src="/flv.min.js"></script>
 <script>
+  window.onerror = (msg, src, line, col, err) => {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f85149;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
+    d.textContent = '[ERROR] ' + msg + ' (' + (src || '') + ':' + line + ':' + col + ')';
+    document.body?.appendChild(d);
+  };
+  window.onunhandledrejection = (e) => {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:40px;left:0;right:0;z-index:9999;background:#d29922;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
+    d.textContent = '[PROMISE] ' + (e.reason?.message || e.reason || 'rejected');
+    document.body?.appendChild(d);
+  };
   const $ = (s) => document.querySelector(s);
-  const list = $('#list');
+  const PLATFORM_IDS = ['twitch', 'youtube', 'kick', 'tiktok'];
+  const AUTH_PLATFORMS = [
+    { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
+    { id: 'youtube', name: 'YouTube', color: '#ff0000' },
+    { id: 'kick',    name: 'Kick',    color: '#53fc18', soon: true },
+    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
+  ];
+  let lastState = null;
+  let lastAuthStatus = {};
   let msgTimer;
   let flvUrl = '';
   let player = null;
@@ -686,14 +792,140 @@ const PANEL_HTML = /* html */ `<!doctype html>
     }
   }
 
+  // ── Ingest: stats de video + VU meter de audio ──
+  // SSE setea los objetivos; un loop de suavizado (ataque rápido / caída lenta) anima las barras.
+  const vu = { tL: 0, tR: 0, dL: 0, dR: 0, live: false };
+  function applyVu(el, v) {
+    el.style.width = v + '%';
+  }
+  (function vuLoop() {
+    const ease = (d, t) => d + (t - d) * (t > d ? 0.7 : 0.12); // sube rápido, baja suave
+    vu.dL = ease(vu.dL, vu.live ? vu.tL : 0);
+    vu.dR = ease(vu.dR, vu.live ? vu.tR : 0);
+    applyVu($('#vuL'), Math.round(vu.dL));
+    applyVu($('#vuR'), Math.round(vu.dR));
+    requestAnimationFrame(vuLoop);
+  })();
+
+  (function initAudioSSE() {
+    if (typeof EventSource === 'undefined') return;
+    const es = new EventSource('/api/audio');
+    es.onmessage = (e) => {
+      try { const l = JSON.parse(e.data); vu.tL = l.l; vu.tR = l.r; } catch {}
+    };
+    // EventSource reconecta solo ante error; nada más que hacer.
+  })();
+
+  function updateIngest(state) {
+    vu.live = !!state.live;
+    const bar = $('#ingestBar');
+    if (!state.live || !state.ingest) {
+      bar.style.display = 'none';
+      vu.tL = vu.tR = 0;
+      return;
+    }
+    bar.style.display = '';
+    const ing = state.ingest;
+    const parts = [];
+    if (ing.width && ing.height) parts.push(ing.width + '×' + ing.height);
+    if (ing.fps != null) parts.push(ing.fps + ' fps');
+    $('#ingestVideo').textContent = 'Entrada: ' + (parts.join(' · ') || '—');
+  }
+
   function render(state) {
+    lastState = state;
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     updatePreview(state.live);
     updateRecorder(state);
-    list.innerHTML = '';
-    for (const d of state.destinations) {
+    updateIngest(state);
+    renderPlatforms();
+    renderCustom(state);
+  }
+
+  function renderPlatforms() {
+    if (!lastState) return;
+    const state = lastState;
+    const authSt = lastAuthStatus;
+    const pl = $('#platformList');
+    pl.innerHTML = '';
+    for (const p of AUTH_PLATFORMS) {
+      const rtmpDest = state.destinations.find(d => d.name.toLowerCase() === p.id) || null;
+      const authS = authSt[p.id] || {};
+      const storedOpen = localStorage.getItem('ms_pb_' + p.id);
+      const isOpen = storedOpen === null ? true : storedOpen !== '0';
+      const block = document.createElement('div');
+      block.className = 'pb-block' + (isOpen ? ' open' : '');
+      block.id = 'pb-' + p.id;
+
+      // OAuth header part
+      let oauthHtml = '';
+      if (p.soon) {
+        oauthHtml = '<span class="pb-soon-tag">OAuth próx.</span>';
+      } else if (authS.connected) {
+        const user = authS.username || 'conectado';
+        oauthHtml = '<span class="pb-user" title="' + user + '">' + user + '</span>' +
+          '<button class="auth-disc" data-id="' + p.id + '" onclick="disconnectPlatform(this.dataset.id)">&#10005;</button>';
+      } else {
+        oauthHtml = '<button class="auth-conn" data-id="' + p.id + '" onclick="connectPlatform(this.dataset.id)">Conectar</button>';
+      }
+
+      // RTMP body
+      let bodyHtml = '';
+      if (rtmpDest) {
+        const d = rtmpDest;
+        const isTikTok = p.id === 'tiktok';
+        const pill = pillFor(d);
+        const metrics = metricsFor(d);
+        bodyHtml += '<div class="pb-rtmp">';
+        bodyHtml += '<div class="card-head"><span class="pill ' + pill.cls + '">' + pill.text + '</span>';
+        if (metrics) bodyHtml += '<span class="metrics">' + metrics + '</span>';
+        bodyHtml += '</div>';
+        bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal' : '') + '</label>';
+        bodyHtml += '<input type="text" class="pb-url" value=""></div>';
+        bodyHtml += '<div class="row"><label class="switch">';
+        bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + d.name + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
+        bodyHtml += '<span class="thumb"></span></label>';
+        bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
+        if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
+        bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
+        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>';
+        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
+        bodyHtml += '</div>';
+      } else {
+        const isTikTok = p.id === 'tiktok';
+        bodyHtml += '<button class="pb-add-rtmp-btn" data-pid="' + p.id + '" onclick="showAddPlatformRtmp(this.dataset.pid)">+ Añadir servidor RTMP</button>';
+        bodyHtml += '<div class="pb-add-rtmp-form" id="pb-add-form-' + p.id + '" style="display:none">';
+        bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal TikTok' : '') + '</label>';
+        bodyHtml += '<input type="text" id="pb-new-url-' + p.id + '" placeholder="rtmp://servidor/app/CLAVE"></div>';
+        bodyHtml += '<div class="row" style="margin-top:.5rem">';
+        bodyHtml += '<button class="save" data-pid="' + p.id + '" onclick="addPlatformRtmp(this.dataset.pid)">Añadir</button>';
+        bodyHtml += '<button class="del" data-pid="' + p.id + '" onclick="cancelAddPlatformRtmp(this.dataset.pid)">Cancelar</button>';
+        bodyHtml += '</div></div>';
+      }
+
+      block.innerHTML =
+        '<div class="pb-head" data-pid="' + p.id + '" onclick="togglePlatformBlock(this.dataset.pid)">' +
+        '<i class="pb-chevron">&#9654;</i>' +
+        '<span class="p-dot" style="background:' + p.color + '"></span>' +
+        '<span class="pb-head-name">' + p.name + '</span>' +
+        oauthHtml +
+        '</div>' +
+        '<div class="pb-body">' + bodyHtml + '</div>';
+
+      if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
+      pl.appendChild(block);
+    }
+  }
+
+  function renderCustom(state) {
+    const cl = $('#customList');
+    const custom = state.destinations.filter(d => !PLATFORM_IDS.includes(d.name.toLowerCase()));
+    cl.innerHTML = '';
+    if (custom.length === 0) return;
+    cl.appendChild(Object.assign(document.createElement('div'), { className: 'custom-sep' }));
+    for (const d of custom) {
       const isTikTok = /tiktok/i.test(d.name);
       const pill = pillFor(d);
       const metrics = metricsFor(d);
@@ -706,7 +938,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <span class="metrics"></span>
         </div>
         <div class="field">
-          <label>URL RTMP\${isTikTok ? ' — pega aquí la clave temporal de TikTok' : ''}</label>
+          <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal de TikTok' : ''}</label>
           <input type="text" class="url" value="">
         </div>
         <div class="row">
@@ -718,7 +950,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
-        \${d.enabled && !state.live ? '<p class="auto-note">▶ Arrancará cuando OBS empiece a transmitir.</p>' : ''}
+        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>' : ''}
         \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;
@@ -726,15 +958,61 @@ const PANEL_HTML = /* html */ `<!doctype html>
       card.querySelector('.metrics').textContent = metrics;
       const urlInput = card.querySelector('.url');
       urlInput.value = d.url;
-      if (d.note) card.querySelector('.note').textContent = '⚠ ' + d.note;
-
+      if (d.note) card.querySelector('.note').textContent = '&#9651; ' + d.note;
       card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked);
       card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled);
       card.querySelector('.del').onclick = () => del(d.name);
       const retryBtn = card.querySelector('.retry');
       if (retryBtn) retryBtn.onclick = () => doRetry(d.name);
-      list.appendChild(card);
+      cl.appendChild(card);
     }
+  }
+
+  function togglePlatformBlock(pid) {
+    const block = $('#pb-' + pid);
+    if (!block) return;
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
+  }
+
+  function showAddPlatformRtmp(pid) {
+    const form = $('#pb-add-form-' + pid);
+    if (!form) return;
+    form.previousElementSibling.style.display = 'none';
+    form.style.display = '';
+  }
+
+  function cancelAddPlatformRtmp(pid) {
+    const form = $('#pb-add-form-' + pid);
+    if (!form) return;
+    form.style.display = 'none';
+    form.previousElementSibling.style.display = '';
+    const inp = $('#pb-new-url-' + pid);
+    if (inp) inp.value = '';
+  }
+
+  async function addPlatformRtmp(pid) {
+    const inp = $('#pb-new-url-' + pid);
+    const url = inp ? inp.value.trim() : '';
+    if (!url) { toast('Pon una URL', true); return; }
+    try {
+      render(await api('POST', '/api/destinations', { name: pid, url, enabled: false }));
+      toast(pid + ' RTMP añadido');
+    } catch (e) { toast(e.message, true); }
+  }
+
+  function savePbRtmp(btn) {
+    const name = btn.dataset.name;
+    const card = btn.closest('.pb-rtmp');
+    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked);
+  }
+
+  function delPbRtmp(btn) { del(btn.dataset.name); }
+  function retryPbRtmp(btn) { doRetry(btn.dataset.name); }
+
+  function togglePbRtmp(cb) {
+    const card = cb.closest('.pb-rtmp');
+    save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked);
   }
 
   async function doRetry(name) {
@@ -764,7 +1042,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
   }
   async function refresh() {
     if (document.activeElement?.classList.contains('url')) return;
-    try { render(await api('GET', '/api/state')); } catch {}
+    try { render(await api('GET', '/api/state')); } catch (e) { console.error('[refresh]', e); }
   }
 
   function copy(id) {
@@ -991,8 +1269,34 @@ const PANEL_HTML = /* html */ `<!doctype html>
     $('#sidebarToggle').classList.remove('panel-open');
   }
 
+  // ── Cuentas OAuth (solo Electron) ──
+  async function loadAuthStatus() {
+    if (!window.msOAuth) return;
+    try {
+      lastAuthStatus = await window.msOAuth.status();
+      renderPlatforms();
+    } catch {}
+  }
+
+  async function connectPlatform(platform) {
+    const btn = $('#pb-' + platform + ' .auth-conn');
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    try {
+      const r = await window.msOAuth.connect(platform);
+      if (r.ok) { toast('&#10003; ' + platform + ' conectado' + (r.username ? ' (' + r.username + ')' : '')); }
+      else { toast(r.error || 'Error al conectar', true); }
+    } catch (e) { toast(e.message, true); }
+    loadAuthStatus();
+  }
+
+  async function disconnectPlatform(platform) {
+    try { await window.msOAuth.disconnect(platform); } catch {}
+    loadAuthStatus();
+  }
+
   loadConfig();
   refresh();
+  loadAuthStatus();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
 </script>
 </body>

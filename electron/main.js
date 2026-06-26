@@ -10,6 +10,7 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus } from './oauth.js';
 import { initUpdater } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -145,6 +146,10 @@ ipcMain.handle('license:release', async () => {
 
 ipcMain.handle('license:info', () => getLicenseInfo());
 ipcMain.handle('license:status', () => refreshLicenseStatus());
+
+ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
+ipcMain.handle('oauth:status', () => oauthStatus());
+ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {

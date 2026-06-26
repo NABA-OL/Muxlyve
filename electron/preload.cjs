@@ -8,3 +8,8 @@ contextBridge.exposeInMainWorld('msLicense', {
   getInfo:   ()    => ipcRenderer.invoke('license:info'),
   getStatus: ()    => ipcRenderer.invoke('license:status'),
 });
+contextBridge.exposeInMainWorld('msOAuth', {
+  connect:    (platform) => ipcRenderer.invoke('oauth:connect', platform),
+  status:     ()         => ipcRenderer.invoke('oauth:status'),
+  disconnect: (platform) => ipcRenderer.invoke('oauth:disconnect', platform),
+});
