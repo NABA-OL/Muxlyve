@@ -12,15 +12,28 @@ const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases`
 });
 const releases = await res.json();
 
-// Drafts vacíos = sin assets subidos (GitHub agrega source code automáticamente pero no cuenta en assets[])
-const orphans = releases.filter(r => r.tag_name === tag && r.draft && r.assets.length === 0);
+const forTag = releases.filter(r => r.tag_name === tag);
 
-if (!orphans.length) { console.log('Sin drafts huérfanos.'); process.exit(0); }
-
-for (const r of orphans) {
-  const del = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/${r.id}`, {
-    method: 'DELETE',
-    headers: { Authorization: `token ${token}` },
-  });
-  console.log(`Draft huérfano ${r.id} ${del.status === 204 ? 'eliminado.' : 'ya no existe.'}`);
+for (const r of forTag) {
+  if (r.draft && r.assets.length === 0) {
+    // Draft sin assets → huérfano, borrar
+    const del = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/${r.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `token ${token}` },
+    });
+    console.log(`Draft huérfano ${r.id} ${del.status === 204 ? 'eliminado.' : 'ya no existe.'}`);
+  } else if (r.draft && r.assets.length > 0) {
+    // Draft con assets → publicar para que electron-updater lo detecte
+    const pub = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/${r.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft: false, make_latest: 'true' }),
+    });
+    const data = await pub.json();
+    console.log(`Release ${r.id} publicado: ${pub.ok ? data.html_url : data.message}`);
+  } else {
+    console.log(`Release ${r.id} ya está publicado.`);
+  }
 }
+
+if (!forTag.length) console.log(`Sin releases para ${tag}.`);

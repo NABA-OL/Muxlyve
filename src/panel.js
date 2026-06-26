@@ -171,6 +171,7 @@ export function startPanel(port, config = {}) {
           rtmpUrl: config.rtmpUrl || '',
           streamKey: config.streamKey || '',
           flvUrl: config.flvUrl || '',
+          version: config.version || '0.0.0',
         });
       }
       if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
@@ -334,6 +335,22 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .lic-danger-btn { width: 100%; padding: .5rem; background: transparent; border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; font-size: .85rem; cursor: pointer; transition: background .15s; }
   .lic-danger-btn:hover { background: rgba(235,64,52,.12); }
   .lic-note { font-size: .72rem; color: var(--muted); margin: .5rem 0 0; line-height: 1.4; }
+
+  /* ── Modal Acerca de ── */
+  .about-modal { width: 340px; text-align: center; }
+  .about-logo { font-size: 2rem; font-weight: 800; letter-spacing: -.03em;
+    background: linear-gradient(135deg, #7c5cff, #a78bfa); -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent; background-clip: text; margin: .5rem 0 .25rem; }
+  .about-version { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; }
+  .about-dev { font-size: .9rem; color: var(--text); margin-bottom: .25rem; }
+  .about-copy { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; line-height: 1.5; }
+  .about-link { font-size: .8rem; color: var(--accent); text-decoration: none; }
+  .about-link:hover { text-decoration: underline; }
+  .about-divider { height: 1px; background: var(--border); margin: 1rem 0; }
+  .about-btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
+  .about-close-btn { flex: 1; padding: .5rem; background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }
+  .about-close-btn:hover { background: var(--border); }
 
   /* ── Grabador de clips ── */
   .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
@@ -557,8 +574,27 @@ const PANEL_HTML = /* html */ `<!doctype html>
       <button class="lic-manage-btn" id="licManageBtn"
         onclick="window.open('https://users.freemius.com','_blank')"
         style="display:none">Gestionar suscripción ↗</button>
+      <button class="lic-manage-btn" onclick="openAbout()">Acerca de Muxlyve</button>
       <button class="lic-danger-btn" onclick="releaseLic()">Liberar este equipo</button>
       <p class="lic-note">Podrás activar la app en otro equipo. Necesitarás tu clave para volver a activarla aquí.</p>
+    </div>
+  </div>
+</div>
+
+<div class="prefs-overlay" id="aboutOverlay" onclick="if(event.target===this)closeAbout()">
+  <div class="prefs-modal about-modal">
+    <div class="prefs-head">
+      <h2>Acerca de</h2>
+      <button class="prefs-close" onclick="closeAbout()">✕</button>
+    </div>
+    <div class="about-logo">Muxlyve</div>
+    <div class="about-version" id="aboutVersion">v0.0.0</div>
+    <div class="about-divider"></div>
+    <div class="about-dev">Desarrollado por <strong>NABA-OL</strong></div>
+    <div class="about-copy" id="aboutCopy">© 2026 NABA-OL. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
+    <a class="about-link" href="https://github.com/NABA-OL/Muxlyve" target="_blank">github.com/NABA-OL/Muxlyve ↗</a>
+    <div class="about-btn-row">
+      <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
     </div>
   </div>
 </div>
@@ -762,6 +798,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
       flvUrl = c.flvUrl || '';
       $('#rtmpUrl').textContent = c.rtmpUrl || '—';
       $('#streamKey').textContent = c.streamKey || '—';
+      if (c.version) window._appVersion = c.version;
     } catch {}
   }
 
@@ -925,12 +962,22 @@ const PANEL_HTML = /* html */ `<!doctype html>
     $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
   }
   function closeLic() { $('#licOverlay').classList.remove('open'); }
+
+  function openAbout() {
+    closeLic();
+    // Versión ya cargada en init (appVersion global); año dinámico
+    $('#aboutVersion').textContent = 'v' + (window._appVersion || '—');
+    $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' NABA-OL. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
+    $('#aboutOverlay').classList.add('open');
+  }
+  function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
+
   async function releaseLic() {
     if (!confirm('¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.')) return;
     await window.msLicense?.release();
   }
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); } });
 
   function toggleSidebar() {
     const sidebar = $('#sidebarCol');
