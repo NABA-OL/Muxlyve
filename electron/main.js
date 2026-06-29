@@ -158,6 +158,9 @@ ipcMain.handle('app:set-login-item', (_, val) => {
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
+// Registra muxlyve:// como protocolo de la app (necesario para OAuth redirect en producción).
+app.setAsDefaultProtocolClient('muxlyve');
+
 app.whenReady().then(async () => {
   // Carga .env desde userData sin dependencias externas.
   const userEnv = path.join(app.getPath('userData'), '.env');

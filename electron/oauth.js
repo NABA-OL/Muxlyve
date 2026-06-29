@@ -10,6 +10,9 @@ const PLATFORMS = {
     tokenUrl: 'https://id.twitch.tv/oauth2/token',
     scope: 'user:read:email channel:read:subscriptions',
     pkce: true,
+    envKey: 'TWITCH',
+    // Twitch solo acepta https:// o http://localhost — usa localhost interceptado por Electron
+    useLocalhost: true,
   },
   youtube: {
     name: 'YouTube',
@@ -18,6 +21,8 @@ const PLATFORMS = {
     scope: 'https://www.googleapis.com/auth/youtube.readonly',
     pkce: false,
     envKey: 'GOOGLE',
+    // Google sí acepta esquemas personalizados para apps de escritorio
+    useLocalhost: false,
   },
 };
 
@@ -121,6 +126,15 @@ function clientSecret(cfg) {
   return process.env[`${key}_CLIENT_SECRET`] || '';
 }
 
+const REDIRECT_SCHEME = 'muxlyve';
+
+function getRedirectUri(cfg, platform, panelPort) {
+  // Twitch: requiere http://localhost. Google y otros: usa esquema propio.
+  return cfg.useLocalhost
+    ? `http://127.0.0.1:${panelPort}/oauth/${platform}`
+    : `${REDIRECT_SCHEME}://oauth/${platform}`;
+}
+
 export async function connect(platform, panelPort) {
   const cfg = PLATFORMS[platform];
   if (!cfg) return { ok: false, error: `Plataforma desconocida: ${platform}` };
@@ -130,13 +144,13 @@ export async function connect(platform, panelPort) {
     return { ok: false, error: `Client ID de ${cfg.name} no configurado. Contacta soporte.` };
   }
 
-  const redirectUri = `http://127.0.0.1:${panelPort}/oauth/${platform}`;
+  const rUri = getRedirectUri(cfg, platform, panelPort);
   const state = b64url(randomBytes(16));
   const pkcePair = cfg.pkce ? makePkce() : null;
 
   const params = new URLSearchParams({
     client_id: id,
-    redirect_uri: redirectUri,
+    redirect_uri: rUri,
     response_type: 'code',
     scope: cfg.scope,
     state,
@@ -158,12 +172,20 @@ export async function connect(platform, panelPort) {
       resolve(result);
     };
 
-    // Isolated session: intercepts only the redirect URI, no cookie sharing with main session.
     const ses = session.fromPartition(`oauth-${platform}-${Date.now()}`, { cache: false });
 
-    ses.webRequest.onBeforeRequest({ urls: [`${redirectUri}*`] }, (details, callback) => {
-      callback({ cancel: true });
-      const u = new URL(details.url);
+    const popup = new BrowserWindow({
+      width: 520, height: 700,
+      title: `Conectar ${cfg.name}`,
+      autoHideMenuBar: true,
+      webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
+    });
+
+    // Intercepta la redirección (http://localhost para Twitch, muxlyve:// para otros).
+    popup.webContents.on('will-navigate', (event, url) => {
+      if (!url.startsWith(rUri)) return;
+      event.preventDefault();
+      const u = new URL(url);
       const code = u.searchParams.get('code');
       const oauthError = u.searchParams.get('error');
       const returnedState = u.searchParams.get('state');
@@ -173,7 +195,7 @@ export async function connect(platform, panelPort) {
         return finish({ ok: false, error: 'Respuesta inválida (state mismatch).' });
       }
 
-      exchangeCode(platform, code, redirectUri, pkcePair?.verifier)
+      exchangeCode(platform, code, rUri, pkcePair?.verifier)
         .then(async (tok) => {
           const username = await fetchUsername(platform, tok.access_token);
           const all = readTokens();
@@ -187,13 +209,6 @@ export async function connect(platform, panelPort) {
           finish({ ok: true, username });
         })
         .catch((err) => finish({ ok: false, error: err.message }));
-    });
-
-    const popup = new BrowserWindow({
-      width: 520, height: 700,
-      title: `Conectar ${cfg.name}`,
-      autoHideMenuBar: true,
-      webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
     });
 
     popup.on('closed', () => finish({ ok: false, error: 'Ventana cerrada.' }));

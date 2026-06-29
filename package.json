@@ -47,6 +47,9 @@
     "asarUnpack": [
       "node_modules/ffmpeg-static/**"
     ],
+    "protocols": [
+      { "name": "Muxlyve OAuth", "schemes": ["muxlyve"] }
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon-muxlyve.ico"
