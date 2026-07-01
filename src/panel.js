@@ -75,10 +75,35 @@ function validateDestination(input) {
   return { dest: { name, url, enabled } };
 }
 
+let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
+const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
+
+async function fetchPublicIp() {
+  if (publicIpCache && Date.now() - publicIpCache.at < PUBLIC_IP_TTL_MS) return publicIpCache.ip;
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const r = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
+    const { ip } = await r.json();
+    publicIpCache = { ip, at: Date.now() };
+    return ip;
+  } catch {
+    return publicIpCache?.ip || null; // sirve la última conocida si el servicio falla
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function handleApi(req, res, url) {
   // GET /api/state
   if (req.method === 'GET' && url.pathname === '/api/state') {
     return json(res, 200, buildState());
+  }
+
+  // GET /api/public-ip -> IP pública (para exponer el ingest fuera de la red local vía port forwarding)
+  if (req.method === 'GET' && url.pathname === '/api/public-ip') {
+    const ip = await fetchPublicIp();
+    return json(res, 200, { ip });
   }
 
   // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
@@ -189,6 +214,8 @@ export function startPanel(port, config = {}) {
       if (req.method === 'GET' && url.pathname === '/api/config') {
         return json(res, 200, {
           rtmpUrl: config.rtmpUrl || '',
+          lanRtmpUrl: config.lanRtmpUrl || '',
+          rtmpPort: config.rtmpPort || null,
           streamKey: config.streamKey || '',
           flvUrl: config.flvUrl || '',
           version: config.version || '0.0.0',
@@ -585,6 +612,18 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <div class="field">
             <label>Clave de retransmisión</label>
             <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+          </div>
+          <div class="field" id="lanField" style="display:none">
+            <label>Desde otra máquina en tu red</label>
+            <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
+          </div>
+          <div class="field" id="pubField" style="display:none">
+            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+            <div class="copyrow">
+              <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+              <button onclick="togglePubIp()" id="pubEyeBtn" title="Mostrar/ocultar">&#128065;</button>
+              <button onclick="copy('pubRtmpUrl')">copiar</button>
+            </div>
           </div>
         </div>
         <!-- Grabador de clips -->
@@ -1073,9 +1112,29 @@ const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   function copy(id) {
-    const text = $('#' + id).textContent;
+    const el = $('#' + id);
+    const text = el.dataset.real || el.textContent;
     if (!text || text === '—') return;
     navigator.clipboard.writeText(text).then(() => toast('Copiado'), () => toast('No se pudo copiar', true));
+  }
+
+  let pubIpVisible = false;
+  async function togglePubIp() {
+    const el = $('#pubRtmpUrl');
+    pubIpVisible = !pubIpVisible;
+    if (pubIpVisible) {
+      if (!el.dataset.real) {
+        try {
+          const { ip } = await api('GET', '/api/public-ip');
+          if (ip && window._rtmpPort) el.dataset.real = `rtmp://${ip}:${window._rtmpPort}/live`;
+        } catch {}
+      }
+      el.textContent = el.dataset.real || 'No disponible';
+    } else {
+      el.textContent = el.dataset.real
+        ? el.dataset.real.replace(/rtmp:\/\/[^:]+/, 'rtmp://' + '•'.repeat(12))
+        : 'rtmp://••••••••••••/live';
+    }
   }
 
   // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
@@ -1103,6 +1162,14 @@ const PANEL_HTML = /* html */ `<!doctype html>
       flvUrl = c.flvUrl || '';
       $('#rtmpUrl').textContent = c.rtmpUrl || '—';
       $('#streamKey').textContent = c.streamKey || '—';
+      if (c.lanRtmpUrl) {
+        $('#lanRtmpUrl').textContent = c.lanRtmpUrl;
+        $('#lanField').style.display = '';
+      }
+      if (c.rtmpPort) {
+        window._rtmpPort = c.rtmpPort;
+        $('#pubField').style.display = '';
+      }
       if (c.version) window._appVersion = c.version;
     } catch {}
   }

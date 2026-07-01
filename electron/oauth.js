@@ -115,15 +115,24 @@ async function fetchUsername(platform, accessToken) {
   return null;
 }
 
-// IDs registrados como app Muxlyve. Rellena los || '' con los valores reales antes del build.
+// BUNDLED se genera en build time (scripts/generate-oauth-credentials.mjs) a partir de .env,
+// en electron/oauth-credentials.js — gitignored, nunca se commitea. Sin ese archivo (dev sin
+// build empaquetado) queda vacío y se usa process.env directo (dotenv en `npm run electron`).
+let BUNDLED = { TWITCH_CLIENT_ID: '', GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '' };
+try {
+  ({ BUNDLED } = await import('./oauth-credentials.js'));
+} catch {
+  // No generado — normal en dev.
+}
+
 // process.env se lee en tiempo de llamada (no en import) para que userData/.env ya esté cargado.
 function clientId(cfg) {
   const key = cfg.envKey || 'UNKNOWN';
-  return process.env[`${key}_CLIENT_ID`] || '';
+  return process.env[`${key}_CLIENT_ID`] || BUNDLED[`${key}_CLIENT_ID`] || '';
 }
 function clientSecret(cfg) {
   const key = cfg.envKey || 'UNKNOWN';
-  return process.env[`${key}_CLIENT_SECRET`] || '';
+  return process.env[`${key}_CLIENT_SECRET`] || BUNDLED[`${key}_CLIENT_SECRET`] || '';
 }
 
 const REDIRECT_SCHEME = 'muxlyve';

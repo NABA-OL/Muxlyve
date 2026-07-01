@@ -1,10 +1,23 @@
 import NodeMediaServer from 'node-media-server';
 import { readFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { loadAll, isPlayable } from './destinations.js';
 import { onPublish, onUnpublish } from './relays.js';
 import { startPanel } from './panel.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+// ponytail: primera IPv4 no interna encontrada — si hay varias interfaces (Wi-Fi + Ethernet),
+// toma la primera; ampliar a listar todas si algún usuario lo necesita.
+function getLanIp() {
+  for (const ifaces of Object.values(networkInterfaces())) {
+    for (const iface of ifaces || []) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return null;
+}
+const LAN_IP = getLanIp();
 
 const RTMP_PORT = Number(process.env.RTMP_PORT || 19350);
 const HTTP_PORT = Number(process.env.HTTP_PORT || 19000);
@@ -47,6 +60,8 @@ nms.on('donePublish', () => {
 nms.run();
 startPanel(PANEL_PORT, {
   rtmpUrl: `rtmp://localhost:${RTMP_PORT}/live`,
+  lanRtmpUrl: LAN_IP ? `rtmp://${LAN_IP}:${RTMP_PORT}/live` : null,
+  rtmpPort: RTMP_PORT,
   streamKey: STREAM_KEY,
   // node-media-server expone el ingest como HTTP-FLV en su puerto HTTP.
   flvUrl: `http://localhost:${HTTP_PORT}/live/${STREAM_KEY}.flv`,

@@ -1,5 +1,6 @@
 node_modules/
 .env
+electron/oauth-credentials.js
 config/destinations.json
 config/destinations.json.bak
 *.log
