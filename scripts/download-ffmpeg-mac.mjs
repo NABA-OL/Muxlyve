@@ -1,3 +1,4 @@
+// Desarrollado por NABA-OL
 #!/usr/bin/env node
 // Copia ffmpeg de Homebrew (TLS completo) y bundlea sus dylibs no-sistema
 // para que el .app funcione en Macs sin Homebrew instalado.

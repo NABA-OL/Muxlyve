@@ -1,3 +1,4 @@
+// Desarrollado por NABA-OL
 import { createRequire } from 'node:module';
 import { dialog } from 'electron';
 const { autoUpdater } = createRequire(import.meta.url)('electron-updater');

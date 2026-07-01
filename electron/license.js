@@ -1,3 +1,4 @@
+// Desarrollado por NABA-OL
 // Fase B — Activación y validación de licencia.
 // Flujo: activate once online → store signed token → revalidate every 30d.
 // Offline grace: 7 extra days if backend unreachable.

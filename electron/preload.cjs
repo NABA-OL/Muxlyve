@@ -1,3 +1,4 @@
+// Desarrollado por NABA-OL
 // Preload CJS: puente seguro entre el renderer (activate.html) y el main process.
 // contextIsolation=true + nodeIntegration=false → solo lo expuesto aquí llega al renderer.
 'use strict';

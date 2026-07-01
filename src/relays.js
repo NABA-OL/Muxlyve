@@ -1,3 +1,4 @@
+// Desarrollado por NABA-OL
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir, homedir } from 'node:os';

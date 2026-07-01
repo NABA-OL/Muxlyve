@@ -1,3 +1,4 @@
+// Desarrollado por NABA-OL
 // Genera electron/oauth-credentials.js (gitignored) a partir de .env, para hornear
 // los client IDs/secret dentro del binario empaquetado. Se ejecuta antes de cada build
 // (predist/predist:mac/predist:publish) — nunca se commitea a git.
