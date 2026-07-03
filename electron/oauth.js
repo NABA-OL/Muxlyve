@@ -191,8 +191,11 @@ export async function connect(platform, panelPort) {
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
     });
 
-    // Intercepta la redirección (http://localhost para Twitch, muxlyve:// para otros).
-    popup.webContents.on('will-navigate', (event, url) => {
+    // Intercepta la redirección (http://127.0.0.1 para Twitch, muxlyve:// para otros).
+    // Twitch redirige tras el login con un 302 del lado servidor — Electron lo reporta
+    // vía 'will-redirect', no 'will-navigate' (ese solo cubre navegaciones iniciadas por
+    // usuario/JS). Sin este listener, el popup queda colgado en blanco tras el login.
+    const handleRedirect = (event, url) => {
       if (!url.startsWith(rUri)) return;
       event.preventDefault();
       const u = new URL(url);
@@ -219,7 +222,9 @@ export async function connect(platform, panelPort) {
           finish({ ok: true, username });
         })
         .catch((err) => finish({ ok: false, error: err.message }));
-    });
+    };
+    popup.webContents.on('will-navigate', handleRedirect);
+    popup.webContents.on('will-redirect', handleRedirect);
 
     popup.on('closed', () => finish({ ok: false, error: 'Ventana cerrada.' }));
     popup.loadURL(`${cfg.authUrl}?${params}`);

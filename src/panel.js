@@ -252,7 +252,7 @@ export function startPanel(port, config = {}) {
   return server;
 }
 
-const PANEL_HTML = /* html */ `<!doctype html>
+export const PANEL_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">

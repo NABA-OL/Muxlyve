@@ -9,6 +9,7 @@
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
     "validate": "node scripts/validate.mjs",
+    "validate:panel": "node scripts/validate-panel-script.mjs",
     "test": "bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
     "predist": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs",
