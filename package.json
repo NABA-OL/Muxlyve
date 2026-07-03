@@ -13,7 +13,7 @@
     "test": "bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
     "predist": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs",
-    "dist": "electron-builder --win",
+    "dist": "node -r dotenv/config node_modules/electron-builder/cli.js --win",
     "predist:publish": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
     "dist:publish": "node -r dotenv/config node_modules/electron-builder/cli.js --publish always",
     "postdist:publish": "node -r dotenv/config scripts/cleanup-orphan-releases.mjs",
