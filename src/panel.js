@@ -198,12 +198,6 @@ async function handleApi(req, res, url) {
     }
   }
 
-  // GET /oauth/:platform — callback de OAuth; Electron intercepta antes, esto es fallback visual.
-  if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>');
-  }
-
   return json(res, 404, { error: 'No encontrado.' });
 }
 
@@ -235,6 +229,12 @@ export function startPanel(port, config = {}) {
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(PANEL_HTML);
+      }
+      // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
+      // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
+      if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>');
       }
       res.writeHead(404).end('No encontrado');
     } catch (err) {
@@ -453,6 +453,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     font-size: .75rem; border: none; border-radius: 6px; cursor: pointer; }
   .conn button:hover { color: var(--text); }
 
+  /* ── Campos ocultables (claves de stream, IP pública) ── */
+  .eyerow { display: flex; gap: .4rem; align-items: center; }
+  .eyerow input { flex: 1; }
+  .eye-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
+    width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; }
+  .eye-btn:hover { color: var(--text); }
+
   /* ── Destination cards ── */
   .card { background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; padding: 1.1rem 1.2rem; }
@@ -622,7 +630,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
             <div class="copyrow">
               <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
-              <button onclick="togglePubIp()" id="pubEyeBtn" title="Mostrar/ocultar">&#128065;</button>
+              <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
               <button onclick="copy('pubRtmpUrl')">copiar</button>
             </div>
           </div>
@@ -806,6 +814,38 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     return (h ? p(h) + ':' : '') + p(m) + ':' + p(sec);
   }
 
+  // Ícono de ojo (SVG, no emoji) para togglear campos ocultos. abierto=mostrar, cerrado=ocultar.
+  function eyeSvg(open) {
+    return open
+      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+  }
+
+  // Ícono SVG (no emoji) por plataforma, con el color de marca de fondo. Devuelve '' si no matchea.
+  const PLATFORM_ICON_GLYPHS = {
+    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
+    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
+    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
+    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
+  };
+  const PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
+  function platformIconSvg(id, size) {
+    const glyph = PLATFORM_ICON_GLYPHS[id];
+    if (!glyph) return '';
+    const s = size || 18;
+    return '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:6px">' +
+      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
+  }
+  // Empareja el nombre de un destino personalizado con una plataforma conocida (substring, sin distinguir mayúsculas).
+  function matchPlatformId(name) {
+    const n = (name || '').toLowerCase();
+    if (n.includes('twitch')) return 'twitch';
+    if (n.includes('youtube') || /(^|[^a-z])yt([^a-z]|$)/.test(n)) return 'youtube';
+    if (n.includes('kick')) return 'kick';
+    if (n.includes('tiktok')) return 'tiktok';
+    return null;
+  }
+
   // Devuelve { cls, text } para la píldora de estado de un destino.
   function pillFor(d) {
     if (d.status === 'live') {
@@ -950,7 +990,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         if (metrics) bodyHtml += '<span class="metrics">' + metrics + '</span>';
         bodyHtml += '</div>';
         bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal' : '') + '</label>';
-        bodyHtml += '<input type="text" class="pb-url" value=""></div>';
+        bodyHtml += '<div class="eyerow"><input type="password" class="pb-url" value="" autocomplete="off">';
+        bodyHtml += '<button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">' + eyeSvg(false) + '</button></div></div>';
         bodyHtml += '<div class="row"><label class="switch">';
         bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + d.name + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
         bodyHtml += '<span class="thumb"></span></label>';
@@ -975,7 +1016,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       block.innerHTML =
         '<div class="pb-head" data-pid="' + p.id + '" onclick="togglePlatformBlock(this.dataset.pid)">' +
         '<i class="pb-chevron">&#9654;</i>' +
-        '<span class="p-dot" style="background:' + p.color + '"></span>' +
+        (platformIconSvg(p.id) || '<span class="p-dot" style="background:' + p.color + '"></span>') +
         '<span class="pb-head-name">' + p.name + '</span>' +
         oauthHtml +
         '</div>' +
@@ -996,17 +1037,23 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       const isTikTok = /tiktok/i.test(d.name);
       const pill = pillFor(d);
       const metrics = metricsFor(d);
+      const matchedId = matchPlatformId(d.name);
+      const icon = matchedId ? platformIconSvg(matchedId, 16) : '';
       const card = document.createElement('div');
       card.className = 'card' + (isTikTok ? ' tiktok' : '');
       card.innerHTML = \`
         <div class="card-head">
+          \${icon}
           <span class="name"></span>
           <span class="pill \${pill.cls}"></span>
           <span class="metrics"></span>
         </div>
         <div class="field">
           <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal de TikTok' : ''}</label>
-          <input type="text" class="url" value="">
+          <div class="eyerow">
+            <input type="password" class="url" value="" autocomplete="off">
+            <button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">\${eyeSvg(false)}</button>
+          </div>
         </div>
         <div class="row">
           <label class="switch" title="\${d.enabled ? 'Desactivar' : 'Activar'}">
@@ -1122,6 +1169,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   let pubIpVisible = false;
   async function togglePubIp() {
     const el = $('#pubRtmpUrl');
+    const btn = $('#pubEyeBtn');
     pubIpVisible = !pubIpVisible;
     if (pubIpVisible) {
       if (!el.dataset.real) {
@@ -1134,6 +1182,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } else {
       el.textContent = 'rtmp://' + '•'.repeat(12) + '/live';
     }
+    if (btn) btn.innerHTML = eyeSvg(pubIpVisible);
+  }
+
+  // Alterna type=password/text de cualquier <input> junto a un botón .eye-btn dentro de .eyerow.
+  function toggleFieldEye(btn) {
+    const input = btn.previousElementSibling;
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.innerHTML = eyeSvg(show);
   }
 
   // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
@@ -1387,8 +1445,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
       const r = await window.msOAuth.connect(platform);
-      if (r.ok) { toast('&#10003; ' + platform + ' conectado' + (r.username ? ' (' + r.username + ')' : '')); }
-      else { toast(r.error || 'Error al conectar', true); }
+      if (r.ok) {
+        toast('&#10003; ' + platform + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
+        // Trae la clave de stream lista (p.ej. Twitch) — evita que el usuario tenga que
+        // ir a buscarla y pegarla a mano tras conectar.
+        if (r.rtmpUrl) {
+          const name = platform.charAt(0).toUpperCase() + platform.slice(1);
+          try { render(await api('POST', '/api/destinations', { name, url: r.rtmpUrl, enabled: false })); }
+          catch { /* el destino se puede añadir a mano si esto falla */ }
+        }
+      } else { toast(r.error || 'Error al conectar', true); }
     } catch (e) { toast(e.message, true); }
     loadAuthStatus();
   }

@@ -26,6 +26,9 @@ function loadEnv() {
 
 const env = loadEnv();
 const keys = ['TWITCH_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
+// TWITCH_CLIENT_SECRET es opcional: solo aplica si la app de Twitch es tipo "Confidential"
+// (tiene Client Secret generado). Apps "Public" funcionan con PKCE puro, sin secret.
+const optionalKeys = ['TWITCH_CLIENT_SECRET'];
 const missing = keys.filter((k) => !env[k]);
 if (missing.length) {
   console.error(`[oauth-credentials] ERROR: falta en .env: ${missing.join(', ')}`);
@@ -36,9 +39,10 @@ if (missing.length) {
   process.exit(1);
 }
 
+const allKeys = [...keys, ...optionalKeys];
 const body = `// AUTO-GENERADO por scripts/generate-oauth-credentials.mjs — NO editar a mano, NO commitear.
 export const BUNDLED = ${JSON.stringify(
-  Object.fromEntries(keys.map((k) => [k, env[k] || ''])),
+  Object.fromEntries(allKeys.map((k) => [k, env[k] || ''])),
   null,
   2,
 )};

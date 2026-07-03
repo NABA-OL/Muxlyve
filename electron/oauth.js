@@ -9,7 +9,7 @@ const PLATFORMS = {
     name: 'Twitch',
     authUrl: 'https://id.twitch.tv/oauth2/authorize',
     tokenUrl: 'https://id.twitch.tv/oauth2/token',
-    scope: 'user:read:email channel:read:subscriptions',
+    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key',
     pkce: true,
     envKey: 'TWITCH',
     // Twitch solo acepta https:// o http://localhost — usa localhost interceptado por Electron
@@ -74,11 +74,12 @@ async function exchangeCode(platform, code, redirectUri, verifier) {
     grant_type: 'authorization_code',
     redirect_uri: redirectUri,
   });
-  if (cfg.pkce) {
-    params.set('code_verifier', verifier);
-  } else {
-    params.set('client_secret', clientSecret(cfg));
-  }
+  if (cfg.pkce) params.set('code_verifier', verifier);
+  // Twitch: si la app está registrada como "Confidential" (tiene Client Secret generado),
+  // exige client_secret en el intercambio incluso usando PKCE — enviarlo cuando exista
+  // cubre ambos tipos de cliente (Public/Confidential) sin romper ninguno.
+  const secret = clientSecret(cfg);
+  if (secret) params.set('client_secret', secret);
 
   const res = await fetch(cfg.tokenUrl, {
     method: 'POST',
@@ -87,33 +88,53 @@ async function exchangeCode(platform, code, redirectUri, verifier) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    console.error(`[oauth] ${cfg.name}: error en token endpoint (status ${res.status}): ${text}`);
     throw new Error(`${res.status}: ${text.slice(0, 300)}`);
   }
   return res.json();
 }
 
-async function fetchUsername(platform, accessToken) {
+// Para Twitch trae también la stream key (scope channel:read:stream_key) y arma la URL
+// RTMP lista — así el usuario no tiene que ir a buscarla y pegarla a mano tras conectar.
+async function fetchProfile(platform, accessToken) {
   try {
     const cfg = PLATFORMS[platform];
     if (platform === 'twitch') {
       const r = await fetch('https://api.twitch.tv/helix/users', {
         headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': clientId(cfg) },
       });
-      if (!r.ok) return null;
+      if (!r.ok) return { username: null, rtmpUrl: null };
       const d = await r.json();
-      return d.data?.[0]?.display_name || d.data?.[0]?.login || null;
+      const user = d.data?.[0];
+      const username = user?.display_name || user?.login || null;
+      const rtmpUrl = user?.id ? await fetchTwitchRtmpUrl(accessToken, cfg, user.id) : null;
+      return { username, rtmpUrl };
     }
     if (platform === 'youtube') {
       const r = await fetch(
         'https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true',
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-      if (!r.ok) return null;
+      if (!r.ok) return { username: null, rtmpUrl: null };
       const d = await r.json();
-      return d.items?.[0]?.snippet?.title || null;
+      return { username: d.items?.[0]?.snippet?.title || null, rtmpUrl: null };
     }
   } catch { /* silent */ }
-  return null;
+  return { username: null, rtmpUrl: null };
+}
+
+async function fetchTwitchRtmpUrl(accessToken, cfg, broadcasterId) {
+  try {
+    const r = await fetch(`https://api.twitch.tv/helix/streams/key?broadcaster_id=${broadcasterId}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': clientId(cfg) },
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const key = d.data?.[0]?.stream_key;
+    return key ? `rtmp://live.twitch.tv/app/${key}` : null;
+  } catch {
+    return null;
+  }
 }
 
 // BUNDLED se genera en build time (scripts/generate-oauth-credentials.mjs) a partir de .env,
@@ -139,9 +160,10 @@ function clientSecret(cfg) {
 const REDIRECT_SCHEME = 'muxlyve';
 
 function getRedirectUri(cfg, platform, panelPort) {
-  // Twitch: requiere http://localhost. Google y otros: usa esquema propio.
+  // Twitch exige match EXACTO de string con lo registrado en su consola — usa 'localhost'
+  // literal, no '127.0.0.1' (aunque resuelvan al mismo loopback, Twitch los trata distinto).
   return cfg.useLocalhost
-    ? `http://127.0.0.1:${panelPort}/oauth/${platform}`
+    ? `http://localhost:${panelPort}/oauth/${platform}`
     : `${REDIRECT_SCHEME}://oauth/${platform}`;
 }
 
@@ -155,6 +177,7 @@ export async function connect(platform, panelPort) {
   }
 
   const rUri = getRedirectUri(cfg, platform, panelPort);
+  console.log(`[oauth] ${cfg.name}: redirect_uri enviado = ${rUri} — debe coincidir EXACTO con lo registrado en la consola del proveedor.`);
   const state = b64url(randomBytes(16));
   const pkcePair = cfg.pkce ? makePkce() : null;
 
@@ -195,8 +218,13 @@ export async function connect(platform, panelPort) {
     // Twitch redirige tras el login con un 302 del lado servidor — Electron lo reporta
     // vía 'will-redirect', no 'will-navigate' (ese solo cubre navegaciones iniciadas por
     // usuario/JS). Sin este listener, el popup queda colgado en blanco tras el login.
+    // Se escuchan AMBOS eventos porque no siempre se sabe cuál disparará Twitch — pero
+    // un mismo redirect puede disparar los dos, y el 'code' de OAuth es de un solo uso:
+    // procesarlo dos veces invalida el segundo intento aunque el primero haya sido válido.
+    let handled = false;
     const handleRedirect = (event, url) => {
-      if (!url.startsWith(rUri)) return;
+      if (handled || !url.startsWith(rUri)) return;
+      handled = true;
       event.preventDefault();
       const u = new URL(url);
       const code = u.searchParams.get('code');
@@ -210,7 +238,7 @@ export async function connect(platform, panelPort) {
 
       exchangeCode(platform, code, rUri, pkcePair?.verifier)
         .then(async (tok) => {
-          const username = await fetchUsername(platform, tok.access_token);
+          const { username, rtmpUrl } = await fetchProfile(platform, tok.access_token);
           const all = readTokens();
           all[platform] = {
             access_token: tok.access_token,
@@ -219,7 +247,7 @@ export async function connect(platform, panelPort) {
             username,
           };
           writeTokens(all);
-          finish({ ok: true, username });
+          finish({ ok: true, username, rtmpUrl });
         })
         .catch((err) => finish({ ok: false, error: err.message }));
     };
