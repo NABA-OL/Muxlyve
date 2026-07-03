@@ -25,7 +25,12 @@ const env = loadEnv();
 const keys = ['TWITCH_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
 const missing = keys.filter((k) => !env[k]);
 if (missing.length) {
-  console.warn(`[oauth-credentials] Falta en .env: ${missing.join(', ')} — OAuth quedará deshabilitado para esa(s) plataforma(s) en el build.`);
+  console.error(`[oauth-credentials] ERROR: falta en .env: ${missing.join(', ')}`);
+  console.error('[oauth-credentials] Esta máquina de build no tiene el .env con las credenciales reales');
+  console.error('[oauth-credentials] (.env está gitignored — no viaja con git clone/pull). Copia el .env');
+  console.error('[oauth-credentials] con los valores reales a la raíz del proyecto ANTES de compilar,');
+  console.error('[oauth-credentials] o el instalador quedará con OAuth roto para esa(s) plataforma(s).');
+  process.exit(1);
 }
 
 const body = `// AUTO-GENERADO por scripts/generate-oauth-credentials.mjs — NO editar a mano, NO commitear.
