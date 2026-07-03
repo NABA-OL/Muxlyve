@@ -167,7 +167,7 @@ app.whenReady().then(async () => {
   const userEnv = path.join(app.getPath('userData'), '.env');
   if (existsSync(userEnv)) {
     const { readFileSync } = await import('node:fs');
-    for (const line of readFileSync(userEnv, 'utf8').split('\n')) {
+    for (const line of readFileSync(userEnv, 'utf8').split(/\r?\n/)) {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
       if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
     }

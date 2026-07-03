@@ -14,7 +14,10 @@ const outPath = path.join(root, 'electron', 'oauth-credentials.js');
 function loadEnv() {
   const env = {};
   if (!existsSync(envPath)) return env;
-  for (const line of readFileSync(envPath, 'utf8').split('\n')) {
+  // \r?\n cubre CRLF (Windows) y LF (Mac/Linux) — un .env editado en Windows deja \r
+  // residual al final de cada línea, que el regex de abajo no matchea (rompe el parseo
+  // silenciosamente, key por key, sin avisar cuál).
+  for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
     if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
   }
