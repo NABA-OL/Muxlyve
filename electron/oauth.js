@@ -22,8 +22,11 @@ const PLATFORMS = {
     scope: 'https://www.googleapis.com/auth/youtube.readonly',
     pkce: false,
     envKey: 'GOOGLE',
-    // Google sí acepta esquemas personalizados para apps de escritorio
-    useLocalhost: false,
+    // Google NO acepta esquemas personalizados (muxlyve://) para clientes tipo "Aplicación
+    // de escritorio" — a diferencia de RFC 8252, exige loopback (http://localhost:PUERTO).
+    // Confirmado por error real de Google: "Error 400: invalid_request,
+    // redirect_uri=muxlyve://oauth/youtube".
+    useLocalhost: true,
   },
 };
 
@@ -117,7 +120,9 @@ async function fetchProfile(platform, accessToken) {
       );
       if (!r.ok) return { username: null, rtmpUrl: null };
       const d = await r.json();
-      return { username: d.items?.[0]?.snippet?.title || null, rtmpUrl: null };
+      const username = d.items?.[0]?.snippet?.title || null;
+      const rtmpUrl = await fetchYoutubeRtmpUrl(accessToken);
+      return { username, rtmpUrl };
     }
   } catch { /* silent */ }
   return { username: null, rtmpUrl: null };
@@ -133,6 +138,34 @@ async function fetchTwitchRtmpUrl(accessToken, cfg, broadcasterId) {
     const key = d.data?.[0]?.stream_key;
     return key ? `rtmp://live.twitch.tv/app/${key}` : null;
   } catch {
+    return null;
+  }
+}
+
+// Trae la clave RTMP "reutilizable" de YouTube Live vía liveStreams.list(mine=true).
+// Solo existe si el usuario configuró "Ir en vivo" al menos una vez en YouTube Studio —
+// si la lista viene vacía o el scope no alcanza (403), devuelve null y el usuario sigue
+// el flujo manual de siempre, sin romper nada.
+async function fetchYoutubeRtmpUrl(accessToken) {
+  try {
+    const r = await fetch(
+      'https://www.googleapis.com/youtube/v3/liveStreams?part=cdn&mine=true',
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!r.ok) {
+      console.log(`[oauth] YouTube: liveStreams.list no accesible (status ${r.status}) — probablemente falta scope o el usuario nunca configuró "Ir en vivo".`);
+      return null;
+    }
+    const d = await r.json();
+    console.log(`[oauth] YouTube: liveStreams.list respondió OK, ${d.items?.length || 0} stream(s) encontrado(s).`);
+    const info = d.items?.[0]?.cdn?.ingestionInfo;
+    if (!info?.streamName || !info?.ingestionAddress) {
+      console.log('[oauth] YouTube: sin ingestionInfo — probablemente nunca configuraste "Ir en vivo" en YouTube Studio.');
+      return null;
+    }
+    return `${info.ingestionAddress}/${info.streamName}`;
+  } catch (err) {
+    console.log(`[oauth] YouTube: fetchYoutubeRtmpUrl lanzó excepción: ${err.message}`);
     return null;
   }
 }

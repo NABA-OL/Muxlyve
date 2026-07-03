@@ -1003,6 +1003,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         bodyHtml += '</div>';
       } else {
         const isTikTok = p.id === 'tiktok';
+        if (p.id === 'youtube' && authS.connected) {
+          bodyHtml += '<p class="auto-note">&#8505; Conectado como ' + (authS.username || 'tu cuenta') +
+            ' — no se pudo traer tu clave automáticamente (¿configuraste "Ir en vivo" en ' +
+            'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
+        }
         bodyHtml += '<button class="pb-add-rtmp-btn" data-pid="' + p.id + '" onclick="showAddPlatformRtmp(this.dataset.pid)">+ Añadir servidor RTMP</button>';
         bodyHtml += '<div class="pb-add-rtmp-form" id="pb-add-form-' + p.id + '" style="display:none">';
         bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal TikTok' : '') + '</label>';
@@ -1446,12 +1451,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     try {
       const r = await window.msOAuth.connect(platform);
       if (r.ok) {
-        toast('&#10003; ' + platform + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
+        const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
+        toast('✓ ' + label + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
         // Trae la clave de stream lista (p.ej. Twitch) — evita que el usuario tenga que
         // ir a buscarla y pegarla a mano tras conectar.
         if (r.rtmpUrl) {
-          const name = platform.charAt(0).toUpperCase() + platform.slice(1);
-          try { render(await api('POST', '/api/destinations', { name, url: r.rtmpUrl, enabled: false })); }
+          try { render(await api('POST', '/api/destinations', { name: label, url: r.rtmpUrl, enabled: false })); }
           catch { /* el destino se puede añadir a mano si esto falla */ }
         }
       } else { toast(r.error || 'Error al conectar', true); }
