@@ -1127,14 +1127,12 @@ const PANEL_HTML = /* html */ `<!doctype html>
       if (!el.dataset.real) {
         try {
           const { ip } = await api('GET', '/api/public-ip');
-          if (ip && window._rtmpPort) el.dataset.real = `rtmp://${ip}:${window._rtmpPort}/live`;
+          if (ip && window._rtmpPort) el.dataset.real = 'rtmp://' + ip + ':' + window._rtmpPort + '/live';
         } catch {}
       }
       el.textContent = el.dataset.real || 'No disponible';
     } else {
-      el.textContent = el.dataset.real
-        ? el.dataset.real.replace(/rtmp:\/\/[^:]+/, 'rtmp://' + '•'.repeat(12))
-        : 'rtmp://••••••••••••/live';
+      el.textContent = 'rtmp://' + '•'.repeat(12) + '/live';
     }
   }
 
