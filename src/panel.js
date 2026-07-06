@@ -704,6 +704,34 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </div>
       </div>
     </div>
+    <div class="prefs-section" id="reportSection" style="display:none">
+      <h3>Soporte</h3>
+      <div class="pref-row">
+        <div>
+          <div>Reportar un problema</div>
+          <div class="pref-desc">Envía un log de la app junto con tu descripción</div>
+        </div>
+        <button onclick="openReport()">Reportar</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="prefs-overlay" id="reportOverlay" onclick="if(event.target===this)closeReport()">
+  <div class="prefs-modal lic-modal">
+    <div class="prefs-head">
+      <h2>Reportar un problema</h2>
+      <button class="prefs-close" onclick="closeReport()">✕</button>
+    </div>
+    <div class="field">
+      <label>¿Qué pasó?</label>
+      <textarea id="reportDesc" rows="4" placeholder="Describe brevemente el problema…"
+        style="width:100%;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></textarea>
+    </div>
+    <div class="pref-desc" style="margin:.6rem 0 .8rem">
+      Se adjuntan automáticamente los últimos logs, tu versión y sistema operativo — no incluye claves ni contraseñas.
+    </div>
+    <button id="reportSendBtn" onclick="sendReport()" style="width:100%">Enviar reporte</button>
   </div>
 </div>
 <div class="prefs-overlay" id="licOverlay" onclick="if(event.target===this)closeLic()">
@@ -784,6 +812,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   ];
   let lastState = null;
   let lastAuthStatus = {};
+  // El refresh automático (cada 2s) reconstruye los bloques de plataforma desde cero —
+  // sin esto, borraría el formulario "+ Añadir servidor RTMP" abierto y lo que llevas escrito.
+  const pbAddOpen = {};
+  const pbAddDraft = {};
   let msgTimer;
   let flvUrl = '';
   let player = null;
@@ -1008,10 +1040,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             ' — no se pudo traer tu clave automáticamente (¿configuraste "Ir en vivo" en ' +
             'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
         }
-        bodyHtml += '<button class="pb-add-rtmp-btn" data-pid="' + p.id + '" onclick="showAddPlatformRtmp(this.dataset.pid)">+ Añadir servidor RTMP</button>';
-        bodyHtml += '<div class="pb-add-rtmp-form" id="pb-add-form-' + p.id + '" style="display:none">';
+        if (isTikTok) {
+          bodyHtml += '<p class="auto-note">&#8505; TikTok no tiene login — consigue tu URL y clave así: ' +
+            'abre la app de TikTok &#8594; toca + &#8594; LIVE &#8594; icono de ajustes antes de salir ' +
+            'en vivo &#8594; "Transmitir desde PC/consola". Copia el Server URL y la Stream Key que te ' +
+            'muestre y pégalos abajo. Esa clave expira en unas horas — genérala justo antes de transmitir.</p>';
+        }
+        const openStyle = pbAddOpen[p.id] ? ' style="display:none"' : '';
+        const formStyle = pbAddOpen[p.id] ? '' : ' style="display:none"';
+        bodyHtml += '<button class="pb-add-rtmp-btn" data-pid="' + p.id + '" onclick="showAddPlatformRtmp(this.dataset.pid)"' + openStyle + '>+ Añadir servidor RTMP</button>';
+        bodyHtml += '<div class="pb-add-rtmp-form" id="pb-add-form-' + p.id + '"' + formStyle + '>';
         bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal TikTok' : '') + '</label>';
-        bodyHtml += '<input type="text" id="pb-new-url-' + p.id + '" placeholder="rtmp://servidor/app/CLAVE"></div>';
+        bodyHtml += '<input type="text" id="pb-new-url-' + p.id + '" placeholder="rtmp://servidor/app/CLAVE" oninput="onPbDraftInput(this)"></div>';
         bodyHtml += '<div class="row" style="margin-top:.5rem">';
         bodyHtml += '<button class="save" data-pid="' + p.id + '" onclick="addPlatformRtmp(this.dataset.pid)">Añadir</button>';
         bodyHtml += '<button class="del" data-pid="' + p.id + '" onclick="cancelAddPlatformRtmp(this.dataset.pid)">Cancelar</button>';
@@ -1028,8 +1068,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         '<div class="pb-body">' + bodyHtml + '</div>';
 
       if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
+      if (pbAddDraft[p.id]) {
+        const draftInput = block.querySelector('#pb-new-url-' + p.id);
+        if (draftInput) draftInput.value = pbAddDraft[p.id];
+      }
       pl.appendChild(block);
     }
+  }
+
+  // El input de "+ Añadir servidor RTMP" solo existe cuando rtmpDest es null (else branch),
+  // así que su id siempre trae el pid — se guarda para sobrevivir el refresh cada 2s.
+  function onPbDraftInput(input) {
+    const pid = input.id.replace('pb-new-url-', '');
+    pbAddDraft[pid] = input.value;
   }
 
   function renderCustom(state) {
@@ -1095,6 +1146,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   function showAddPlatformRtmp(pid) {
+    pbAddOpen[pid] = true;
     const form = $('#pb-add-form-' + pid);
     if (!form) return;
     form.previousElementSibling.style.display = 'none';
@@ -1102,6 +1154,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   function cancelAddPlatformRtmp(pid) {
+    pbAddOpen[pid] = false;
+    delete pbAddDraft[pid];
     const form = $('#pb-add-form-' + pid);
     if (!form) return;
     form.style.display = 'none';
@@ -1114,9 +1168,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const inp = $('#pb-new-url-' + pid);
     const url = inp ? inp.value.trim() : '';
     if (!url) { toast('Pon una URL', true); return; }
+    const name = (AUTH_PLATFORMS.find(p => p.id === pid) || {}).name || pid;
     try {
-      render(await api('POST', '/api/destinations', { name: pid, url, enabled: false }));
-      toast(pid + ' RTMP añadido');
+      pbAddOpen[pid] = false;
+      delete pbAddDraft[pid];
+      render(await api('POST', '/api/destinations', { name, url, enabled: false }));
+      toast(name + ' RTMP añadido');
     } catch (e) { toast(e.message, true); }
   }
 
@@ -1358,6 +1415,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#prefsOverlay').classList.add('open');
     if (window.msApp) {
       $('#sysSection').style.display = '';
+      $('#reportSection').style.display = '';
       try {
         $('#loginItemChk').checked = await window.msApp.getLoginItem();
       } catch {}
@@ -1366,6 +1424,31 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
   async function toggleLoginItem(val) {
     if (window.msApp) { try { await window.msApp.setLoginItem(val); } catch {} }
+  }
+
+  function openReport() { $('#reportOverlay').classList.add('open'); }
+  function closeReport() { $('#reportOverlay').classList.remove('open'); }
+
+  async function sendReport() {
+    if (!window.msApp) return;
+    const btn = $('#reportSendBtn');
+    const desc = $('#reportDesc').value.trim();
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+    try {
+      const r = await window.msApp.sendReport(desc);
+      if (r.ok) {
+        toast('✓ Reporte enviado — gracias');
+        $('#reportDesc').value = '';
+        closeReport();
+      } else {
+        toast(r.error || 'No se pudo enviar el reporte', true);
+      }
+    } catch (e) {
+      toast(e.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Enviar reporte';
   }
 
   async function openLic() {
@@ -1422,7 +1505,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     await window.msLicense?.release();
   }
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); closeReport(); } });
 
   function toggleSidebar() {
     const sidebar = $('#sidebarCol');

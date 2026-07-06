@@ -13,6 +13,10 @@ import {
 } from './license.js';
 import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus } from './oauth.js';
 import { initUpdater } from './updater.js';
+import { initLogBuffer, getRecentLog } from './logbuffer.js';
+
+// Antes que nada — captura logs desde el arranque (la app empaquetada no muestra consola).
+initLogBuffer();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
@@ -156,6 +160,32 @@ ipcMain.handle('app:get-login-item', () => app.getLoginItemSettings().openAtLogi
 ipcMain.handle('app:set-login-item', (_, val) => {
   app.setLoginItemSettings({ openAtLogin: !!val });
   return app.getLoginItemSettings().openAtLogin;
+});
+
+ipcMain.handle('report:send', async (_, description) => {
+  try {
+    const license = getLicenseInfo();
+    const body = JSON.stringify({
+      email: license?.email || '',
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      // process.getSystemVersion() da la versión real del SO (ej. macOS 15.1) — os.release()
+      // solo da la versión del kernel Darwin, que no es lo que un humano reconoce.
+      osVersion: `${process.platform === 'darwin' ? 'macOS' : 'Windows'} ${process.getSystemVersion()}`,
+      description: description || '',
+      log: getRecentLog(),
+    });
+    const res = await fetch('https://muxlyve.com/api/support/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────

@@ -17,4 +17,5 @@ contextBridge.exposeInMainWorld('msOAuth', {
 contextBridge.exposeInMainWorld('msApp', {
   getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),
   setLoginItem: (val) => ipcRenderer.invoke('app:set-login-item', val),
+  sendReport: (description) => ipcRenderer.invoke('report:send', description),
 });
