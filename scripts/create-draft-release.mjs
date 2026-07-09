@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { readFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf8'));

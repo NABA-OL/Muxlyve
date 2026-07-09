@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 // Valida que el <script> embebido en PANEL_HTML (src/panel.js) sea JS sintácticamente
 // válido en el navegador. PANEL_HTML es un único template literal gigante — cualquier
 // backtick sin escapar, o secuencia \X no reconocida (\/, \n, \', etc.) dentro de ese

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 // Copia ffmpeg de Homebrew (TLS completo) y bundlea sus dylibs no-sistema
 // para que el .app funcione en Macs sin Homebrew instalado.
 import { execSync } from 'node:child_process';

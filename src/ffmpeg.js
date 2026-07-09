@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

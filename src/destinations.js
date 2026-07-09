@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';

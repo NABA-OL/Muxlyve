@@ -2,7 +2,7 @@
   "name": "muxlyve",
   "version": "0.2.9",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
-  "author": "NABA-OL <nabaol.dev@gmail.com>",
+  "author": "BLACKRAKEN SOLUTIONS <nabaol.dev@gmail.com>",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -99,7 +99,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "NABA-OL",
+      "owner": "BLACKRAKEN SOLUTIONS",
       "repo": "Muxlyve",
       "releaseType": "release"
     }

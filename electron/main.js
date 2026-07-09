@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs';

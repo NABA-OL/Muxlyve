@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -779,7 +779,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-logo">Muxlyve</div>
     <div class="about-version" id="aboutVersion">v0.0.0</div>
     <div class="about-divider"></div>
-    <div class="about-dev">Desarrollado por <strong>NABA-OL</strong></div>
+    <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
     <div class="about-copy" id="aboutCopy">© 2026 NABA-OL. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
     <a class="about-link" href="https://github.com/NABA-OL/Muxlyve" target="_blank">github.com/NABA-OL/Muxlyve ↗</a>
     <div class="about-btn-row">

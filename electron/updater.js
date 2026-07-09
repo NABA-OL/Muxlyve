@@ -1,4 +1,4 @@
-// Desarrollado por NABA-OL
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { createRequire } from 'node:module';
 import { dialog, shell } from 'electron';
 const { autoUpdater } = createRequire(import.meta.url)('electron-updater');
