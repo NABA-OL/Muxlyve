@@ -1,5 +1,5 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
-import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -22,12 +22,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
 const PANEL_URL   = `http://127.0.0.1:${PANEL_PORT}/`;
 const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
+const TRAY_ICON_PATH = path.join(__dirname, '../build/icon-muxlyve.png');
 const PRELOAD       = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
 const SPLASH_HTML   = path.join(__dirname, 'splash.html');
+// Flag propio (no depende del SO) para saber si el login item nos arrancó en modo oculto —
+// lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
+const START_HIDDEN = process.argv.includes('--hidden');
 
 let win = null;
 let splash = null;
+let tray = null;
 
 // ── Splash screen ─────────────────────────────────────────────────────────────
 function showSplash() {
@@ -86,9 +91,36 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => { if (!START_HIDDEN) win.show(); });
   win.loadURL(PANEL_URL);
+  // Si "iniciar minimizado" está activo, cerrar con la X oculta a la bandeja en vez de
+  // salir — coherente con ese modo: solo se sale de verdad desde el menú de la bandeja
+  // (Salir usa app.exit(), que no dispara este evento) o desactivando la opción primero.
+  win.on('close', (event) => {
+    if (loginItemState().startMinimized) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
   win.on('closed', () => { win = null; });
+}
+
+// ── Bandeja del sistema ──────────────────────────────────────────────────────
+function createTray() {
+  if (tray) return;
+  const base = nativeImage.createFromPath(TRAY_ICON_PATH);
+  const icon = base.isEmpty() ? base : base.resize({ width: 20, height: 20 });
+  tray = new Tray(icon);
+  tray.setToolTip('Muxlyve');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Mostrar Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
+    { type: 'separator' },
+    { label: 'Salir', click: () => { app.exit(0); } },
+  ]));
+  tray.on('click', () => {
+    if (!win) return;
+    if (win.isVisible()) win.hide(); else { win.show(); win.focus(); }
+  });
 }
 
 // ── Activation window ─────────────────────────────────────────────────────────
@@ -156,10 +188,17 @@ ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PO
 ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
-ipcMain.handle('app:get-login-item', () => app.getLoginItemSettings().openAtLogin);
-ipcMain.handle('app:set-login-item', (_, val) => {
-  app.setLoginItemSettings({ openAtLogin: !!val });
-  return app.getLoginItemSettings().openAtLogin;
+function loginItemState() {
+  const s = app.getLoginItemSettings();
+  return { openAtLogin: s.openAtLogin, startMinimized: (s.args || []).includes('--hidden') };
+}
+ipcMain.handle('app:get-login-item', () => loginItemState());
+ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
+  app.setLoginItemSettings({
+    openAtLogin: !!openAtLogin,
+    args: (openAtLogin && startMinimized) ? ['--hidden'] : [],
+  });
+  return loginItemState();
 });
 
 ipcMain.handle('report:send', async (_, description) => {
@@ -241,7 +280,8 @@ app.whenReady().then(async () => {
     }
   }
 
-  showSplash();
+  // Si arrancó oculto (login item con --hidden), sáltate el splash — no debe verse nada.
+  if (!START_HIDDEN) showSplash();
 
   // Arranca el motor (NMS + relays + panel) por efecto de import.
   try {
@@ -264,6 +304,7 @@ app.whenReady().then(async () => {
   }
   closeSplash();
   createWindow();
+  createTray();
   win.webContents.on('did-fail-load', (_, code, desc, url) => {
     console.error('[electron] did-fail-load:', code, desc, url);
   });
@@ -291,9 +332,13 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else if (win) { win.show(); win.focus(); }
   });
 });
 
+// Con "iniciar minimizado" activo, close() se intercepta arriba (hide en vez de destruir),
+// así que la ventana nunca llega a "closed" mientras ese modo esté activo — este evento
+// solo dispara en el flujo normal (X cierra de verdad) o tras "Salir" desde la bandeja.
 app.on('window-all-closed', () => app.quit());
 
 app.on('before-quit', async () => {
