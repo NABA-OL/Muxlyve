@@ -1,7 +1,7 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
 import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
+import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import {
@@ -11,8 +11,8 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
-import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus } from './oauth.js';
-import { initUpdater } from './updater.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected } from './oauth.js';
+import { initUpdater, checkForUpdatesManually } from './updater.js';
 import { initLogBuffer, getRecentLog } from './logbuffer.js';
 
 // Antes que nada — captura logs desde el arranque (la app empaquetada no muestra consola).
@@ -29,6 +29,18 @@ const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // Flag propio (no depende del SO) para saber si el login item nos arrancó en modo oculto —
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
 const START_HIDDEN = process.argv.includes('--hidden');
+
+// Preferencias simples que persisten entre sesiones, independientes del login item del SO
+// (ej. "minimizar a bandeja al cerrar" — a diferencia de "iniciar minimizado", no depende
+// de que la app arranque sola con el sistema).
+const PREFS_PATH = path.join(app.getPath('userData'), 'prefs.json');
+function loadPrefs() {
+  try { return JSON.parse(readFileSync(PREFS_PATH, 'utf8')); } catch { return {}; }
+}
+function savePrefs(prefs) {
+  try { writeFileSync(PREFS_PATH, JSON.stringify(prefs)); } catch {}
+}
+const prefs = loadPrefs();
 
 let win = null;
 let splash = null;
@@ -93,11 +105,11 @@ function createWindow() {
   });
   win.once('ready-to-show', () => { if (!START_HIDDEN) win.show(); });
   win.loadURL(PANEL_URL);
-  // Si "iniciar minimizado" está activo, cerrar con la X oculta a la bandeja en vez de
-  // salir — coherente con ese modo: solo se sale de verdad desde el menú de la bandeja
+  // Ajuste independiente de "iniciar minimizado" — si está activo, cerrar con la X oculta
+  // a la bandeja en vez de salir. Solo se sale de verdad desde el menú de la bandeja
   // (Salir usa app.exit(), que no dispara este evento) o desactivando la opción primero.
   win.on('close', (event) => {
-    if (loginItemState().startMinimized) {
+    if (prefs.closeToTray) {
       event.preventDefault();
       win.hide();
     }
@@ -189,8 +201,14 @@ ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
 function loginItemState() {
-  const s = app.getLoginItemSettings();
-  return { openAtLogin: s.openAtLogin, startMinimized: (s.args || []).includes('--hidden') };
+  // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el
+  // login item se registró con args:['--hidden'], esa entrada NO matchea el chequeo por
+  // defecto y openAtLogin aparece falso aunque sí esté activo. Hay que consultar ambas
+  // variantes explícitamente y ver cuál coincide con lo realmente registrado.
+  const hidden = app.getLoginItemSettings({ args: ['--hidden'] });
+  if (hidden.openAtLogin) return { openAtLogin: true, startMinimized: true };
+  const normal = app.getLoginItemSettings();
+  return { openAtLogin: normal.openAtLogin, startMinimized: false };
 }
 ipcMain.handle('app:get-login-item', () => loginItemState());
 ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
@@ -199,6 +217,19 @@ ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
     args: (openAtLogin && startMinimized) ? ['--hidden'] : [],
   });
   return loginItemState();
+});
+
+ipcMain.handle('updater:check', () => {
+  if (!app.isPackaged) return { ok: false, error: 'Solo disponible en la app empaquetada.' };
+  checkForUpdatesManually();
+  return { ok: true };
+});
+
+ipcMain.handle('app:get-close-to-tray', () => !!prefs.closeToTray);
+ipcMain.handle('app:set-close-to-tray', (_, val) => {
+  prefs.closeToTray = !!val;
+  savePrefs(prefs);
+  return prefs.closeToTray;
 });
 
 ipcMain.handle('report:send', async (_, description) => {
@@ -305,6 +336,7 @@ app.whenReady().then(async () => {
   closeSplash();
   createWindow();
   createTray();
+  resumeChatIfConnected();
   win.webContents.on('did-fail-load', (_, code, desc, url) => {
     console.error('[electron] did-fail-load:', code, desc, url);
   });

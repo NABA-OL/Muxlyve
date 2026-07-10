@@ -3,6 +3,7 @@ import { BrowserWindow, safeStorage, app, session } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { startTwitchChat, stopTwitchChat } from '../src/chat.js';
 
 const PLATFORMS = {
   twitch: {
@@ -106,12 +107,12 @@ async function fetchProfile(platform, accessToken) {
       const r = await fetch('https://api.twitch.tv/helix/users', {
         headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': clientId(cfg) },
       });
-      if (!r.ok) return { username: null, rtmpUrl: null };
+      if (!r.ok) return { username: null, rtmpUrl: null, login: null };
       const d = await r.json();
       const user = d.data?.[0];
       const username = user?.display_name || user?.login || null;
       const rtmpUrl = user?.id ? await fetchTwitchRtmpUrl(accessToken, cfg, user.id) : null;
-      return { username, rtmpUrl };
+      return { username, rtmpUrl, login: user?.login || null };
     }
     if (platform === 'youtube') {
       const r = await fetch(
@@ -271,15 +272,17 @@ export async function connect(platform, panelPort) {
 
       exchangeCode(platform, code, rUri, pkcePair?.verifier)
         .then(async (tok) => {
-          const { username, rtmpUrl } = await fetchProfile(platform, tok.access_token);
+          const { username, rtmpUrl, login } = await fetchProfile(platform, tok.access_token);
           const all = readTokens();
           all[platform] = {
             access_token: tok.access_token,
             refresh_token: tok.refresh_token || null,
             expires_at: tok.expires_in ? Date.now() + tok.expires_in * 1000 : null,
             username,
+            login: login || null,
           };
           writeTokens(all);
+          if (platform === 'twitch' && login) startTwitchChat(login);
           finish({ ok: true, username, rtmpUrl });
         })
         .catch((err) => finish({ ok: false, error: err.message }));
@@ -296,7 +299,15 @@ export function disconnect(platform) {
   const all = readTokens();
   delete all[platform];
   writeTokens(all);
+  if (platform === 'twitch') stopTwitchChat();
   return { ok: true };
+}
+
+// Reanuda el chat si ya había una sesión de Twitch guardada de antes (la app se cerró y
+// volvió a abrir) — se llama una vez al arrancar, desde main.js.
+export function resumeChatIfConnected() {
+  const login = readTokens().twitch?.login;
+  if (login) startTwitchChat(login);
 }
 
 export function getStatus() {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
 import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
+import { chatBus, getHistory as getChatHistory } from './chat.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -117,6 +118,20 @@ async function handleApi(req, res, url) {
     const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
     audioBus.on('level', onLevel);
     req.on('close', () => audioBus.off('level', onLevel));
+    return;
+  }
+
+  // GET /api/chat -> SSE: mensajes de chat unificados (Twitch por ahora).
+  if (req.method === 'GET' && url.pathname === '/api/chat') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    for (const msg of getChatHistory()) res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    const onMessage = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    chatBus.on('message', onMessage);
+    req.on('close', () => chatBus.off('message', onMessage));
     return;
   }
 
@@ -454,6 +469,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .danger-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger);
     border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
   .danger-btn:hover { background: rgba(248,81,73,.1); }
+
+  /* ── Chat unificado ── */
+  .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
+    gap: .3rem; padding-right: .2rem; }
+  .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
+  .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
+  .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
   .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
     color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
@@ -668,6 +690,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           </div>
         </div>
       </details>
+
+      <div class="pb-block open" id="chatBlock">
+        <div class="pb-head" onclick="toggleChatBlock()">
+          <i class="pb-chevron">&#9654;</i>
+          <span class="pb-head-name">Chat en vivo</span>
+        </div>
+        <div class="pb-body">
+          <div id="chatMessages" class="chat-box"></div>
+        </div>
+      </div>
     </div>
   </aside>
 </main>
@@ -699,6 +731,23 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <input type="checkbox" id="startMinChk" onchange="toggleLoginItem()">
           <span class="sys-toggle-track"></span>
         </label>
+      </div>
+      <div class="pref-row">
+        <div>
+          <div>Minimizar a la bandeja al cerrar</div>
+          <div class="pref-desc">El botón cerrar oculta la app en vez de salir — solo se cierra desde el ícono de bandeja</div>
+        </div>
+        <label class="sys-toggle">
+          <input type="checkbox" id="closeToTrayChk" onchange="toggleCloseToTray()">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
+      <div class="pref-row">
+        <div>
+          <div>Buscar actualizaciones</div>
+          <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
+        </div>
+        <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
       </div>
     </div>
     <div class="prefs-section">
@@ -1438,6 +1487,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         $('#loginItemChk').checked = s.openAtLogin;
         $('#startMinChk').checked = s.startMinimized;
         $('#startMinRow').style.display = s.openAtLogin ? '' : 'none';
+        $('#closeToTrayChk').checked = await window.msApp.getCloseToTray();
       } catch {}
     }
   }
@@ -1448,6 +1498,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const startMinimized = $('#startMinChk').checked;
     $('#startMinRow').style.display = openAtLogin ? '' : 'none';
     try { await window.msApp.setLoginItem(openAtLogin, startMinimized); } catch {}
+  }
+  async function toggleCloseToTray() {
+    if (!window.msApp) return;
+    try { await window.msApp.setCloseToTray($('#closeToTrayChk').checked); } catch {}
+  }
+
+  async function checkForUpdates() {
+    if (!window.msApp) return;
+    const btn = $('#updateCheckBtn');
+    btn.disabled = true;
+    btn.textContent = 'Buscando…';
+    try {
+      const r = await window.msApp.checkForUpdates();
+      if (!r.ok) { toast(r.error, true); }
+      // Si sí hay algo que buscar, el resultado (hay/no hay actualización) llega vía un
+      // diálogo nativo del proceso principal, no por aquí — este solo confirma el disparo.
+    } catch (e) {
+      toast(e.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Buscar';
   }
 
   function openReport() { $('#reportOverlay').classList.add('open'); }
@@ -1576,9 +1647,56 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     loadAuthStatus();
   }
 
+  // ── Chat unificado (fase 1: Twitch) ──
+  function toggleChatBlock() {
+    const block = $('#chatBlock');
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pb_chat', isOpen ? '1' : '0');
+  }
+  function initChatBlock() {
+    if (localStorage.getItem('ms_pb_chat') === '0') $('#chatBlock').classList.remove('open');
+  }
+  function appendChatMessage(msg) {
+    const box = $('#chatMessages');
+    if (!box) return;
+    const empty = box.querySelector('.chat-empty');
+    if (empty) empty.remove();
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    const iconHtml = platformIconSvg(msg.platform, 14);
+    if (iconHtml) {
+      const iconWrap = document.createElement('span');
+      iconWrap.className = 'chat-icon';
+      iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
+      row.appendChild(iconWrap);
+    }
+    const textWrap = document.createElement('span');
+    const nameEl = document.createElement('strong');
+    nameEl.style.color = msg.color || '#9147ff';
+    nameEl.textContent = msg.username || '???';
+    textWrap.appendChild(nameEl);
+    textWrap.appendChild(document.createTextNode(': ' + (msg.message || '')));
+    row.appendChild(textWrap);
+    box.appendChild(row);
+    while (box.children.length > 200) box.removeChild(box.firstChild);
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  function connectChatStream() {
+    if (!window.EventSource) return;
+    const box = $('#chatMessages');
+    if (box) box.innerHTML = '<div class="chat-empty">Esperando mensajes…</div>';
+    const es = new EventSource('/api/chat');
+    es.onmessage = (e) => {
+      try { appendChatMessage(JSON.parse(e.data)); } catch {}
+    };
+  }
+
   loadConfig();
   refresh();
   loadAuthStatus();
+  initChatBlock();
+  connectChatStream();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
 </script>
 </body>

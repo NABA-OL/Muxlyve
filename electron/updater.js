@@ -12,14 +12,38 @@ function webDownloadUrl() {
   return DOWNLOAD_URLS[process.platform] || 'https://muxlyve.com';
 }
 
+// El chequeo automático al arranque es silencioso si no hay nada nuevo — pero un click
+// manual del usuario en "Buscar actualizaciones" sí necesita confirmar "ya tienes la
+// última versión", si no, un botón que aparentemente no hace nada es mala UX.
+let manualCheck = false;
+let updaterWin = null;
+
+export function checkForUpdatesManually() {
+  manualCheck = true;
+  return autoUpdater.checkForUpdates().catch((err) => {
+    manualCheck = false;
+    console.error('[updater] checkForUpdatesManually:', err.message);
+    if (updaterWin && !updaterWin.isDestroyed()) {
+      dialog.showMessageBox(updaterWin, {
+        type: 'error',
+        title: 'No se pudo buscar actualizaciones',
+        message: err.message,
+        buttons: ['Cerrar'],
+      });
+    }
+  });
+}
+
 export function initUpdater(win) {
   // Solo correr en builds empaquetados; en dev no hay releases que buscar.
   if (!win) return;
+  updaterWin = win;
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('update-available', (info) => {
+    manualCheck = false;
     dialog.showMessageBox(win, {
       type: 'info',
       title: 'Actualización disponible',
@@ -35,6 +59,17 @@ export function initUpdater(win) {
       } else if (response === 1) {
         shell.openExternal(webDownloadUrl());
       }
+    });
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    if (!manualCheck) return; // el chequeo automático no molesta al usuario si no hay nada nuevo
+    manualCheck = false;
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Sin actualizaciones',
+      message: 'Ya tienes la última versión de Muxlyve.',
+      buttons: ['OK'],
     });
   });
 
@@ -61,6 +96,7 @@ export function initUpdater(win) {
   // Falla típica en Mac sin firma de Apple Developer ID: Squirrel.Mac rechaza aplicar
   // la actualización sin firma válida. Mientras no haya certificado, ofrece el link web.
   autoUpdater.on('error', (err) => {
+    manualCheck = false;
     console.error('[updater]', err.message);
     if (!win.isDestroyed()) win.setProgressBar(-1);
     dialog.showMessageBox(win, {
