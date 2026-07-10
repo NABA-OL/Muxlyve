@@ -446,7 +446,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .conn { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
   .conn .field { background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; padding: .5rem .65rem; }
-  .conn .copyrow { display: flex; gap: .4rem; align-items: center; }
+  .copyrow { display: flex; gap: .4rem; align-items: center; }
+  .copyrow input[type="text"] { flex: 1; min-width: 0; }
+  .browse-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: .4rem .65rem; font-size: .85rem; flex-shrink: 0; cursor: pointer; }
+  .browse-btn:hover { filter: brightness(1.1); }
+  .danger-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger);
+    border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
+  .danger-btn:hover { background: rgba(248,81,73,.1); }
   .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
     color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
@@ -679,7 +686,17 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div class="pref-desc">Abre Muxlyve al iniciar sesión</div>
         </div>
         <label class="sys-toggle">
-          <input type="checkbox" id="loginItemChk" onchange="toggleLoginItem(this.checked)">
+          <input type="checkbox" id="loginItemChk" onchange="toggleLoginItem()">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
+      <div class="pref-row" id="startMinRow" style="display:none">
+        <div>
+          <div>Iniciar minimizado en la bandeja</div>
+          <div class="pref-desc">No abre la ventana — queda el ícono junto al reloj</div>
+        </div>
+        <label class="sys-toggle">
+          <input type="checkbox" id="startMinChk" onchange="toggleLoginItem()">
           <span class="sys-toggle-track"></span>
         </label>
       </div>
@@ -700,7 +717,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
                  style="font-family:ui-monospace,monospace;font-size:.78rem"
                  oninput="localStorage.setItem('ms_clips_dir', this.value)">
-          <button id="browseBtn" onclick="browseFolder()" title="Elegir carpeta">…</button>
+          <button id="browseBtn" class="browse-btn" onclick="browseFolder()" title="Elegir carpeta">…</button>
         </div>
       </div>
     </div>
@@ -711,7 +728,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div>Reportar un problema</div>
           <div class="pref-desc">Envía un log de la app junto con tu descripción</div>
         </div>
-        <button onclick="openReport()">Reportar</button>
+        <button class="danger-btn" onclick="openReport()">Reportar</button>
       </div>
     </div>
   </div>
@@ -1417,13 +1434,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       $('#sysSection').style.display = '';
       $('#reportSection').style.display = '';
       try {
-        $('#loginItemChk').checked = await window.msApp.getLoginItem();
+        const s = await window.msApp.getLoginItem();
+        $('#loginItemChk').checked = s.openAtLogin;
+        $('#startMinChk').checked = s.startMinimized;
+        $('#startMinRow').style.display = s.openAtLogin ? '' : 'none';
       } catch {}
     }
   }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
-  async function toggleLoginItem(val) {
-    if (window.msApp) { try { await window.msApp.setLoginItem(val); } catch {} }
+  async function toggleLoginItem() {
+    if (!window.msApp) return;
+    const openAtLogin = $('#loginItemChk').checked;
+    const startMinimized = $('#startMinChk').checked;
+    $('#startMinRow').style.display = openAtLogin ? '' : 'none';
+    try { await window.msApp.setLoginItem(openAtLogin, startMinimized); } catch {}
   }
 
   function openReport() { $('#reportOverlay').classList.add('open'); }
