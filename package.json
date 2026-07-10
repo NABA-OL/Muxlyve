@@ -30,6 +30,7 @@
   "build": {
     "appId": "com.naba.muxlyve",
     "productName": "Muxlyve",
+    "afterPack": "scripts/afterpack-adhoc-sign.cjs",
     "directories": {
       "output": "dist-app",
       "buildResources": "build"
@@ -82,6 +83,7 @@
     "mac": {
       "target": "dmg",
       "icon": "build/icon.icns",
+      "identity": null,
       "extraResources": [
         {
           "from": "build/mac/ffmpeg",
