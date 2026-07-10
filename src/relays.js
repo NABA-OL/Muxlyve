@@ -1,41 +1,11 @@
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { isPlayable } from './destinations.js';
-
-// Ruta al binario de FFmpeg. Prioridad:
-//  1. FFMPEG_PATH (override explícito).
-//  2. macOS: Homebrew (/opt/homebrew o /usr/local) — mejor soporte TLS que ffmpeg-static.
-//  3. macOS empaquetado: binario bundleado en Resources/ffmpeg (Fase D).
-//  4. ffmpeg-static (funciona en Windows; TLS limitado en macOS).
-//  5. 'ffmpeg' del PATH del sistema.
-function resolveFfmpeg() {
-  if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
-
-  if (process.platform === 'darwin') {
-    // Homebrew: Apple Silicon usa /opt/homebrew, Intel usa /usr/local
-    for (const p of ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg']) {
-      if (existsSync(p)) return p;
-    }
-    // Binario bundleado en el instalador macOS (Fase D)
-    if (process.resourcesPath) {
-      const bundled = path.join(process.resourcesPath, 'ffmpeg');
-      if (existsSync(bundled)) return bundled;
-    }
-  }
-
-  try {
-    const require = createRequire(import.meta.url);
-    const p = require('ffmpeg-static');
-    if (p) return p.replace('app.asar', 'app.asar.unpacked');
-  } catch {}
-
-  return 'ffmpeg';
-}
-
-const FFMPEG = resolveFfmpeg();
+import { FFMPEG } from './ffmpeg.js';
+import { startMonitor, stopMonitor } from './monitor.js';
 
 // Gestor de procesos FFmpeg con reconexión automática.
 // Cada destino: name -> { proc, status, attempts, timer, stopping, startedAt, metrics }
@@ -171,12 +141,14 @@ export function onPublish(url, destinations) {
   sourceUrl = url;
   liveSince = Date.now();
   destinations.filter(isPlayable).forEach(startRelay);
+  startMonitor(url); // métricas del ingest + niveles de audio
 }
 
 // OBS dejó de publicar: para todo y olvida el origen.
 export function onUnpublish() {
   for (const name of [...relays.keys()]) stopRelay(name);
   stopRecording();
+  stopMonitor();
   sourceUrl = null;
   liveSince = null;
 }

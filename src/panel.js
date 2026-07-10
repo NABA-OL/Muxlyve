@@ -1,9 +1,11 @@
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
 import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
+import { ingestInfo, audioBus } from './monitor.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -39,7 +41,7 @@ function buildState() {
       lagging: info.lagging,
     };
   });
-  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo() };
+  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), ingest: ingestInfo() };
 }
 
 function readBody(req) {
@@ -74,10 +76,48 @@ function validateDestination(input) {
   return { dest: { name, url, enabled } };
 }
 
+let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
+const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
+
+async function fetchPublicIp() {
+  if (publicIpCache && Date.now() - publicIpCache.at < PUBLIC_IP_TTL_MS) return publicIpCache.ip;
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const r = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
+    const { ip } = await r.json();
+    publicIpCache = { ip, at: Date.now() };
+    return ip;
+  } catch {
+    return publicIpCache?.ip || null; // sirve la última conocida si el servicio falla
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function handleApi(req, res, url) {
   // GET /api/state
   if (req.method === 'GET' && url.pathname === '/api/state') {
     return json(res, 200, buildState());
+  }
+
+  // GET /api/public-ip -> IP pública (para exponer el ingest fuera de la red local vía port forwarding)
+  if (req.method === 'GET' && url.pathname === '/api/public-ip') {
+    const ip = await fetchPublicIp();
+    return json(res, 200, { ip });
+  }
+
+  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
+  if (req.method === 'GET' && url.pathname === '/api/audio') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
+    audioBus.on('level', onLevel);
+    req.on('close', () => audioBus.off('level', onLevel));
+    return;
   }
 
   // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
@@ -169,6 +209,8 @@ export function startPanel(port, config = {}) {
       if (req.method === 'GET' && url.pathname === '/api/config') {
         return json(res, 200, {
           rtmpUrl: config.rtmpUrl || '',
+          lanRtmpUrl: config.lanRtmpUrl || '',
+          rtmpPort: config.rtmpPort || null,
           streamKey: config.streamKey || '',
           flvUrl: config.flvUrl || '',
           version: config.version || '0.0.0',
@@ -188,6 +230,12 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(PANEL_HTML);
       }
+      // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
+      // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
+      if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>');
+      }
       res.writeHead(404).end('No encontrado');
     } catch (err) {
       console.error('[panel] error:', err.message);
@@ -204,7 +252,7 @@ export function startPanel(port, config = {}) {
   return server;
 }
 
-const PANEL_HTML = /* html */ `<!doctype html>
+export const PANEL_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -318,6 +366,20 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .prefs-close:hover { color: var(--text); background: var(--surface-2); }
   .prefs-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
     text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .75rem; }
+  .pref-row { display: flex; align-items: center; justify-content: space-between;
+    padding: .5rem 0; border-bottom: 1px solid var(--border); }
+  .pref-row:last-child { border-bottom: none; }
+  .pref-row label:first-child { font-size: .85rem; color: var(--text); }
+  .pref-row .pref-desc { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
+  .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+  .sys-toggle input { opacity: 0; width: 0; height: 0; }
+  .sys-toggle-track { position: absolute; inset: 0; background: var(--surface-2);
+    border-radius: 20px; border: 1px solid var(--border); transition: background .2s; cursor: pointer; }
+  .sys-toggle input:checked + .sys-toggle-track { background: var(--accent); border-color: var(--accent); }
+  .sys-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    transition: transform .2s; }
+  .sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(16px); }
 
   /* ── Modal licencia ── */
   .lic-modal { width: 380px; }
@@ -352,6 +414,17 @@ const PANEL_HTML = /* html */ `<!doctype html>
     color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }
   .about-close-btn:hover { background: var(--border); }
 
+  /* ── Barra de ingest: stats + VU meter ── */
+  .ingest-bar { display: flex; align-items: center; gap: .75rem; margin-top: .6rem;
+    padding: .5rem .65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+  .ingest-pill { font-size: .72rem; font-weight: 600; color: var(--muted); font-family: ui-monospace, monospace;
+    white-space: nowrap; letter-spacing: .02em; }
+  .vu { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .vu-ch { height: 7px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .vu-fill { display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, #2ea043 0%, #2ea043 65%, #d29922 82%, #f85149 100%);
+    border-radius: 4px; transition: width 80ms linear; }
+
   /* ── Grabador de clips ── */
   .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
   .rec-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
@@ -379,6 +452,14 @@ const PANEL_HTML = /* html */ `<!doctype html>
   .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
     font-size: .75rem; border: none; border-radius: 6px; cursor: pointer; }
   .conn button:hover { color: var(--text); }
+
+  /* ── Campos ocultables (claves de stream, IP pública) ── */
+  .eyerow { display: flex; gap: .4rem; align-items: center; }
+  .eyerow input { flex: 1; }
+  .eye-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
+    width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; }
+  .eye-btn:hover { color: var(--text); }
 
   /* ── Destination cards ── */
   .card { background: var(--surface); border: 1px solid var(--border);
@@ -427,6 +508,52 @@ const PANEL_HTML = /* html */ `<!doctype html>
     white-space: nowrap; z-index: 10; }
   #msg.show { opacity: 1; }
   #msg.err { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Cuentas OAuth ── */
+  #authSection { border-top: 1px solid var(--border); padding-top: .85rem; margin-top: .85rem; }
+  .auth-hd { font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: .55rem; }
+  .auth-row { display: flex; align-items: center; gap: .45rem; padding: .38rem 0;
+    border-bottom: 1px solid var(--border); }
+  .auth-row:last-child { border-bottom: none; }
+  .p-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .auth-name { flex: 1; font-size: .82rem; }
+  .auth-user { font-size: .72rem; color: var(--muted); font-family: ui-monospace,monospace;
+    max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .auth-soon { font-size: .68rem; color: var(--off); font-style: italic; }
+  .auth-conn { font-size: .7rem; padding: .18rem .5rem; }
+  .auth-disc { font-size: .68rem; padding: .14rem .38rem;
+    background: transparent; border-color: var(--border); color: var(--muted); }
+  .auth-disc:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Platform blocks ── */
+  .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; }
+  .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
+    cursor: pointer; user-select: none; background: var(--surface); transition: background .15s; }
+  .pb-head:hover { background: var(--surface-2); }
+  .pb-chevron { color: var(--muted); transition: transform .2s; flex-shrink: 0;
+    font-style: normal; font-size: .6rem; display: inline-block; }
+  .pb-block.open .pb-chevron { transform: rotate(90deg); }
+  .pb-body { display: none; border-top: 1px solid var(--border); padding: .65rem .9rem; }
+  .pb-block.open .pb-body { display: block; }
+  .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
+  .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
+    max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pb-soon-tag { font-size: .65rem; color: var(--off); font-style: italic; }
+  /* Compact RTMP card inside platform block */
+  .pb-rtmp { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: .6rem .7rem; margin-bottom: .55rem; }
+  .pb-rtmp label { font-size: .7rem; }
+  .pb-rtmp input[type=text] { font-size: .82rem; padding: .38rem .5rem; }
+  .pb-rtmp .row { margin-top: .5rem; gap: .4rem; }
+  .pb-rtmp .save { padding: .38rem .6rem; font-size: .78rem; }
+  .pb-rtmp .del { padding: .38rem .6rem; font-size: .78rem; }
+  .pb-rtmp .auto-note { font-size: .68rem; }
+  .pb-add-rtmp-btn { background: transparent; border: 1px dashed var(--border); color: var(--muted);
+    width: 100%; padding: .38rem; font-size: .76rem; border-radius: 8px; font-weight: 400; }
+  .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pb-add-rtmp-form { margin-top: .45rem; }
+  .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }
 </style>
 </head>
 <canvas id="bgCanvas" aria-hidden="true"></canvas>
@@ -479,6 +606,13 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <video id="player" muted playsinline></video>
           <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
         </div>
+        <div class="ingest-bar" id="ingestBar" style="display:none">
+          <span class="ingest-pill" id="ingestVideo">—</span>
+          <div class="vu" title="Nivel de audio (L / R)">
+            <div class="vu-ch"><span class="vu-fill" id="vuL"></span></div>
+            <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
+          </div>
+        </div>
         <div class="conn">
           <div class="field">
             <label>Servidor RTMP (en OBS)</label>
@@ -487,6 +621,18 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <div class="field">
             <label>Clave de retransmisión</label>
             <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+          </div>
+          <div class="field" id="lanField" style="display:none">
+            <label>Desde otra máquina en tu red</label>
+            <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
+          </div>
+          <div class="field" id="pubField" style="display:none">
+            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+            <div class="copyrow">
+              <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+              <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('pubRtmpUrl')">copiar</button>
+            </div>
           </div>
         </div>
         <!-- Grabador de clips -->
@@ -502,9 +648,11 @@ const PANEL_HTML = /* html */ `<!doctype html>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
     <div class="sidebar-inner">
-      <div id="list"></div>
-      <details class="add">
-        <summary>+ Añadir destino</summary>
+      <div id="platformList"></div>
+      <div id="customList"></div>
+
+      <details class="add" id="addDestDetails">
+        <summary>+ Añadir destino personalizado</summary>
         <div class="add-card">
           <div class="field"><label>Nombre</label><input type="text" id="newName" placeholder="MiPlataforma"></div>
           <div class="row">
@@ -522,6 +670,19 @@ const PANEL_HTML = /* html */ `<!doctype html>
     <div class="prefs-head">
       <h2>Preferencias</h2>
       <button class="prefs-close" onclick="closePrefs()">✕</button>
+    </div>
+    <div class="prefs-section" id="sysSection" style="display:none">
+      <h3>Sistema</h3>
+      <div class="pref-row">
+        <div>
+          <div>Iniciar con el sistema</div>
+          <div class="pref-desc">Abre Muxlyve al iniciar sesión</div>
+        </div>
+        <label class="sys-toggle">
+          <input type="checkbox" id="loginItemChk" onchange="toggleLoginItem(this.checked)">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
     </div>
     <div class="prefs-section">
       <h3>Grabador de clips</h3>
@@ -543,6 +704,34 @@ const PANEL_HTML = /* html */ `<!doctype html>
         </div>
       </div>
     </div>
+    <div class="prefs-section" id="reportSection" style="display:none">
+      <h3>Soporte</h3>
+      <div class="pref-row">
+        <div>
+          <div>Reportar un problema</div>
+          <div class="pref-desc">Envía un log de la app junto con tu descripción</div>
+        </div>
+        <button onclick="openReport()">Reportar</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="prefs-overlay" id="reportOverlay" onclick="if(event.target===this)closeReport()">
+  <div class="prefs-modal lic-modal">
+    <div class="prefs-head">
+      <h2>Reportar un problema</h2>
+      <button class="prefs-close" onclick="closeReport()">✕</button>
+    </div>
+    <div class="field">
+      <label>¿Qué pasó?</label>
+      <textarea id="reportDesc" rows="4" placeholder="Describe brevemente el problema…"
+        style="width:100%;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></textarea>
+    </div>
+    <div class="pref-desc" style="margin:.6rem 0 .8rem">
+      Se adjuntan automáticamente los últimos logs, tu versión y sistema operativo — no incluye claves ni contraseñas.
+    </div>
+    <button id="reportSendBtn" onclick="sendReport()" style="width:100%">Enviar reporte</button>
   </div>
 </div>
 <div class="prefs-overlay" id="licOverlay" onclick="if(event.target===this)closeLic()">
@@ -590,7 +779,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-logo">Muxlyve</div>
     <div class="about-version" id="aboutVersion">v0.0.0</div>
     <div class="about-divider"></div>
-    <div class="about-dev">Desarrollado por <strong>NABA-OL</strong></div>
+    <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
     <div class="about-copy" id="aboutCopy">© 2026 NABA-OL. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
     <a class="about-link" href="https://github.com/NABA-OL/Muxlyve" target="_blank">github.com/NABA-OL/Muxlyve ↗</a>
     <div class="about-btn-row">
@@ -601,8 +790,32 @@ const PANEL_HTML = /* html */ `<!doctype html>
 <div id="msg"></div>
 <script src="/flv.min.js"></script>
 <script>
+  window.onerror = (msg, src, line, col, err) => {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f85149;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
+    d.textContent = '[ERROR] ' + msg + ' (' + (src || '') + ':' + line + ':' + col + ')';
+    document.body?.appendChild(d);
+  };
+  window.onunhandledrejection = (e) => {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:40px;left:0;right:0;z-index:9999;background:#d29922;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
+    d.textContent = '[PROMISE] ' + (e.reason?.message || e.reason || 'rejected');
+    document.body?.appendChild(d);
+  };
   const $ = (s) => document.querySelector(s);
-  const list = $('#list');
+  const PLATFORM_IDS = ['twitch', 'youtube', 'kick', 'tiktok'];
+  const AUTH_PLATFORMS = [
+    { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
+    { id: 'youtube', name: 'YouTube', color: '#ff0000' },
+    { id: 'kick',    name: 'Kick',    color: '#53fc18', soon: true },
+    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
+  ];
+  let lastState = null;
+  let lastAuthStatus = {};
+  // El refresh automático (cada 2s) reconstruye los bloques de plataforma desde cero —
+  // sin esto, borraría el formulario "+ Añadir servidor RTMP" abierto y lo que llevas escrito.
+  const pbAddOpen = {};
+  const pbAddDraft = {};
   let msgTimer;
   let flvUrl = '';
   let player = null;
@@ -631,6 +844,38 @@ const PANEL_HTML = /* html */ `<!doctype html>
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     const p = (n) => String(n).padStart(2, '0');
     return (h ? p(h) + ':' : '') + p(m) + ':' + p(sec);
+  }
+
+  // Ícono de ojo (SVG, no emoji) para togglear campos ocultos. abierto=mostrar, cerrado=ocultar.
+  function eyeSvg(open) {
+    return open
+      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+  }
+
+  // Ícono SVG (no emoji) por plataforma, con el color de marca de fondo. Devuelve '' si no matchea.
+  const PLATFORM_ICON_GLYPHS = {
+    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
+    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
+    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
+    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
+  };
+  const PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
+  function platformIconSvg(id, size) {
+    const glyph = PLATFORM_ICON_GLYPHS[id];
+    if (!glyph) return '';
+    const s = size || 18;
+    return '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:6px">' +
+      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
+  }
+  // Empareja el nombre de un destino personalizado con una plataforma conocida (substring, sin distinguir mayúsculas).
+  function matchPlatformId(name) {
+    const n = (name || '').toLowerCase();
+    if (n.includes('twitch')) return 'twitch';
+    if (n.includes('youtube') || /(^|[^a-z])yt([^a-z]|$)/.test(n)) return 'youtube';
+    if (n.includes('kick')) return 'kick';
+    if (n.includes('tiktok')) return 'tiktok';
+    return null;
   }
 
   // Devuelve { cls, text } para la píldora de estado de un destino.
@@ -686,28 +931,185 @@ const PANEL_HTML = /* html */ `<!doctype html>
     }
   }
 
+  // ── Ingest: stats de video + VU meter de audio ──
+  // SSE setea los objetivos; un loop de suavizado (ataque rápido / caída lenta) anima las barras.
+  const vu = { tL: 0, tR: 0, dL: 0, dR: 0, live: false };
+  function applyVu(el, v) {
+    el.style.width = v + '%';
+  }
+  (function vuLoop() {
+    const ease = (d, t) => d + (t - d) * (t > d ? 0.7 : 0.12); // sube rápido, baja suave
+    vu.dL = ease(vu.dL, vu.live ? vu.tL : 0);
+    vu.dR = ease(vu.dR, vu.live ? vu.tR : 0);
+    applyVu($('#vuL'), Math.round(vu.dL));
+    applyVu($('#vuR'), Math.round(vu.dR));
+    requestAnimationFrame(vuLoop);
+  })();
+
+  (function initAudioSSE() {
+    if (typeof EventSource === 'undefined') return;
+    const es = new EventSource('/api/audio');
+    es.onmessage = (e) => {
+      try { const l = JSON.parse(e.data); vu.tL = l.l; vu.tR = l.r; } catch {}
+    };
+    // EventSource reconecta solo ante error; nada más que hacer.
+  })();
+
+  function updateIngest(state) {
+    vu.live = !!state.live;
+    const bar = $('#ingestBar');
+    if (!state.live || !state.ingest) {
+      bar.style.display = 'none';
+      vu.tL = vu.tR = 0;
+      return;
+    }
+    bar.style.display = '';
+    const ing = state.ingest;
+    const parts = [];
+    if (ing.width && ing.height) parts.push(ing.width + '×' + ing.height);
+    if (ing.fps != null) parts.push(ing.fps + ' fps');
+    $('#ingestVideo').textContent = 'Entrada: ' + (parts.join(' · ') || '—');
+  }
+
   function render(state) {
+    lastState = state;
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     updatePreview(state.live);
     updateRecorder(state);
-    list.innerHTML = '';
-    for (const d of state.destinations) {
+    updateIngest(state);
+    renderPlatforms();
+    renderCustom(state);
+  }
+
+  function renderPlatforms() {
+    if (!lastState) return;
+    const state = lastState;
+    const authSt = lastAuthStatus;
+    const pl = $('#platformList');
+    pl.innerHTML = '';
+    for (const p of AUTH_PLATFORMS) {
+      const rtmpDest = state.destinations.find(d => d.name.toLowerCase() === p.id) || null;
+      const authS = authSt[p.id] || {};
+      const storedOpen = localStorage.getItem('ms_pb_' + p.id);
+      const isOpen = storedOpen === null ? true : storedOpen !== '0';
+      const block = document.createElement('div');
+      block.className = 'pb-block' + (isOpen ? ' open' : '');
+      block.id = 'pb-' + p.id;
+
+      // OAuth header part
+      let oauthHtml = '';
+      if (p.soon) {
+        oauthHtml = '<span class="pb-soon-tag">OAuth próx.</span>';
+      } else if (authS.connected) {
+        const user = authS.username || 'conectado';
+        oauthHtml = '<span class="pb-user" title="' + user + '">' + user + '</span>' +
+          '<button class="auth-disc" data-id="' + p.id + '" onclick="disconnectPlatform(this.dataset.id)">&#10005;</button>';
+      } else {
+        oauthHtml = '<button class="auth-conn" data-id="' + p.id + '" onclick="connectPlatform(this.dataset.id)">Conectar</button>';
+      }
+
+      // RTMP body
+      let bodyHtml = '';
+      if (rtmpDest) {
+        const d = rtmpDest;
+        const isTikTok = p.id === 'tiktok';
+        const pill = pillFor(d);
+        const metrics = metricsFor(d);
+        bodyHtml += '<div class="pb-rtmp">';
+        bodyHtml += '<div class="card-head"><span class="pill ' + pill.cls + '">' + pill.text + '</span>';
+        if (metrics) bodyHtml += '<span class="metrics">' + metrics + '</span>';
+        bodyHtml += '</div>';
+        bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal' : '') + '</label>';
+        bodyHtml += '<div class="eyerow"><input type="password" class="pb-url" value="" autocomplete="off">';
+        bodyHtml += '<button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">' + eyeSvg(false) + '</button></div></div>';
+        bodyHtml += '<div class="row"><label class="switch">';
+        bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + d.name + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
+        bodyHtml += '<span class="thumb"></span></label>';
+        bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
+        if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
+        bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
+        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>';
+        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
+        bodyHtml += '</div>';
+      } else {
+        const isTikTok = p.id === 'tiktok';
+        if (p.id === 'youtube' && authS.connected) {
+          bodyHtml += '<p class="auto-note">&#8505; Conectado como ' + (authS.username || 'tu cuenta') +
+            ' — no se pudo traer tu clave automáticamente (¿configuraste "Ir en vivo" en ' +
+            'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
+        }
+        if (isTikTok) {
+          bodyHtml += '<p class="auto-note">&#8505; TikTok no tiene login — consigue tu URL y clave así: ' +
+            'abre la app de TikTok &#8594; toca + &#8594; LIVE &#8594; icono de ajustes antes de salir ' +
+            'en vivo &#8594; "Transmitir desde PC/consola". Copia el Server URL y la Stream Key que te ' +
+            'muestre y pégalos abajo. Esa clave expira en unas horas — genérala justo antes de transmitir.</p>';
+        }
+        const openStyle = pbAddOpen[p.id] ? ' style="display:none"' : '';
+        const formStyle = pbAddOpen[p.id] ? '' : ' style="display:none"';
+        bodyHtml += '<button class="pb-add-rtmp-btn" data-pid="' + p.id + '" onclick="showAddPlatformRtmp(this.dataset.pid)"' + openStyle + '>+ Añadir servidor RTMP</button>';
+        bodyHtml += '<div class="pb-add-rtmp-form" id="pb-add-form-' + p.id + '"' + formStyle + '>';
+        bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal TikTok' : '') + '</label>';
+        bodyHtml += '<input type="text" id="pb-new-url-' + p.id + '" placeholder="rtmp://servidor/app/CLAVE" oninput="onPbDraftInput(this)"></div>';
+        bodyHtml += '<div class="row" style="margin-top:.5rem">';
+        bodyHtml += '<button class="save" data-pid="' + p.id + '" onclick="addPlatformRtmp(this.dataset.pid)">Añadir</button>';
+        bodyHtml += '<button class="del" data-pid="' + p.id + '" onclick="cancelAddPlatformRtmp(this.dataset.pid)">Cancelar</button>';
+        bodyHtml += '</div></div>';
+      }
+
+      block.innerHTML =
+        '<div class="pb-head" data-pid="' + p.id + '" onclick="togglePlatformBlock(this.dataset.pid)">' +
+        '<i class="pb-chevron">&#9654;</i>' +
+        (platformIconSvg(p.id) || '<span class="p-dot" style="background:' + p.color + '"></span>') +
+        '<span class="pb-head-name">' + p.name + '</span>' +
+        oauthHtml +
+        '</div>' +
+        '<div class="pb-body">' + bodyHtml + '</div>';
+
+      if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
+      if (pbAddDraft[p.id]) {
+        const draftInput = block.querySelector('#pb-new-url-' + p.id);
+        if (draftInput) draftInput.value = pbAddDraft[p.id];
+      }
+      pl.appendChild(block);
+    }
+  }
+
+  // El input de "+ Añadir servidor RTMP" solo existe cuando rtmpDest es null (else branch),
+  // así que su id siempre trae el pid — se guarda para sobrevivir el refresh cada 2s.
+  function onPbDraftInput(input) {
+    const pid = input.id.replace('pb-new-url-', '');
+    pbAddDraft[pid] = input.value;
+  }
+
+  function renderCustom(state) {
+    const cl = $('#customList');
+    const custom = state.destinations.filter(d => !PLATFORM_IDS.includes(d.name.toLowerCase()));
+    cl.innerHTML = '';
+    if (custom.length === 0) return;
+    cl.appendChild(Object.assign(document.createElement('div'), { className: 'custom-sep' }));
+    for (const d of custom) {
       const isTikTok = /tiktok/i.test(d.name);
       const pill = pillFor(d);
       const metrics = metricsFor(d);
+      const matchedId = matchPlatformId(d.name);
+      const icon = matchedId ? platformIconSvg(matchedId, 16) : '';
       const card = document.createElement('div');
       card.className = 'card' + (isTikTok ? ' tiktok' : '');
       card.innerHTML = \`
         <div class="card-head">
+          \${icon}
           <span class="name"></span>
           <span class="pill \${pill.cls}"></span>
           <span class="metrics"></span>
         </div>
         <div class="field">
-          <label>URL RTMP\${isTikTok ? ' — pega aquí la clave temporal de TikTok' : ''}</label>
-          <input type="text" class="url" value="">
+          <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal de TikTok' : ''}</label>
+          <div class="eyerow">
+            <input type="password" class="url" value="" autocomplete="off">
+            <button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">\${eyeSvg(false)}</button>
+          </div>
         </div>
         <div class="row">
           <label class="switch" title="\${d.enabled ? 'Desactivar' : 'Activar'}">
@@ -718,7 +1120,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
-        \${d.enabled && !state.live ? '<p class="auto-note">▶ Arrancará cuando OBS empiece a transmitir.</p>' : ''}
+        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>' : ''}
         \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;
@@ -726,15 +1128,67 @@ const PANEL_HTML = /* html */ `<!doctype html>
       card.querySelector('.metrics').textContent = metrics;
       const urlInput = card.querySelector('.url');
       urlInput.value = d.url;
-      if (d.note) card.querySelector('.note').textContent = '⚠ ' + d.note;
-
+      if (d.note) card.querySelector('.note').textContent = '&#9651; ' + d.note;
       card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked);
       card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled);
       card.querySelector('.del').onclick = () => del(d.name);
       const retryBtn = card.querySelector('.retry');
       if (retryBtn) retryBtn.onclick = () => doRetry(d.name);
-      list.appendChild(card);
+      cl.appendChild(card);
     }
+  }
+
+  function togglePlatformBlock(pid) {
+    const block = $('#pb-' + pid);
+    if (!block) return;
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
+  }
+
+  function showAddPlatformRtmp(pid) {
+    pbAddOpen[pid] = true;
+    const form = $('#pb-add-form-' + pid);
+    if (!form) return;
+    form.previousElementSibling.style.display = 'none';
+    form.style.display = '';
+  }
+
+  function cancelAddPlatformRtmp(pid) {
+    pbAddOpen[pid] = false;
+    delete pbAddDraft[pid];
+    const form = $('#pb-add-form-' + pid);
+    if (!form) return;
+    form.style.display = 'none';
+    form.previousElementSibling.style.display = '';
+    const inp = $('#pb-new-url-' + pid);
+    if (inp) inp.value = '';
+  }
+
+  async function addPlatformRtmp(pid) {
+    const inp = $('#pb-new-url-' + pid);
+    const url = inp ? inp.value.trim() : '';
+    if (!url) { toast('Pon una URL', true); return; }
+    const name = (AUTH_PLATFORMS.find(p => p.id === pid) || {}).name || pid;
+    try {
+      pbAddOpen[pid] = false;
+      delete pbAddDraft[pid];
+      render(await api('POST', '/api/destinations', { name, url, enabled: false }));
+      toast(name + ' RTMP añadido');
+    } catch (e) { toast(e.message, true); }
+  }
+
+  function savePbRtmp(btn) {
+    const name = btn.dataset.name;
+    const card = btn.closest('.pb-rtmp');
+    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked);
+  }
+
+  function delPbRtmp(btn) { del(btn.dataset.name); }
+  function retryPbRtmp(btn) { doRetry(btn.dataset.name); }
+
+  function togglePbRtmp(cb) {
+    const card = cb.closest('.pb-rtmp');
+    save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked);
   }
 
   async function doRetry(name) {
@@ -764,13 +1218,42 @@ const PANEL_HTML = /* html */ `<!doctype html>
   }
   async function refresh() {
     if (document.activeElement?.classList.contains('url')) return;
-    try { render(await api('GET', '/api/state')); } catch {}
+    try { render(await api('GET', '/api/state')); } catch (e) { console.error('[refresh]', e); }
   }
 
   function copy(id) {
-    const text = $('#' + id).textContent;
+    const el = $('#' + id);
+    const text = el.dataset.real || el.textContent;
     if (!text || text === '—') return;
     navigator.clipboard.writeText(text).then(() => toast('Copiado'), () => toast('No se pudo copiar', true));
+  }
+
+  let pubIpVisible = false;
+  async function togglePubIp() {
+    const el = $('#pubRtmpUrl');
+    const btn = $('#pubEyeBtn');
+    pubIpVisible = !pubIpVisible;
+    if (pubIpVisible) {
+      if (!el.dataset.real) {
+        try {
+          const { ip } = await api('GET', '/api/public-ip');
+          if (ip && window._rtmpPort) el.dataset.real = 'rtmp://' + ip + ':' + window._rtmpPort + '/live';
+        } catch {}
+      }
+      el.textContent = el.dataset.real || 'No disponible';
+    } else {
+      el.textContent = 'rtmp://' + '•'.repeat(12) + '/live';
+    }
+    if (btn) btn.innerHTML = eyeSvg(pubIpVisible);
+  }
+
+  // Alterna type=password/text de cualquier <input> junto a un botón .eye-btn dentro de .eyerow.
+  function toggleFieldEye(btn) {
+    const input = btn.previousElementSibling;
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.innerHTML = eyeSvg(show);
   }
 
   // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
@@ -798,6 +1281,14 @@ const PANEL_HTML = /* html */ `<!doctype html>
       flvUrl = c.flvUrl || '';
       $('#rtmpUrl').textContent = c.rtmpUrl || '—';
       $('#streamKey').textContent = c.streamKey || '—';
+      if (c.lanRtmpUrl) {
+        $('#lanRtmpUrl').textContent = c.lanRtmpUrl;
+        $('#lanField').style.display = '';
+      }
+      if (c.rtmpPort) {
+        window._rtmpPort = c.rtmpPort;
+        $('#pubField').style.display = '';
+      }
       if (c.version) window._appVersion = c.version;
     } catch {}
   }
@@ -920,8 +1411,45 @@ const PANEL_HTML = /* html */ `<!doctype html>
     })();
   }
 
-  function openPrefs() { $('#prefsOverlay').classList.add('open'); }
+  async function openPrefs() {
+    $('#prefsOverlay').classList.add('open');
+    if (window.msApp) {
+      $('#sysSection').style.display = '';
+      $('#reportSection').style.display = '';
+      try {
+        $('#loginItemChk').checked = await window.msApp.getLoginItem();
+      } catch {}
+    }
+  }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
+  async function toggleLoginItem(val) {
+    if (window.msApp) { try { await window.msApp.setLoginItem(val); } catch {} }
+  }
+
+  function openReport() { $('#reportOverlay').classList.add('open'); }
+  function closeReport() { $('#reportOverlay').classList.remove('open'); }
+
+  async function sendReport() {
+    if (!window.msApp) return;
+    const btn = $('#reportSendBtn');
+    const desc = $('#reportDesc').value.trim();
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+    try {
+      const r = await window.msApp.sendReport(desc);
+      if (r.ok) {
+        toast('✓ Reporte enviado — gracias');
+        $('#reportDesc').value = '';
+        closeReport();
+      } else {
+        toast(r.error || 'No se pudo enviar el reporte', true);
+      }
+    } catch (e) {
+      toast(e.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Enviar reporte';
+  }
 
   async function openLic() {
     $('#licOverlay').classList.add('open');
@@ -977,7 +1505,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
     await window.msLicense?.release();
   }
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); closeReport(); } });
 
   function toggleSidebar() {
     const sidebar = $('#sidebarCol');
@@ -991,8 +1519,42 @@ const PANEL_HTML = /* html */ `<!doctype html>
     $('#sidebarToggle').classList.remove('panel-open');
   }
 
+  // ── Cuentas OAuth (solo Electron) ──
+  async function loadAuthStatus() {
+    if (!window.msOAuth) return;
+    try {
+      lastAuthStatus = await window.msOAuth.status();
+      renderPlatforms();
+    } catch {}
+  }
+
+  async function connectPlatform(platform) {
+    const btn = $('#pb-' + platform + ' .auth-conn');
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    try {
+      const r = await window.msOAuth.connect(platform);
+      if (r.ok) {
+        const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
+        toast('✓ ' + label + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
+        // Trae la clave de stream lista (p.ej. Twitch) — evita que el usuario tenga que
+        // ir a buscarla y pegarla a mano tras conectar.
+        if (r.rtmpUrl) {
+          try { render(await api('POST', '/api/destinations', { name: label, url: r.rtmpUrl, enabled: false })); }
+          catch { /* el destino se puede añadir a mano si esto falla */ }
+        }
+      } else { toast(r.error || 'Error al conectar', true); }
+    } catch (e) { toast(e.message, true); }
+    loadAuthStatus();
+  }
+
+  async function disconnectPlatform(platform) {
+    try { await window.msOAuth.disconnect(platform); } catch {}
+    loadAuthStatus();
+  }
+
   loadConfig();
   refresh();
+  loadAuthStatus();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
 </script>
 </body>

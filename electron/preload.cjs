@@ -1,3 +1,4 @@
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 // Preload CJS: puente seguro entre el renderer (activate.html) y el main process.
 // contextIsolation=true + nodeIntegration=false → solo lo expuesto aquí llega al renderer.
 'use strict';
@@ -7,4 +8,14 @@ contextBridge.exposeInMainWorld('msLicense', {
   release:   ()    => ipcRenderer.invoke('license:release'),
   getInfo:   ()    => ipcRenderer.invoke('license:info'),
   getStatus: ()    => ipcRenderer.invoke('license:status'),
+});
+contextBridge.exposeInMainWorld('msOAuth', {
+  connect:    (platform) => ipcRenderer.invoke('oauth:connect', platform),
+  status:     ()         => ipcRenderer.invoke('oauth:status'),
+  disconnect: (platform) => ipcRenderer.invoke('oauth:disconnect', platform),
+});
+contextBridge.exposeInMainWorld('msApp', {
+  getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),
+  setLoginItem: (val) => ipcRenderer.invoke('app:set-login-item', val),
+  sendReport: (description) => ipcRenderer.invoke('report:send', description),
 });

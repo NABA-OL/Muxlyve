@@ -1,22 +1,23 @@
 {
   "name": "muxlyve",
-  "version": "0.2.5",
+  "version": "0.2.9",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
-  "author": "NABA-OL <nabaol.dev@gmail.com>",
+  "author": "BLACKRAKEN SOLUTIONS <nabaol.dev@gmail.com>",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
     "validate": "node scripts/validate.mjs",
+    "validate:panel": "node scripts/validate-panel-script.mjs",
     "test": "bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
-    "predist": "node scripts/make-installer-bitmaps.mjs",
-    "dist": "electron-builder --win",
-    "predist:publish": "node scripts/make-installer-bitmaps.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
+    "predist": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs",
+    "dist": "node -r dotenv/config node_modules/electron-builder/cli.js --win",
+    "predist:publish": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
     "dist:publish": "node -r dotenv/config node_modules/electron-builder/cli.js --publish always",
     "postdist:publish": "node -r dotenv/config scripts/cleanup-orphan-releases.mjs",
-    "dist:mac": "node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
+    "dist:mac": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
   },
   "keywords": [
     "rtmp",
@@ -46,6 +47,14 @@
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**"
+    ],
+    "protocols": [
+      {
+        "name": "Muxlyve OAuth",
+        "schemes": [
+          "muxlyve"
+        ]
+      }
     ],
     "win": {
       "target": "nsis",
@@ -90,7 +99,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "NABA-OL",
+      "owner": "BLACKRAKEN SOLUTIONS",
       "repo": "Muxlyve",
       "releaseType": "release"
     }

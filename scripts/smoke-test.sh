@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Desarrollado por BlacKraken Solutions (NABA-OL)
 # Test de humo end-to-end: ingest -> relay -> sink RTMP local.
 # SEGURO: respalda config/destinations.json y lo restaura SIEMPRE al salir
 # (trap EXIT), pase lo que pase. Nunca lo sobrescribe con la plantilla.

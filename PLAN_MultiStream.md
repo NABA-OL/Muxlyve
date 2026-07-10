@@ -180,9 +180,10 @@ Observadas en Restream como referencia. Ordenadas por **valor / esfuerzo** — i
 - `electron/activate.html` + `electron/preload.cjs`: pantalla de activación antes de abrir el panel.
 - Bypass dev: `!app.isPackaged` (siempre) o `MS_DEV_UNLOCK=1` (var de entorno).
 
-### Fase C — Actualizaciones automáticas + firma de código 🔲 PENDIENTE
-- `electron-updater` + servidor de releases (GitHub Releases o Vercel).
-- Certificado de firma de código EV (Windows): elimina el aviso "SmartScreen desconoce este editor".
+### Fase C — Actualizaciones automáticas ✅ HECHO / firma de código 🔲 PENDIENTE
+- ✅ `electron-updater` + GitHub Releases (`electron/updater.js`): chequeo al arrancar, descarga en background, reinicia para aplicar.
+- ✅ Publicación reproducible: `predist:publish` crea draft ancla (evita drafts duplicados en publish Mac+Windows), `postdist:publish` publica el release y borra drafts huérfanos. `releaseType: release` para que el updater lo detecte.
+- 🔲 Certificado de firma de código EV (Windows): elimina el aviso "SmartScreen desconoce este editor".
 - Sin firma: el `.exe` funciona pero Windows muestra alerta en primera ejecución.
 
 ### Fase D — macOS 🔲 PENDIENTE (futuro)
@@ -217,6 +218,58 @@ Observadas en Restream como referencia. Ordenadas por **valor / esfuerzo** — i
 - O simplemente activar la app con una licencia real propia (elimina necesidad del bypass).
 
 **Alternativa más simple:** activar con tu propia clave de licencia real y eliminar el bypass completamente del código de producción.
+
+---
+
+## 10. Roadmap de funcionalidades nuevas (Grupos A–E)
+
+Plan de features post-0.2.x. Ordenado por **costo real** y **dependencias**, anclado a la restricción central: el relay usa `ffmpeg -c copy` (cero transcode = cero CPU = la razón de ser de la app). Todo corre local.
+
+### Grupo A — Métricas y audio 🟢 EN CURSO (no rompe `-c copy`)
+
+Decodifica solo audio en un proceso aparte; los relays siguen intactos.
+
+- **A1. fps/bitrate enviados por plataforma** — ✅ ya existía (parseado del stderr de cada relay). Falta UI más rica (histórico/mini-gráfica).
+- **A2. resolución + fps recibidos (ingest)** — ✅ HECHO. Un proceso monitor lee el ingest local y parsea el banner de entrada (`1280×720 · 30 fps`). En `/api/state`.
+- **A3. medidor de nivel de audio (VU meter L/R)** — ✅ HECHO. El mismo monitor decodifica audio a PCM 8 kHz estéreo (`-vn -f s16le -flush_packets 1`), calcula el pico por canal en Node y lo empuja por **SSE** (`/api/audio`, ~16 Hz). Barra estéreo en el panel con easing ataque-rápido/caída-lenta.
+
+**Arquitectura A** (implementada):
+- `src/ffmpeg.js` — resolución del binario FFmpeg (extraída para romper ciclo relays↔monitor).
+- `src/monitor.js` — proceso monitor + parsers, con self-check (`node src/monitor.js --selftest`).
+- `src/relays.js` — `startMonitor`/`stopMonitor` enganchados a `onPublish`/`onUnpublish`.
+- `src/panel.js` — `ingest` en `/api/state`, endpoint SSE `/api/audio`, UI del VU meter.
+
+**Decisiones depuradas contra ffmpeg real:**
+- `bitrate`/`fps` del muxer `null` son inútiles (N/A y velocidad de proceso) → resolución+fps salen del **banner de entrada**.
+- `ametadata=print` queda **block-buffered** en pipe (0 bytes en 3 s) → descartado. **PCM crudo + `-flush_packets 1`** sí fluye en vivo y da control total del cálculo, cross-platform (sin `/dev/stderr`).
+
+### Grupo B — Autenticación de plataformas 🔲 (FUNDACIÓN)
+
+OAuth local por plataforma. Tokens cifrados reutilizando AES-256-GCM + `safeStorage` (ya existentes). **Desbloquea C y D.** Sin esto no hay conteo de espectadores ni chat-de-escritura.
+- Twitch: OAuth Helix · YouTube: OAuth Google (Data API) · Kick: API no oficial / OAuth nuevo · TikTok: lo más cerrado.
+- Los tokens nunca salen de la máquina.
+
+### Grupo C — Espectadores 🔲 (depende de B)
+
+Conteo por plataforma vía sus APIs (polling ~30–60 s) → suma = total general. UI: número por plataforma + total en el header.
+
+### Grupo D — Chat unificado 🔲 (escribir depende de B)
+
+- **Leer**: Twitch IRC (anónimo, sin auth) · YouTube liveChat (polling, cuota) · Kick (websocket no oficial) · TikTok (no oficial).
+- **Escribir**: requiere B.
+- UI: feed único, color/ícono por plataforma para identificar origen.
+- Lectura de Twitch prototipa-ble YA sin auth.
+
+### Grupo E — Video vertical 🔲 (CARO, decisión arquitectónica aparte)
+
+**Rompe `-c copy`** (cambiar aspecto/resolución obliga a re-encodear = CPU alto). Tres caminos:
+1. **OBS en lienzo vertical** → todos los destinos 9:16, cero costo extra, pierdes horizontal simultáneo. *(lo más común hoy)*
+2. **Transcode por destino** → mezcla horizontal/vertical, CPU alto, contradice el diseño.
+3. **Perfil de salida opt-in por destino** → `-c copy` por defecto; solo el destino marcado "vertical" transcodifica. Híbrido razonable.
+- Dejar de último. Antes de tocar código: investigar specs actuales por plataforma (TikTok / YT Shorts) y medir CPU del transcode.
+
+### Orden recomendado
+**A → B → C + D → E** (E como decisión separada).
 
 ---
 

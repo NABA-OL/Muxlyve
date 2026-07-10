@@ -1,4 +1,5 @@
 #!/bin/bash
+# Desarrollado por BlacKraken Solutions (NABA-OL)
 # Genera build/icon.icns desde src/public/icon-muxlyve.svg usando sips + iconutil (macOS built-in).
 set -e
 

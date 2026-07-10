@@ -1,3 +1,4 @@
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 // Valida config/destinations.json sin exponer las claves.
 // Uso: npm run validate
 import { loadAll, isValidUrl } from '../src/destinations.js';

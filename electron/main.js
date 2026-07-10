@@ -1,3 +1,4 @@
+// Desarrollado por BlacKraken Solutions (NABA-OL)
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
@@ -10,7 +11,12 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus } from './oauth.js';
 import { initUpdater } from './updater.js';
+import { initLogBuffer, getRecentLog } from './logbuffer.js';
+
+// Antes que nada — captura logs desde el arranque (la app empaquetada no muestra consola).
+initLogBuffer();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
@@ -146,8 +152,57 @@ ipcMain.handle('license:release', async () => {
 ipcMain.handle('license:info', () => getLicenseInfo());
 ipcMain.handle('license:status', () => refreshLicenseStatus());
 
+ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
+ipcMain.handle('oauth:status', () => oauthStatus());
+ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
+
+ipcMain.handle('app:get-login-item', () => app.getLoginItemSettings().openAtLogin);
+ipcMain.handle('app:set-login-item', (_, val) => {
+  app.setLoginItemSettings({ openAtLogin: !!val });
+  return app.getLoginItemSettings().openAtLogin;
+});
+
+ipcMain.handle('report:send', async (_, description) => {
+  try {
+    const license = getLicenseInfo();
+    const body = JSON.stringify({
+      email: license?.email || '',
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      // process.getSystemVersion() da la versión real del SO (ej. macOS 15.1) — os.release()
+      // solo da la versión del kernel Darwin, que no es lo que un humano reconoce.
+      osVersion: `${process.platform === 'darwin' ? 'macOS' : 'Windows'} ${process.getSystemVersion()}`,
+      description: description || '',
+      log: getRecentLog(),
+    });
+    const res = await fetch('https://muxlyve.com/api/support/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ── App lifecycle ─────────────────────────────────────────────────────────────
+// Registra muxlyve:// como protocolo de la app (necesario para OAuth redirect en producción).
+app.setAsDefaultProtocolClient('muxlyve');
+
 app.whenReady().then(async () => {
+  // Carga .env desde userData sin dependencias externas.
+  const userEnv = path.join(app.getPath('userData'), '.env');
+  if (existsSync(userEnv)) {
+    const { readFileSync } = await import('node:fs');
+    for (const line of readFileSync(userEnv, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+
   const license = await checkLicense({ isPackaged: app.isPackaged });
   console.log(`[electron] licencia: ${license.unlocked ? 'OK' : 'BLOQUEADA'} (${license.reason})`);
 
@@ -201,6 +256,11 @@ app.whenReady().then(async () => {
     await waitForPanel();
   } catch (err) {
     console.error('[electron] panel no respondió:', err.message);
+  }
+  // Señal al splash: completa animación a 100%, luego fade.
+  if (splash) {
+    splash.webContents.executeJavaScript('window.finishLoad && window.finishLoad()').catch(() => {});
+    await new Promise(r => setTimeout(r, 1050)); // 500ms barra + 300ms hold + margen
   }
   closeSplash();
   createWindow();

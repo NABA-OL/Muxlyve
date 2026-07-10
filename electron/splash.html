@@ -1,3 +1,4 @@
+<!-- Desarrollado por BlacKraken Solutions (NABA-OL) -->
 <!doctype html>
 <html lang="es">
 <head>
@@ -14,45 +15,53 @@
     overflow: hidden;
     -webkit-app-region: drag;
     user-select: none;
-    transition: opacity .28s ease;
+    transition: opacity .32s ease;
   }
   .container {
     display: flex; flex-direction: column;
     align-items: center;
   }
   .icon {
-    width: 68px; height: 68px;
-    margin-bottom: 16px;
-    animation: pulse 2.4s ease-in-out infinite;
+    width: 72px; height: 72px;
+    margin-bottom: 18px;
+    animation: pop-in .55s cubic-bezier(.22,1,.36,1) both;
   }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50%       { opacity: .7; transform: scale(.94); }
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(.7); }
+    to   { opacity: 1; transform: scale(1); }
   }
   .wordmark {
-    font-size: 1.25rem; font-weight: 700; letter-spacing: -.03em;
-    margin-bottom: 26px;
+    font-size: 1.3rem; font-weight: 700; letter-spacing: -.03em;
+    margin-bottom: 28px;
+    animation: fade-in .5s .2s ease both;
+  }
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
   .accent { color: #7c5cff; }
   .track {
-    width: 148px; height: 2px;
-    background: #2a3140; border-radius: 1px;
-    overflow: hidden; margin-bottom: 12px;
+    width: 160px; height: 2px;
+    background: #1e2635; border-radius: 1px;
+    overflow: hidden; margin-bottom: 14px;
+    animation: fade-in .4s .35s ease both;
   }
   .bar {
     height: 100%; width: 0;
     background: linear-gradient(90deg, #7c5cff, #4da3ff);
     border-radius: 1px;
-    animation: load 2.6s cubic-bezier(.4,0,.2,1) forwards;
+    animation: load-init 2s cubic-bezier(.4,0,.2,1) forwards;
   }
-  @keyframes load {
+  @keyframes load-init {
     0%   { width: 0%; }
-    30%  { width: 45%; }
-    65%  { width: 72%; }
-    100% { width: 92%; }
+    35%  { width: 32%; }
+    70%  { width: 47%; }
+    100% { width: 57%; }
   }
   .status {
-    font-size: .7rem; color: #8b949e; letter-spacing: .04em;
+    font-size: .68rem; color: #8b949e; letter-spacing: .05em;
+    text-transform: uppercase;
+    animation: fade-in .4s .4s ease both;
   }
 </style>
 </head>
@@ -60,8 +69,28 @@
 <div class="container">
   <img src="../src/public/icon-muxlyve.svg" class="icon" alt="">
   <div class="wordmark">Muxly<span class="accent">ve</span></div>
-  <div class="track"><div class="bar"></div></div>
-  <div class="status">Iniciando…</div>
+  <div class="track"><div class="bar" id="bar"></div></div>
+  <div class="status" id="status">Iniciando motor…</div>
 </div>
+<script>
+window.finishLoad = function() {
+  var bar    = document.getElementById('bar');
+  var status = document.getElementById('status');
+  if (!bar) return;
+  // Freeze bar at current computed width, then transition to 100%
+  var w = getComputedStyle(bar).width;
+  bar.style.animation = 'none';
+  bar.style.width = w;
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      bar.style.transition = 'width .5s cubic-bezier(.22,1,.36,1)';
+      bar.style.width = '100%';
+    });
+  });
+  if (status) status.textContent = 'Listo';
+  // Fade body after bar completes + brief hold
+  setTimeout(function() { document.body.style.opacity = '0'; }, 650);
+};
+</script>
 </body>
 </html>
