@@ -135,6 +135,22 @@ function createTray() {
   });
 }
 
+// ── Ventana flotante de chat ────────────────────────────────────────────────────
+let chatWin = null;
+function openChatWindow() {
+  if (chatWin && !chatWin.isDestroyed()) { chatWin.show(); chatWin.focus(); return; }
+  chatWin = new BrowserWindow({
+    width: 360, height: 560, minWidth: 260, minHeight: 300,
+    title: 'Muxlyve — Chat',
+    backgroundColor: '#0d1117',
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  chatWin.loadURL(`${PANEL_URL}chat-window`);
+  chatWin.on('closed', () => { chatWin = null; });
+}
+
 // ── Activation window ─────────────────────────────────────────────────────────
 let activationWin = null;
 let activationResolve = null;
@@ -226,6 +242,7 @@ ipcMain.handle('updater:check', () => {
 });
 
 ipcMain.handle('app:is-packaged', () => app.isPackaged);
+ipcMain.handle('chat:open-window', () => { openChatWindow(); return true; });
 
 ipcMain.handle('app:get-close-to-tray', () => !!prefs.closeToTray);
 ipcMain.handle('app:set-close-to-tray', (_, val) => {

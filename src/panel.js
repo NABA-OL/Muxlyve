@@ -245,6 +245,10 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(PANEL_HTML);
       }
+      if (url.pathname === '/chat-window') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(CHAT_WINDOW_HTML);
+      }
       // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
       // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
       if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
@@ -476,6 +480,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
   .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
   .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
+  .chat-panel { display: flex; flex-direction: column; height: 100%; }
+  .chat-panel-head { display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0; margin-bottom: .1rem; }
+  .chat-panel-title { font-weight: 600; font-size: .95rem; }
+  .chat-popout-btn { background: var(--surface-2); color: var(--muted); border: none;
+    border-radius: 6px; width: 28px; height: 28px; flex-shrink: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .chat-popout-btn:hover { color: var(--text); }
+  .chat-box.chat-box-full { flex: 1; min-height: 0; max-height: none; }
   .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
     color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
@@ -619,10 +632,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
       </svg>
     </button>
-    <button class="sidebar-toggle-btn panel-open" id="sidebarToggle" onclick="toggleSidebar()" title="Mostrar/ocultar conexiones">
+    <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <rect x="1" y="1" width="14" height="14" rx="2.5"/>
         <line x1="10" y1="1.5" x2="10" y2="14.5"/>
+      </svg>
+    </button>
+    <button class="sidebar-toggle-btn panel-open" id="chatBtn" onclick="showSidebarTab('chat')" title="Chat">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 3h12v8H5l-3 3V3z"/>
       </svg>
     </button>
   </div>
@@ -676,7 +694,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   </div>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
-    <div class="sidebar-inner">
+    <div class="sidebar-inner" id="connPanel" style="display:none">
       <div id="platformList"></div>
       <div id="customList"></div>
 
@@ -690,16 +708,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           </div>
         </div>
       </details>
+    </div>
 
-      <div class="pb-block open" id="chatBlock">
-        <div class="pb-head" onclick="toggleChatBlock()">
-          <i class="pb-chevron">&#9654;</i>
-          <span class="pb-head-name">Chat en vivo</span>
-        </div>
-        <div class="pb-body">
-          <div id="chatMessages" class="chat-box"></div>
-        </div>
+    <div class="sidebar-inner chat-panel" id="chatPanel" style="display:none">
+      <div class="chat-panel-head">
+        <span class="chat-panel-title">Chat en vivo</span>
+        <button class="chat-popout-btn" onclick="openChatWindow()" title="Abrir en ventana aparte">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 2H2v12h12v-4"/>
+            <path d="M9 2h5v5"/>
+            <path d="M14 2 7 9"/>
+          </svg>
+        </button>
       </div>
+      <div id="chatMessages" class="chat-box chat-box-full"></div>
     </div>
   </aside>
 </main>
@@ -1606,16 +1628,28 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); closeReport(); } });
 
-  function toggleSidebar() {
-    const sidebar = $('#sidebarCol');
-    const btn = $('#sidebarToggle');
-    const nowCollapsed = sidebar.classList.toggle('collapsed');
-    btn.classList.toggle('panel-open', !nowCollapsed);
-    localStorage.setItem('ms_sidebar_collapsed', nowCollapsed ? '1' : '0');
+  // Pestañas del sidebar: Conexiones y Chat son mutuamente excluyentes. Click en la
+  // pestaña activa colapsa todo el sidebar (mismo gesto que el botón único de antes).
+  let activeSidebarTab = null;
+  function showSidebarTab(tab) {
+    const col = $('#sidebarCol');
+    const isOpen = !col.classList.contains('collapsed');
+    if (isOpen && activeSidebarTab === tab) {
+      col.classList.add('collapsed');
+      activeSidebarTab = null;
+    } else {
+      activeSidebarTab = tab;
+      col.classList.remove('collapsed');
+      $('#connPanel').style.display = tab === 'conn' ? '' : 'none';
+      $('#chatPanel').style.display = tab === 'chat' ? '' : 'none';
+    }
+    $('#connBtn').classList.toggle('panel-open', activeSidebarTab === 'conn');
+    $('#chatBtn').classList.toggle('panel-open', activeSidebarTab === 'chat');
   }
-  if (localStorage.getItem('ms_sidebar_collapsed') === '1') {
-    $('#sidebarCol').classList.add('collapsed');
-    $('#sidebarToggle').classList.remove('panel-open');
+
+  function openChatWindow() {
+    if (window.msApp && window.msApp.openChatWindow) window.msApp.openChatWindow();
+    else toast('Solo disponible en la app de escritorio', true);
   }
 
   // ── Cuentas OAuth (solo Electron) ──
@@ -1656,14 +1690,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   // ── Chat unificado (fase 1: Twitch) ──
-  function toggleChatBlock() {
-    const block = $('#chatBlock');
-    const isOpen = block.classList.toggle('open');
-    localStorage.setItem('ms_pb_chat', isOpen ? '1' : '0');
-  }
-  function initChatBlock() {
-    if (localStorage.getItem('ms_pb_chat') === '0') $('#chatBlock').classList.remove('open');
-  }
   function appendChatMessage(msg) {
     const box = $('#chatMessages');
     if (!box) return;
@@ -1705,9 +1731,54 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   loadConfig();
   refresh();
   loadAuthStatus();
-  initChatBlock();
+  showSidebarTab('chat'); // arranca siempre mostrando el chat
   connectChatStream();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
+</script>
+</body>
+</html>`;
+
+// Página independiente y minimalista para la ventana de chat "flotante" — separada de
+// PANEL_HTML a propósito para no meter otro backtick dentro de ese template gigante.
+const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Muxlyve — Chat</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #0d1117; color: #e6edf3;
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  #box { height: 100vh; overflow-y: auto; padding: .75rem; display: flex;
+    flex-direction: column; gap: .3rem; }
+  .row { font-size: .85rem; line-height: 1.4; overflow-wrap: break-word; }
+  .row strong { margin-right: .3rem; }
+  .empty { color: #8b949e; font-size: .8rem; }
+</style>
+</head>
+<body>
+<div id="box"><div class="empty">Esperando mensajes…</div></div>
+<script>
+  function append(msg) {
+    var box = document.getElementById('box');
+    var empty = box.querySelector('.empty');
+    if (empty) empty.remove();
+    var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    var row = document.createElement('div');
+    row.className = 'row';
+    var strong = document.createElement('strong');
+    strong.style.color = msg.color || '#9147ff';
+    strong.textContent = msg.username || '???';
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(msg.message || ''));
+    box.appendChild(row);
+    while (box.children.length > 300) box.removeChild(box.firstChild);
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  var es = new EventSource('/api/chat');
+  es.onmessage = function (e) {
+    try { append(JSON.parse(e.data)); } catch (err) {}
+  };
 </script>
 </body>
 </html>`;
