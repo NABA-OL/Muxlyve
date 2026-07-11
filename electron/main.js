@@ -225,6 +225,8 @@ ipcMain.handle('updater:check', () => {
   return { ok: true };
 });
 
+ipcMain.handle('app:is-packaged', () => app.isPackaged);
+
 ipcMain.handle('app:get-close-to-tray', () => !!prefs.closeToTray);
 ipcMain.handle('app:set-close-to-tray', (_, val) => {
   prefs.closeToTray = !!val;

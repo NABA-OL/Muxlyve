@@ -876,6 +876,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     { id: 'kick',    name: 'Kick',    color: '#53fc18', soon: true },
     { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
   ];
+  // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
+  // producción empaquetada (en dev sigue funcionando para poder seguir probando/iterando
+  // con Google). Cuando llegue la aprobación, cambiar esto a false y listo.
+  const YOUTUBE_OAUTH_PENDING = true;
   let lastState = null;
   let lastAuthStatus = {};
   // El refresh automático (cada 2s) reconstruye los bloques de plataforma desde cero —
@@ -1624,6 +1628,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   async function connectPlatform(platform) {
+    if (platform === 'youtube' && YOUTUBE_OAUTH_PENDING && window._isPackaged) {
+      toast('YouTube: esta funcionalidad estará disponible en una próxima versión (en espera de aprobación de Google).', true);
+      return;
+    }
     const btn = $('#pb-' + platform + ' .auth-conn');
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
@@ -1691,6 +1699,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       try { appendChatMessage(JSON.parse(e.data)); } catch {}
     };
   }
+
+  if (window.msApp) { window.msApp.isPackaged().then(v => { window._isPackaged = v; }).catch(() => {}); }
 
   loadConfig();
   refresh();

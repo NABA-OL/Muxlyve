@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('msApp', {
   setLoginItem: (openAtLogin, startMinimized) => ipcRenderer.invoke('app:set-login-item', openAtLogin, startMinimized),
   sendReport: (description) => ipcRenderer.invoke('report:send', description),
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
   getCloseToTray: () => ipcRenderer.invoke('app:get-close-to-tray'),
   setCloseToTray: (val) => ipcRenderer.invoke('app:set-close-to-tray', val),
 });
