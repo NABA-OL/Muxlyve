@@ -25,7 +25,13 @@
     "restream",
     "streaming",
     "ffmpeg",
-    "obs"
+    "obs",
+    "Streamlabs",
+    "XSplit",
+    "Twitch",
+    "Kick",
+    "YouTube",
+    "TikTok Live"
   ],
   "license": "MIT",
   "build": {

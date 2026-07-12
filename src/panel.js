@@ -176,7 +176,7 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
-    if (!isLive()) return json(res, 409, { error: 'OBS no está transmitiendo.' });
+    if (!isLive()) return json(res, 409, { error: 'No hay transmisión activa.' });
     startRecording(dur);
     return json(res, 200, buildState());
   }
@@ -657,7 +657,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <section class="preview">
         <div class="video-wrap">
           <video id="player" muted playsinline></video>
-          <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
+          <div class="video-ph" id="videoPh">Esperando señal de tu streaming…</div>
         </div>
         <div class="ingest-bar" id="ingestBar" style="display:none">
           <span class="ingest-pill" id="ingestVideo">—</span>
@@ -679,7 +679,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           </div>
           <div class="pb-body">
             <div class="field">
-              <label>Servidor RTMP (en OBS)</label>
+              <label>Servidor RTMP (en tu software de streaming)</label>
               <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
             </div>
             <div class="field">
@@ -706,7 +706,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <button id="recToggle" disabled onclick="toggleRec()">Activar buffer</button>
             <button id="clipSaveBtn" style="display:none" onclick="doSaveClip()">Guardar clip</button>
           </div>
-          <div class="rec-status" id="recStatus">Conecta OBS para usar el buffer.</div>
+          <div class="rec-status" id="recStatus">Conecta tu software de streaming para usar el buffer.</div>
         </div>
       </section>
   </div>
@@ -1032,7 +1032,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       toggle.dataset.active = '0';
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
-      status.textContent = 'Conecta OBS para usar el buffer.';
+      status.textContent = 'Conecta tu software de streaming para usar el buffer.';
     } else if (rec.active) {
       toggle.disabled = false;
       toggle.textContent = 'Detener buffer';
@@ -1046,7 +1046,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       toggle.dataset.active = '0';
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
-      status.textContent = state.live ? 'Buffer inactivo.' : 'OBS detuvo la emisión.';
+      status.textContent = state.live ? 'Buffer inactivo.' : 'Se detuvo la emisión.';
     }
   }
 
@@ -1093,7 +1093,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   function render(state) {
     lastState = state;
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
-    $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
+    $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     updatePreview(state.live);
     updateRecorder(state);
@@ -1149,7 +1149,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
         if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
         bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
-        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>';
+        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando empiece la transmisión.</p>';
         if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
         bodyHtml += '</div>';
       } else {
@@ -1239,7 +1239,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
-        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>' : ''}
+        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando empiece la transmisión.</p>' : ''}
         \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;
@@ -1396,7 +1396,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } else if (!live && player) {
       player.destroy();
       player = null;
-      ph.textContent = 'Esperando señal de OBS…';
+      ph.textContent = 'Esperando señal de tu streaming…';
       ph.style.display = 'flex';
     }
   }
