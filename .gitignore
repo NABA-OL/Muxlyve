@@ -9,7 +9,7 @@ dist-app/
 build/mac/
 build/icon.icns
 .DS_Store
-
+.claude/
 # AI Agent Context Files
 CLAUDE.md
 CONTEXT.md
