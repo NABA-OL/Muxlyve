@@ -20,7 +20,8 @@ contextBridge.exposeInMainWorld('msApp', {
   sendReport: (description) => ipcRenderer.invoke('report:send', description),
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
-  openChatWindow: () => ipcRenderer.invoke('chat:open-window'),
+  setTitleBarTheme: (isDark) => ipcRenderer.invoke('app:set-titlebar-theme', isDark),
+  openChatWindow: (theme) => ipcRenderer.invoke('chat:open-window', theme),
   getCloseToTray: () => ipcRenderer.invoke('app:get-close-to-tray'),
   setCloseToTray: (val) => ipcRenderer.invoke('app:set-close-to-tray', val),
 });
