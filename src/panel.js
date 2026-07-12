@@ -6,6 +6,7 @@ import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
 import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
+import { chatBus, getHistory as getChatHistory } from './chat.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -120,6 +121,20 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // GET /api/chat -> SSE: mensajes de chat unificados (Twitch por ahora).
+  if (req.method === 'GET' && url.pathname === '/api/chat') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    for (const msg of getChatHistory()) res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    const onMessage = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    chatBus.on('message', onMessage);
+    req.on('close', () => chatBus.off('message', onMessage));
+    return;
+  }
+
   // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
   if (req.method === 'POST' && url.pathname === '/api/destinations') {
     let input;
@@ -161,7 +176,7 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
-    if (!isLive()) return json(res, 409, { error: 'OBS no está transmitiendo.' });
+    if (!isLive()) return json(res, 409, { error: 'No hay transmisión activa.' });
     startRecording(dur);
     return json(res, 200, buildState());
   }
@@ -230,6 +245,10 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(PANEL_HTML);
       }
+      if (url.pathname === '/chat-window') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(CHAT_WINDOW_HTML);
+      }
       // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
       // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
       if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
@@ -283,7 +302,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   header { display: flex; align-items: center; justify-content: space-between;
     gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
     background: var(--surface); position: sticky; top: 0; z-index: 5;
-    height: var(--header-h); }
+    height: var(--header-h); -webkit-app-region: drag; }
+  header button, header a, header input { -webkit-app-region: no-drag; }
+  /* Barra de título fundida (hiddenInset en Mac deja los 3 botones a la izquierda;
+     titleBarOverlay en Windows deja los suyos a la derecha) — espacio para que no se
+     encimen con el logo o los botones propios de la app. */
+  body.platform-darwin header { padding-left: 96px; }
+  body.platform-win32 header { padding-right: 150px; }
   .logo-wrap { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; text-decoration: none; }
   .logo-icon { height: 32px; width: 32px; object-fit: contain; }
   .wordmark { font-size: 1.1rem; font-weight: 700; letter-spacing: -.03em; cursor: default; user-select: none; color: var(--text); }
@@ -454,6 +479,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .danger-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger);
     border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
   .danger-btn:hover { background: rgba(248,81,73,.1); }
+
+  /* ── Chat unificado ── */
+  .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
+    gap: .3rem; padding-right: .2rem; }
+  .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
+  .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
+  .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
+  .chat-panel { display: flex; flex-direction: column; height: 100%; }
+  .chat-panel-head { display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0; margin-bottom: .1rem; }
+  .chat-panel-title { font-weight: 600; font-size: .95rem; }
+  .chat-popout-btn { background: var(--surface-2); color: var(--muted); border: none;
+    border-radius: 6px; width: 28px; height: 28px; padding: 0; flex-shrink: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .chat-popout-btn:hover { color: var(--text); }
+  .chat-box.chat-box-full { flex: 1; min-height: 0; max-height: none; }
   .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
     color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
@@ -464,7 +505,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .eyerow { display: flex; gap: .4rem; align-items: center; }
   .eyerow input { flex: 1; }
   .eye-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
-    width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; padding: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
     cursor: pointer; }
   .eye-btn:hover { color: var(--text); }
 
@@ -597,10 +638,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
       </svg>
     </button>
-    <button class="sidebar-toggle-btn panel-open" id="sidebarToggle" onclick="toggleSidebar()" title="Mostrar/ocultar conexiones">
+    <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <rect x="1" y="1" width="14" height="14" rx="2.5"/>
         <line x1="10" y1="1.5" x2="10" y2="14.5"/>
+      </svg>
+    </button>
+    <button class="sidebar-toggle-btn panel-open" id="chatBtn" onclick="showSidebarTab('chat')" title="Chat">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 3h12v8H5l-3 3V3z"/>
       </svg>
     </button>
   </div>
@@ -611,7 +657,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <section class="preview">
         <div class="video-wrap">
           <video id="player" muted playsinline></video>
-          <div class="video-ph" id="videoPh">Esperando señal de OBS…</div>
+          <div class="video-ph" id="videoPh">Esperando señal de tu streaming…</div>
         </div>
         <div class="ingest-bar" id="ingestBar" style="display:none">
           <span class="ingest-pill" id="ingestVideo">—</span>
@@ -620,25 +666,37 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
           </div>
         </div>
-        <div class="conn">
-          <div class="field">
-            <label>Servidor RTMP (en OBS)</label>
-            <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
+        <div class="conn pb-block open" id="connInfoBlock">
+          <div class="pb-head" onclick="toggleConnInfo()">
+            <i class="pb-chevron">&#9654;</i>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+              <line x1="6" y1="6" x2="6.01" y2="6"/>
+              <line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+            <span class="pb-head-name">Información de conexión</span>
           </div>
-          <div class="field">
-            <label>Clave de retransmisión</label>
-            <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
-          </div>
-          <div class="field" id="lanField" style="display:none">
-            <label>Desde otra máquina en tu red</label>
-            <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
-          </div>
-          <div class="field" id="pubField" style="display:none">
-            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-            <div class="copyrow">
-              <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
-              <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-              <button onclick="copy('pubRtmpUrl')">copiar</button>
+          <div class="pb-body">
+            <div class="field">
+              <label>Servidor RTMP (en tu software de streaming)</label>
+              <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
+            </div>
+            <div class="field">
+              <label>Clave de retransmisión</label>
+              <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+            </div>
+            <div class="field" id="lanField" style="display:none">
+              <label>Desde otra máquina en tu red</label>
+              <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
+            </div>
+            <div class="field" id="pubField" style="display:none">
+              <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+              <div class="copyrow">
+                <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+                <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                <button onclick="copy('pubRtmpUrl')">copiar</button>
+              </div>
             </div>
           </div>
         </div>
@@ -648,13 +706,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <button id="recToggle" disabled onclick="toggleRec()">Activar buffer</button>
             <button id="clipSaveBtn" style="display:none" onclick="doSaveClip()">Guardar clip</button>
           </div>
-          <div class="rec-status" id="recStatus">Conecta OBS para usar el buffer.</div>
+          <div class="rec-status" id="recStatus">Conecta tu software de streaming para usar el buffer.</div>
         </div>
       </section>
   </div>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
-    <div class="sidebar-inner">
+    <div class="sidebar-inner" id="connPanel" style="display:none">
       <div id="platformList"></div>
       <div id="customList"></div>
 
@@ -668,6 +726,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           </div>
         </div>
       </details>
+    </div>
+
+    <div class="sidebar-inner chat-panel" id="chatPanel" style="display:none">
+      <div class="chat-panel-head">
+        <span class="chat-panel-title">Chat en vivo</span>
+        <button class="chat-popout-btn" onclick="openChatWindow()" title="Abrir en ventana aparte">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+        </button>
+      </div>
+      <div id="chatMessages" class="chat-box chat-box-full"></div>
     </div>
   </aside>
 </main>
@@ -699,6 +771,23 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <input type="checkbox" id="startMinChk" onchange="toggleLoginItem()">
           <span class="sys-toggle-track"></span>
         </label>
+      </div>
+      <div class="pref-row">
+        <div>
+          <div>Minimizar a la bandeja al cerrar</div>
+          <div class="pref-desc">El botón cerrar oculta la app en vez de salir — solo se cierra desde el ícono de bandeja</div>
+        </div>
+        <label class="sys-toggle">
+          <input type="checkbox" id="closeToTrayChk" onchange="toggleCloseToTray()">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
+      <div class="pref-row">
+        <div>
+          <div>Buscar actualizaciones</div>
+          <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
+        </div>
+        <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
       </div>
     </div>
     <div class="prefs-section">
@@ -807,6 +896,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 <div id="msg"></div>
 <script src="/flv.min.js"></script>
 <script>
+  // Barra de título fundida con la UI — el padding exacto depende de qué lado ocupan
+  // los botones nativos (izquierda en Mac, derecha en Windows). Se aplica ya mismo,
+  // antes de cualquier otra cosa, para que no haya parpadeo del layout sin compensar.
+  (function () {
+    const ua = navigator.userAgent;
+    if (ua.includes('Mac')) document.body.classList.add('platform-darwin');
+    else if (ua.includes('Windows')) document.body.classList.add('platform-win32');
+  })();
+
   window.onerror = (msg, src, line, col, err) => {
     const d = document.createElement('div');
     d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f85149;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
@@ -827,6 +925,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     { id: 'kick',    name: 'Kick',    color: '#53fc18', soon: true },
     { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
   ];
+  // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
+  // producción empaquetada (en dev sigue funcionando para poder seguir probando/iterando
+  // con Google). Cuando llegue la aprobación, cambiar esto a false y listo.
+  const YOUTUBE_OAUTH_PENDING = true;
   let lastState = null;
   let lastAuthStatus = {};
   // El refresh automático (cada 2s) reconstruye los bloques de plataforma desde cero —
@@ -930,7 +1032,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       toggle.dataset.active = '0';
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
-      status.textContent = 'Conecta OBS para usar el buffer.';
+      status.textContent = 'Conecta tu software de streaming para usar el buffer.';
     } else if (rec.active) {
       toggle.disabled = false;
       toggle.textContent = 'Detener buffer';
@@ -944,7 +1046,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       toggle.dataset.active = '0';
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
-      status.textContent = state.live ? 'Buffer inactivo.' : 'OBS detuvo la emisión.';
+      status.textContent = state.live ? 'Buffer inactivo.' : 'Se detuvo la emisión.';
     }
   }
 
@@ -991,7 +1093,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   function render(state) {
     lastState = state;
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
-    $('#liveTxt').textContent = state.live ? 'OBS en vivo' : 'esperando a OBS';
+    $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     updatePreview(state.live);
     updateRecorder(state);
@@ -1047,7 +1149,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
         if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
         bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
-        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>';
+        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando empiece la transmisión.</p>';
         if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
         bodyHtml += '</div>';
       } else {
@@ -1137,7 +1239,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
-        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando OBS empiece a transmitir.</p>' : ''}
+        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando empiece la transmisión.</p>' : ''}
         \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;
@@ -1161,6 +1263,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const isOpen = block.classList.toggle('open');
     localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
   }
+
+  function toggleConnInfo() {
+    const block = $('#connInfoBlock');
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pb_conninfo', isOpen ? '1' : '0');
+  }
+  if (localStorage.getItem('ms_pb_conninfo') === '0') $('#connInfoBlock').classList.remove('open');
 
   function showAddPlatformRtmp(pid) {
     pbAddOpen[pid] = true;
@@ -1287,7 +1396,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } else if (!live && player) {
       player.destroy();
       player = null;
-      ph.textContent = 'Esperando señal de OBS…';
+      ph.textContent = 'Esperando señal de tu streaming…';
       ph.style.display = 'flex';
     }
   }
@@ -1398,6 +1507,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   })();
 
   // ── Tema claro/oscuro ──
+  // En Windows, la barra de título fundida (titleBarOverlay) tiene su color fijado por
+  // Electron al crear la ventana — hay que avisarle cada vez que cambia el tema, si no
+  // se queda desincronizada (justo el problema original: la barra no seguía el tema).
+  function syncTitleBarTheme() {
+    if (window.msApp && window.msApp.setTitleBarTheme) {
+      window.msApp.setTitleBarTheme(document.documentElement.dataset.theme !== 'light');
+    }
+  }
+  // Mismo origen (http://localhost:19080) que la ventana de chat flotante — le avisa
+  // el tema en vivo sin necesitar una vuelta por Electron IPC.
+  let themeChannel = null;
+  try { themeChannel = new BroadcastChannel('muxlyve-theme'); } catch {}
+
   function toggleTheme() {
     const isLight = document.documentElement.dataset.theme === 'light';
     const next = isLight ? 'dark' : 'light';
@@ -1405,6 +1527,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#iconSun').style.display = next === 'dark' ? '' : 'none';
     $('#iconMoon').style.display = next === 'dark' ? 'none' : '';
     localStorage.setItem('ms_theme', next);
+    syncTitleBarTheme();
+    if (themeChannel) themeChannel.postMessage(next);
   }
   const savedTheme = localStorage.getItem('ms_theme');
   if (savedTheme === 'light') {
@@ -1412,6 +1536,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#iconSun').style.display = 'none';
     $('#iconMoon').style.display = '';
   }
+  syncTitleBarTheme();
 
   // ── Wordmark animation: Muxlyve → Muxly Live ──
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -1438,6 +1563,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         $('#loginItemChk').checked = s.openAtLogin;
         $('#startMinChk').checked = s.startMinimized;
         $('#startMinRow').style.display = s.openAtLogin ? '' : 'none';
+        $('#closeToTrayChk').checked = await window.msApp.getCloseToTray();
       } catch {}
     }
   }
@@ -1448,6 +1574,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const startMinimized = $('#startMinChk').checked;
     $('#startMinRow').style.display = openAtLogin ? '' : 'none';
     try { await window.msApp.setLoginItem(openAtLogin, startMinimized); } catch {}
+  }
+  async function toggleCloseToTray() {
+    if (!window.msApp) return;
+    try { await window.msApp.setCloseToTray($('#closeToTrayChk').checked); } catch {}
+  }
+
+  async function checkForUpdates() {
+    if (!window.msApp) return;
+    const btn = $('#updateCheckBtn');
+    btn.disabled = true;
+    btn.textContent = 'Buscando…';
+    try {
+      const r = await window.msApp.checkForUpdates();
+      if (!r.ok) { toast(r.error, true); }
+      // Si sí hay algo que buscar, el resultado (hay/no hay actualización) llega vía un
+      // diálogo nativo del proceso principal, no por aquí — este solo confirma el disparo.
+    } catch (e) {
+      toast(e.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Buscar';
   }
 
   function openReport() { $('#reportOverlay').classList.add('open'); }
@@ -1531,16 +1678,31 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); closeReport(); } });
 
-  function toggleSidebar() {
-    const sidebar = $('#sidebarCol');
-    const btn = $('#sidebarToggle');
-    const nowCollapsed = sidebar.classList.toggle('collapsed');
-    btn.classList.toggle('panel-open', !nowCollapsed);
-    localStorage.setItem('ms_sidebar_collapsed', nowCollapsed ? '1' : '0');
+  // Pestañas del sidebar: Conexiones y Chat son mutuamente excluyentes. Click en la
+  // pestaña activa colapsa todo el sidebar (mismo gesto que el botón único de antes).
+  let activeSidebarTab = null;
+  function showSidebarTab(tab) {
+    const col = $('#sidebarCol');
+    const isOpen = !col.classList.contains('collapsed');
+    if (isOpen && activeSidebarTab === tab) {
+      col.classList.add('collapsed');
+      activeSidebarTab = null;
+    } else {
+      activeSidebarTab = tab;
+      col.classList.remove('collapsed');
+      $('#connPanel').style.display = tab === 'conn' ? '' : 'none';
+      $('#chatPanel').style.display = tab === 'chat' ? '' : 'none';
+    }
+    $('#connBtn').classList.toggle('panel-open', activeSidebarTab === 'conn');
+    $('#chatBtn').classList.toggle('panel-open', activeSidebarTab === 'chat');
   }
-  if (localStorage.getItem('ms_sidebar_collapsed') === '1') {
-    $('#sidebarCol').classList.add('collapsed');
-    $('#sidebarToggle').classList.remove('panel-open');
+
+  function openChatWindow() {
+    if (window.msApp && window.msApp.openChatWindow) {
+      window.msApp.openChatWindow(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+    } else {
+      toast('Solo disponible en la app de escritorio', true);
+    }
   }
 
   // ── Cuentas OAuth (solo Electron) ──
@@ -1553,6 +1715,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   async function connectPlatform(platform) {
+    if (platform === 'youtube' && YOUTUBE_OAUTH_PENDING && window._isPackaged) {
+      toast('YouTube: esta funcionalidad estará disponible en una próxima versión (en espera de aprobación de Google).', true);
+      return;
+    }
     const btn = $('#pb-' + platform + ' .auth-conn');
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
@@ -1576,10 +1742,134 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     loadAuthStatus();
   }
 
+  // ── Chat unificado (fase 1: Twitch) ──
+  function appendChatMessage(msg) {
+    const box = $('#chatMessages');
+    if (!box) return;
+    const empty = box.querySelector('.chat-empty');
+    if (empty) empty.remove();
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    const iconHtml = platformIconSvg(msg.platform, 14);
+    if (iconHtml) {
+      const iconWrap = document.createElement('span');
+      iconWrap.className = 'chat-icon';
+      iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
+      row.appendChild(iconWrap);
+    }
+    const textWrap = document.createElement('span');
+    const nameEl = document.createElement('strong');
+    nameEl.style.color = msg.color || '#9147ff';
+    nameEl.textContent = msg.username || '???';
+    textWrap.appendChild(nameEl);
+    textWrap.appendChild(document.createTextNode(': ' + (msg.message || '')));
+    row.appendChild(textWrap);
+    box.appendChild(row);
+    while (box.children.length > 200) box.removeChild(box.firstChild);
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  function connectChatStream() {
+    if (!window.EventSource) return;
+    const box = $('#chatMessages');
+    if (box) box.innerHTML = '<div class="chat-empty">Esperando mensajes…</div>';
+    const es = new EventSource('/api/chat');
+    es.onmessage = (e) => {
+      try { appendChatMessage(JSON.parse(e.data)); } catch {}
+    };
+  }
+
+  if (window.msApp) { window.msApp.isPackaged().then(v => { window._isPackaged = v; }).catch(() => {}); }
+
   loadConfig();
   refresh();
   loadAuthStatus();
+  showSidebarTab('chat'); // arranca siempre mostrando el chat
+  connectChatStream();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
+</script>
+</body>
+</html>`;
+
+// Página independiente y minimalista para la ventana de chat "flotante" — separada de
+// PANEL_HTML a propósito para no meter otro backtick dentro de ese template gigante.
+const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Muxlyve — Chat</title>
+<style>
+  :root { --bg: #0d1117; --text: #e6edf3; --muted: #8b949e; }
+  [data-theme="light"] { --bg: #f0f2f5; --text: #1a1a2e; --muted: #5a6070; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; overflow: hidden; }
+  #stars { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+  .star { position: absolute; background: var(--text); border-radius: 50%;
+    animation: twinkle 3.5s ease-in-out infinite; }
+  @keyframes twinkle {
+    0%, 100% { opacity: .15; } 50% { opacity: .9; }
+  }
+  #dragbar { position: fixed; top: 0; left: 0; right: 0; height: 40px;
+    -webkit-app-region: drag; z-index: 2; }
+  #box { position: relative; z-index: 1; height: 100vh; overflow-y: auto; padding: .75rem;
+    padding-top: 44px; display: flex; flex-direction: column; gap: .3rem; }
+  .row { font-size: .85rem; line-height: 1.4; overflow-wrap: break-word; }
+  .row strong { margin-right: .3rem; }
+  .empty { color: var(--muted); font-size: .8rem; }
+</style>
+</head>
+<body>
+<div id="dragbar"></div>
+<div id="stars"></div>
+<div id="box"><div class="empty">Esperando mensajes…</div></div>
+<script>
+  // Tema inicial: viene por query string al abrir la ventana. Se mantiene sincronizado
+  // en vivo con la app principal vía BroadcastChannel (mismo origen http://localhost).
+  document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : '';
+  try {
+    var themeChannel = new BroadcastChannel('muxlyve-theme');
+    themeChannel.onmessage = function (e) {
+      document.documentElement.dataset.theme = e.data === 'light' ? 'light' : '';
+    };
+  } catch (err) {}
+
+  (function () {
+    var field = document.getElementById('stars');
+    var n = 50;
+    for (var i = 0; i < n; i++) {
+      var s = document.createElement('div');
+      s.className = 'star';
+      var size = (Math.random() * 1.6 + .6).toFixed(1);
+      s.style.width = size + 'px';
+      s.style.height = size + 'px';
+      s.style.left = (Math.random() * 100) + '%';
+      s.style.top = (Math.random() * 100) + '%';
+      s.style.animationDelay = (Math.random() * 3.5).toFixed(2) + 's';
+      field.appendChild(s);
+    }
+  })();
+
+  function append(msg) {
+    var box = document.getElementById('box');
+    var empty = box.querySelector('.empty');
+    if (empty) empty.remove();
+    var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    var row = document.createElement('div');
+    row.className = 'row';
+    var strong = document.createElement('strong');
+    strong.style.color = msg.color || '#9147ff';
+    strong.textContent = msg.username || '???';
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(msg.message || ''));
+    box.appendChild(row);
+    while (box.children.length > 300) box.removeChild(box.firstChild);
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  var es = new EventSource('/api/chat');
+  es.onmessage = function (e) {
+    try { append(JSON.parse(e.data)); } catch (err) {}
+  };
 </script>
 </body>
 </html>`;

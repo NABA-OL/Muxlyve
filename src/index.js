@@ -44,9 +44,9 @@ nms.on('prePublish', (id, StreamPath) => {
   const destinations = loadAll();
   const active = destinations.filter(isPlayable);
   if (active.length === 0) {
-    console.warn('[ingest] OBS conectado. Sin destinos activos — actívalos en el panel para iniciar el reenvío.');
+    console.warn('[ingest] Señal Conectada. Sin destinos activos — actívalos en el panel para iniciar el reenvío.');
   } else {
-    console.log(`[ingest] OBS conectado. Auto-iniciando ${active.length} destino(s).`);
+    console.log(`[ingest] Señal Conectada. Auto-iniciando ${active.length} destino(s).`);
   }
   // Siempre llama onPublish para que isLive() sea true y applyChange funcione
   // aunque el usuario encienda destinos DESPUÉS de que OBS ya esté conectado.
@@ -54,7 +54,7 @@ nms.on('prePublish', (id, StreamPath) => {
 });
 
 nms.on('donePublish', () => {
-  console.log('[ingest] OBS desconectado. Deteniendo reenvios.');
+  console.log('[ingest] Señal Desconectada. Deteniendo reenvios.');
   onUnpublish();
 });
 
@@ -73,7 +73,7 @@ console.log('============================================');
 console.log(' Muxlyve — motor de retransmision');
 console.log('============================================');
 console.log(` Ingest RTMP:  rtmp://localhost:${RTMP_PORT}/live`);
-console.log(` Clave OBS:    ${STREAM_KEY}`);
+console.log(` Clave:    ${STREAM_KEY}`);
 console.log(` API HTTP:     http://localhost:${HTTP_PORT}`);
 console.log(' Edita destinos en el panel web.');
 console.log('============================================');

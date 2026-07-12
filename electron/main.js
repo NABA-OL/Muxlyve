@@ -1,7 +1,7 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
 import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { existsSync, copyFileSync, mkdirSync } from 'node:fs';
+import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import {
@@ -11,8 +11,8 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
-import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus } from './oauth.js';
-import { initUpdater } from './updater.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected } from './oauth.js';
+import { initUpdater, checkForUpdatesManually } from './updater.js';
 import { initLogBuffer, getRecentLog } from './logbuffer.js';
 
 // Antes que nada — captura logs desde el arranque (la app empaquetada no muestra consola).
@@ -22,13 +22,30 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
 const PANEL_URL   = `http://127.0.0.1:${PANEL_PORT}/`;
 const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
-const TRAY_ICON_PATH = path.join(__dirname, '../build/icon-muxlyve.png');
+// macOS: ícono monocromo + setTemplateImage — el sistema lo pinta blanco/negro según el
+// fondo de la barra de menú, igual que WiFi/Bluetooth/batería. Windows no tiene ese
+// convenio (sus íconos de bandeja siempre van a color), así que ahí se usa el logo real.
+const TRAY_ICON_PATH = path.join(__dirname, process.platform === 'darwin'
+  ? '../build/tray-icon-template.png'
+  : '../build/icon-muxlyve.png');
 const PRELOAD       = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
 const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // Flag propio (no depende del SO) para saber si el login item nos arrancó en modo oculto —
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
 const START_HIDDEN = process.argv.includes('--hidden');
+
+// Preferencias simples que persisten entre sesiones, independientes del login item del SO
+// (ej. "minimizar a bandeja al cerrar" — a diferencia de "iniciar minimizado", no depende
+// de que la app arranque sola con el sistema).
+const PREFS_PATH = path.join(app.getPath('userData'), 'prefs.json');
+function loadPrefs() {
+  try { return JSON.parse(readFileSync(PREFS_PATH, 'utf8')); } catch { return {}; }
+}
+function savePrefs(prefs) {
+  try { writeFileSync(PREFS_PATH, JSON.stringify(prefs)); } catch {}
+}
+const prefs = loadPrefs();
 
 let win = null;
 let splash = null;
@@ -77,6 +94,28 @@ function waitForPanel(timeoutMs = 15000) {
 }
 
 // ── Main window ───────────────────────────────────────────────────────────────
+// Funde la barra de título nativa con la UI: en Mac mantiene los 3 botones (hiddenInset),
+// en Windows los reemplaza por un overlay cuyo color se puede igualar al tema de la app
+// (ver app:set-titlebar-theme) — soluciona que la barra quedara de otro color en modo claro.
+const TITLEBAR_HEIGHT = 68; // debe coincidir con --header-h en panel.js
+const CHAT_TITLEBAR_HEIGHT = 40; // ventana de chat: más chica, no tiene fila de header propia
+function titleBarConfig(height = TITLEBAR_HEIGHT, isDark = true) {
+  if (process.platform === 'darwin') {
+    return { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 20, y: (height - 20) / 2 } };
+  }
+  if (process.platform === 'win32') {
+    return {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: {
+        color: isDark ? '#161b22' : '#ffffff',
+        symbolColor: isDark ? '#e6edf3' : '#1a1a2e',
+        height,
+      },
+    };
+  }
+  return {}; // Linux u otros: barra nativa normal, sin fundir.
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1100, height: 760, minWidth: 900, minHeight: 600,
@@ -85,6 +124,7 @@ function createWindow() {
     title: 'Muxlyve',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     autoHideMenuBar: true,
+    ...titleBarConfig(),
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -93,11 +133,11 @@ function createWindow() {
   });
   win.once('ready-to-show', () => { if (!START_HIDDEN) win.show(); });
   win.loadURL(PANEL_URL);
-  // Si "iniciar minimizado" está activo, cerrar con la X oculta a la bandeja en vez de
-  // salir — coherente con ese modo: solo se sale de verdad desde el menú de la bandeja
+  // Ajuste independiente de "iniciar minimizado" — si está activo, cerrar con la X oculta
+  // a la bandeja en vez de salir. Solo se sale de verdad desde el menú de la bandeja
   // (Salir usa app.exit(), que no dispara este evento) o desactivando la opción primero.
   win.on('close', (event) => {
-    if (loginItemState().startMinimized) {
+    if (prefs.closeToTray) {
       event.preventDefault();
       win.hide();
     }
@@ -108,8 +148,18 @@ function createWindow() {
 // ── Bandeja del sistema ──────────────────────────────────────────────────────
 function createTray() {
   if (tray) return;
-  const base = nativeImage.createFromPath(TRAY_ICON_PATH);
+  // createFromPath() a veces falla en silencio leyendo rutas dentro del .asar en Windows
+  // (deja el ícono vacío/invisible en la bandeja) — readFileSync() sí entiende esas rutas
+  // (Electron parchea node:fs para asar), así que se lee como buffer y se evita el problema.
+  let base;
+  try {
+    base = nativeImage.createFromBuffer(readFileSync(TRAY_ICON_PATH));
+  } catch (err) {
+    console.error('[tray] no se pudo cargar el ícono:', err.message);
+    base = nativeImage.createEmpty();
+  }
   const icon = base.isEmpty() ? base : base.resize({ width: 20, height: 20 });
+  if (process.platform === 'darwin' && !icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Muxlyve');
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -121,6 +171,25 @@ function createTray() {
     if (!win) return;
     if (win.isVisible()) win.hide(); else { win.show(); win.focus(); }
   });
+}
+
+// ── Ventana flotante de chat ────────────────────────────────────────────────────
+let chatWin = null;
+function openChatWindow(theme) {
+  // El tema ya llega actualizado en vivo vía BroadcastChannel una vez cargada, así que
+  // solo importa pasarlo aquí para que abra ya bien pintada desde el primer frame.
+  if (chatWin && !chatWin.isDestroyed()) { chatWin.show(); chatWin.focus(); return; }
+  chatWin = new BrowserWindow({
+    width: 360, height: 560, minWidth: 260, minHeight: 300,
+    title: 'Muxlyve — Chat',
+    backgroundColor: theme === 'light' ? '#f0f2f5' : '#0d1117',
+    icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+    autoHideMenuBar: true,
+    ...titleBarConfig(CHAT_TITLEBAR_HEIGHT, theme !== 'light'),
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  chatWin.loadURL(`${PANEL_URL}chat-window?theme=${theme === 'light' ? 'light' : 'dark'}`);
+  chatWin.on('closed', () => { chatWin = null; });
 }
 
 // ── Activation window ─────────────────────────────────────────────────────────
@@ -189,8 +258,14 @@ ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 
 function loginItemState() {
-  const s = app.getLoginItemSettings();
-  return { openAtLogin: s.openAtLogin, startMinimized: (s.args || []).includes('--hidden') };
+  // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el
+  // login item se registró con args:['--hidden'], esa entrada NO matchea el chequeo por
+  // defecto y openAtLogin aparece falso aunque sí esté activo. Hay que consultar ambas
+  // variantes explícitamente y ver cuál coincide con lo realmente registrado.
+  const hidden = app.getLoginItemSettings({ args: ['--hidden'] });
+  if (hidden.openAtLogin) return { openAtLogin: true, startMinimized: true };
+  const normal = app.getLoginItemSettings();
+  return { openAtLogin: normal.openAtLogin, startMinimized: false };
 }
 ipcMain.handle('app:get-login-item', () => loginItemState());
 ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
@@ -199,6 +274,34 @@ ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
     args: (openAtLogin && startMinimized) ? ['--hidden'] : [],
   });
   return loginItemState();
+});
+
+ipcMain.handle('updater:check', () => {
+  if (!app.isPackaged) return { ok: false, error: 'Solo disponible en la app empaquetada.' };
+  checkForUpdatesManually();
+  return { ok: true };
+});
+
+ipcMain.handle('app:is-packaged', () => app.isPackaged);
+
+ipcMain.handle('app:set-titlebar-theme', (_, isDark) => {
+  // Los 3 botones de Mac (hiddenInset) no se pintan por nosotros — siempre son rojo/
+  // amarillo/verde nativos del sistema, no hay nada que sincronizar ahí.
+  if (process.platform !== 'win32') return;
+  const overlay = {
+    color: isDark ? '#161b22' : '#ffffff',
+    symbolColor: isDark ? '#e6edf3' : '#1a1a2e',
+  };
+  if (win) win.setTitleBarOverlay({ ...overlay, height: TITLEBAR_HEIGHT });
+  if (chatWin && !chatWin.isDestroyed()) chatWin.setTitleBarOverlay({ ...overlay, height: CHAT_TITLEBAR_HEIGHT });
+});
+ipcMain.handle('chat:open-window', (_, theme) => { openChatWindow(theme); return true; });
+
+ipcMain.handle('app:get-close-to-tray', () => !!prefs.closeToTray);
+ipcMain.handle('app:set-close-to-tray', (_, val) => {
+  prefs.closeToTray = !!val;
+  savePrefs(prefs);
+  return prefs.closeToTray;
 });
 
 ipcMain.handle('report:send', async (_, description) => {
@@ -305,6 +408,7 @@ app.whenReady().then(async () => {
   closeSplash();
   createWindow();
   createTray();
+  resumeChatIfConnected();
   win.webContents.on('did-fail-load', (_, code, desc, url) => {
     console.error('[electron] did-fail-load:', code, desc, url);
   });
