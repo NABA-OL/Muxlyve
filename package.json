@@ -65,7 +65,7 @@
       }
     ],
     "win": {
-      "target": "nsis",
+      "target": ["nsis","msi"],
       "icon": "build/icon-muxlyve.ico"
     },
     "nsis": {
@@ -74,6 +74,25 @@
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "menuCategory": "Muxlyve",
+      "shortcutName": "Muxlyve",
+      "installerIcon": "build/icon-muxlyve.ico",
+      "uninstallerIcon": "build/icon-muxlyve.ico",
+      "installerHeaderIcon": "build/icon-muxlyve.ico",
+      "installerSidebar": "build/installer-sidebar.bmp",
+      "uninstallerSidebar": "build/installer-sidebar.bmp",
+      "uninstallDisplayName": "Muxlyve",
+      "runAfterFinish": true,
+      "language": "1034",
+      "include": "build/installer.nsh"
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "menuCategory": "Muxlyve",
       "shortcutName": "Muxlyve",
