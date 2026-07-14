@@ -13,9 +13,9 @@
     "test:unit": "node --test \"test/**/*.test.mjs\"",
     "test": "npm run test:unit && bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
-    "predist": "node -r dotenv/config scripts/generate-oauth-credentials.mjs",
+    "predist": "node scripts/generate-installer-bmps.mjs && node -r dotenv/config scripts/generate-oauth-credentials.mjs",
     "dist": "node -r dotenv/config node_modules/electron-builder/cli.js --win",
-    "predist:publish": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
+    "predist:publish": "node scripts/generate-installer-bmps.mjs && node -r dotenv/config scripts/generate-oauth-credentials.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
     "dist:publish": "node -r dotenv/config node_modules/electron-builder/cli.js --publish always",
     "postdist:publish": "node -r dotenv/config scripts/cleanup-orphan-releases.mjs",
     "dist:mac": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
@@ -65,8 +65,34 @@
       }
     ],
     "win": {
-      "target": "nsis",
+      "target": ["nsis", "msi", "inno"],
       "icon": "build/icon-muxlyve.ico"
+    },
+    "msi": {
+      "oneClick": true,
+      "perMachine": true,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "menuCategory": "Muxlyve",
+      "shortcutName": "Muxlyve",
+      "language": "1034"
+    },
+    "inno": {
+      "installerIcon": "build/icon-muxlyve.ico",
+      "uninstallerIcon": "build/unicon-muxlyve.ico",
+      "installerHeaderIcon": "build/icon-muxlyve.ico",
+      "wizardImage": "build/installer-sidebar.bmp",
+      "wizardSmallImage": "build/wizard-small.bmp",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "menuCategory": "Muxlyve",
+      "shortcutName": "Muxlyve",
+      "languages": ["Spanish"],
+      "runAfterFinish": true
     },
     "nsis": {
       "oneClick": false,
