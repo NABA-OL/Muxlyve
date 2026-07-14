@@ -7,8 +7,6 @@
 !define MUI_FINISHPAGE_TEXT "Muxlyve se instaló correctamente en tu equipo.$\r$\n$\r$\nHaz clic en Finalizar para cerrar este asistente."
 !define MUI_FINISHPAGE_RUN_TEXT "Abrir Muxlyve"
 
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${PROJECT_DIR}\build\installer-sidebar.bmp"
-
 ; Header image — aparece en páginas de progreso / componentes
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_BITMAP "${PROJECT_DIR}\build\installer-header.bmp"
