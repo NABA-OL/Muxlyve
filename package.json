@@ -65,17 +65,8 @@
       }
     ],
     "win": {
-      "target": ["nsis", "msi"],
+      "target": "nsis",
       "icon": "build/icon-muxlyve.ico"
-    },
-    "msi": {
-      "oneClick": true,
-      "perMachine": true,
-      "runAfterFinish": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "menuCategory": "Muxlyve",
-      "shortcutName": "Muxlyve"
     },
     "nsis": {
       "oneClick": false,

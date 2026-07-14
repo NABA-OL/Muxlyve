@@ -40,7 +40,7 @@ Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; Group
 Name: "startup"; Description: "Iniciar {#MyAppName} al encender el equipo"; GroupDescription: "Opciones adicionales:"
 
 [Files]
-Source: "..\dist-app\win-arm64-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist-app\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -76,6 +76,8 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
