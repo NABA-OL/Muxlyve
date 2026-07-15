@@ -1338,15 +1338,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (inp) inp.value = '';
   }
 
+  // Evita que el poll de refresh() (cada 2s) pise una mutación en curso o
+  // los campos que el usuario está llenando — root cause de que el formulario
+  // "añadir servidor" se borrara solo, clics se perdieran, o un borrado se
+  // revirtiera por una respuesta de refresh() llegando después.
+  let destBusy = false;
+  async function withDestBusy(fn) {
+    destBusy = true;
+    try { await fn(); } finally { destBusy = false; }
+  }
+
   async function addPlatformRtmp(pid) {
     const inp = $('#pb-new-url-' + pid);
     const url = inp ? inp.value.trim() : '';
     if (!url) { toast('Pon una URL', true); return; }
     const name = (AUTH_PLATFORMS.find(p => p.id === pid) || {}).name || pid;
     try {
-      pbAddOpen[pid] = false;
-      delete pbAddDraft[pid];
-      render(await api('POST', '/api/destinations', { name, url, enabled: false }));
+      await withDestBusy(async () => {
+        pbAddOpen[pid] = false;
+        delete pbAddDraft[pid];
+        render(await api('POST', '/api/destinations', { name, url, enabled: false }));
+      });
       toast(name + ' RTMP añadido');
     } catch (e) { toast(e.message, true); }
   }
@@ -1366,32 +1378,38 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   async function doRetry(name) {
-    try { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name)));
-      toast('Reintentando ' + name); }
-    catch (e) { toast(e.message, true); }
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name))); });
+      toast('Reintentando ' + name);
+    } catch (e) { toast(e.message, true); }
   }
 
   async function save(name, url, enabled) {
-    try { render(await api('POST', '/api/destinations', { name, url, enabled }));
-      toast(enabled ? name + ' activado' : name + ' guardado'); }
-    catch (e) { toast(e.message, true); refresh(); }
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled })); });
+      toast(enabled ? name + ' activado' : name + ' guardado');
+    } catch (e) { toast(e.message, true); refresh(); }
   }
   async function del(name) {
     if (!confirm('¿Borrar ' + name + '?')) return;
-    try { render(await api('DELETE', '/api/destinations?name=' + encodeURIComponent(name)));
-      toast(name + ' borrado'); }
-    catch (e) { toast(e.message, true); }
+    try {
+      await withDestBusy(async () => { render(await api('DELETE', '/api/destinations?name=' + encodeURIComponent(name))); });
+      toast(name + ' borrado');
+    } catch (e) { toast(e.message, true); }
   }
   async function addDest() {
     const name = $('#newName').value.trim();
     const url = $('#newUrl').value.trim();
     if (!name) return toast('Pon un nombre', true);
-    try { render(await api('POST', '/api/destinations', { name, url, enabled: false }));
-      $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido'); }
-    catch (e) { toast(e.message, true); }
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled: false })); });
+      $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido');
+    } catch (e) { toast(e.message, true); }
   }
   async function refresh() {
-    if (document.activeElement?.classList.contains('url')) return;
+    if (destBusy) return;
+    const activeTag = document.activeElement?.tagName;
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
     try { render(await api('GET', '/api/state')); } catch (e) { console.error('[refresh]', e); }
   }
 
@@ -1431,23 +1449,33 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
-  // cuando OBS publica (si no, el FLV no existe y daría error).
+  // cuando OBS publica (si no, el FLV no existe y daría error). También se
+  // destruye mientras la ventana está oculta/tapada (Espacios en Mac, minimizada
+  // o detrás de otra app en Windows) — si no, el preview queda congelado en el
+  // frame de cuando se ocultó y al volver parece un delay real de transmisión,
+  // cuando en realidad el relay real (procesos FFmpeg aparte) nunca se detuvo.
   function updatePreview(live) {
     const ph = $('#videoPh');
-    if (live && !player && flvUrl && window.flvjs && flvjs.isSupported()) {
+    const shouldPlay = live && !document.hidden;
+    if (shouldPlay && !player) {
+      if (!(flvUrl && window.flvjs && flvjs.isSupported())) return;
       const video = $('#player');
       player = flvjs.createPlayer({ type: 'flv', url: flvUrl, isLive: true });
       player.attachMediaElement(video);
       player.load();
       player.play().catch(() => {});
       ph.style.display = 'none';
-    } else if (!live && player) {
-      player.destroy();
-      player = null;
-      ph.textContent = 'Esperando señal de tu streaming…';
+    } else if (!shouldPlay) {
+      if (player) { player.destroy(); player = null; }
+      ph.textContent = document.hidden
+        ? 'Vista en pausa (ventana en segundo plano)…'
+        : 'Esperando señal de tu streaming…';
       ph.style.display = 'flex';
     }
   }
+  document.addEventListener('visibilitychange', () => {
+    updatePreview(lastState ? lastState.live : false);
+  });
 
   async function loadConfig() {
     try {
