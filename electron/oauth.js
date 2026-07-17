@@ -3,14 +3,16 @@ import { BrowserWindow, safeStorage, app, session } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { startTwitchChat, stopTwitchChat } from '../src/chat.js';
+import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat } from '../src/chat.js';
 
 const PLATFORMS = {
   twitch: {
     name: 'Twitch',
     authUrl: 'https://id.twitch.tv/oauth2/authorize',
     tokenUrl: 'https://id.twitch.tv/oauth2/token',
-    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key',
+    // channel:manage:broadcast → título global (setStreamTitle). Cambiar el scope invalida
+    // los tokens ya emitidos — quien ya conectó Twitch antes de esto necesita reconectar.
+    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key channel:manage:broadcast',
     pkce: true,
     envKey: 'TWITCH',
     // Twitch solo acepta https:// o http://localhost — usa localhost interceptado por Electron
@@ -27,6 +29,20 @@ const PLATFORMS = {
     // de escritorio" — a diferencia de RFC 8252, exige loopback (http://localhost:PUERTO).
     // Confirmado por error real de Google: "Error 400: invalid_request,
     // redirect_uri=muxlyve://oauth/youtube".
+    useLocalhost: true,
+  },
+  kick: {
+    name: 'Kick',
+    authUrl: 'https://id.kick.com/oauth/authorize',
+    tokenUrl: 'https://id.kick.com/oauth/token',
+    // user:read → perfil. channel:read → slug del canal (necesario para el chat, que va
+    // aparte por Pusher sin usar este token en absoluto — ver src/chat.js).
+    // channel:write → título global (setStreamTitle). Cambiar el scope invalida los tokens
+    // ya emitidos — quien ya conectó Kick antes de esto necesita reconectar.
+    scope: 'user:read channel:read channel:write',
+    pkce: true,
+    // Cliente confidencial pese a usar PKCE — igual que Twitch, exige client_secret.
+    envKey: 'KICK',
     useLocalhost: true,
   },
 };
@@ -112,7 +128,9 @@ async function fetchProfile(platform, accessToken) {
       const user = d.data?.[0];
       const username = user?.display_name || user?.login || null;
       const rtmpUrl = user?.id ? await fetchTwitchRtmpUrl(accessToken, cfg, user.id) : null;
-      return { username, rtmpUrl, login: user?.login || null };
+      // broadcasterId: Helix exige el id numérico como query param para actualizar el
+      // título (channels?broadcaster_id=), a diferencia de Kick que es implícito al token.
+      return { username, rtmpUrl, login: user?.login || null, broadcasterId: user?.id || null };
     }
     if (platform === 'youtube') {
       const r = await fetch(
@@ -124,6 +142,31 @@ async function fetchProfile(platform, accessToken) {
       const username = d.items?.[0]?.snippet?.title || null;
       const rtmpUrl = await fetchYoutubeRtmpUrl(accessToken);
       return { username, rtmpUrl };
+    }
+    if (platform === 'kick') {
+      const ru = await fetch('https://api.kick.com/public/v1/users', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!ru.ok) return { username: null, rtmpUrl: null, login: null };
+      const du = await ru.json();
+      const username = du.data?.[0]?.name || null;
+      // El chat (Pusher, ver src/chat.js) necesita el slug del canal, no el nombre para
+      // mostrar — /public/v1/channels lo trae directo, más confiable que derivarlo del
+      // nombre a mano (el slug no siempre es "nombre en minúsculas con guiones").
+      let login = null;
+      try {
+        const rc = await fetch('https://api.kick.com/public/v1/channels', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (rc.ok) {
+          const dc = await rc.json();
+          login = dc.data?.[0]?.slug || null;
+        }
+      } catch { /* silent */ }
+      // Kick no tiene (todavía) un endpoint público documentado para stream key/RTMP vía
+      // OAuth — a diferencia de Twitch/YouTube, acá no se autocompleta, el usuario la pega
+      // a mano como siempre. El OAuth solo sirve para conectar cuenta + habilitar el chat.
+      return { username, rtmpUrl: null, login };
     }
   } catch { /* silent */ }
   return { username: null, rtmpUrl: null };
@@ -272,7 +315,7 @@ export async function connect(platform, panelPort) {
 
       exchangeCode(platform, code, rUri, pkcePair?.verifier)
         .then(async (tok) => {
-          const { username, rtmpUrl, login } = await fetchProfile(platform, tok.access_token);
+          const { username, rtmpUrl, login, broadcasterId } = await fetchProfile(platform, tok.access_token);
           const all = readTokens();
           all[platform] = {
             access_token: tok.access_token,
@@ -280,9 +323,12 @@ export async function connect(platform, panelPort) {
             expires_at: tok.expires_in ? Date.now() + tok.expires_in * 1000 : null,
             username,
             login: login || null,
+            broadcasterId: broadcasterId || null,
           };
           writeTokens(all);
           if (platform === 'twitch' && login) startTwitchChat(login);
+          if (platform === 'youtube') startYoutubeChat(() => getValidToken('youtube'));
+          if (platform === 'kick' && login) startKickChat(login);
           finish({ ok: true, username, rtmpUrl });
         })
         .catch((err) => finish({ ok: false, error: err.message }));
@@ -300,14 +346,65 @@ export function disconnect(platform) {
   delete all[platform];
   writeTokens(all);
   if (platform === 'twitch') stopTwitchChat();
+  if (platform === 'youtube') stopYoutubeChat();
+  if (platform === 'kick') stopKickChat();
   return { ok: true };
 }
 
-// Reanuda el chat si ya había una sesión de Twitch guardada de antes (la app se cerró y
-// volvió a abrir) — se llama una vez al arrancar, desde main.js.
+// Reanuda el chat si ya había una sesión guardada de antes (la app se cerró y volvió a
+// abrir) — se llama una vez al arrancar, desde main.js.
 export function resumeChatIfConnected() {
-  const login = readTokens().twitch?.login;
-  if (login) startTwitchChat(login);
+  const tokens = readTokens();
+  if (tokens.twitch?.login) startTwitchChat(tokens.twitch.login);
+  if (tokens.youtube) startYoutubeChat(() => getValidToken('youtube'));
+  if (tokens.kick?.login) startKickChat(tokens.kick.login);
+}
+
+async function refreshAccessToken(platform) {
+  const cfg = PLATFORMS[platform];
+  const all = readTokens();
+  const tok = all[platform];
+  if (!tok?.refresh_token) return null;
+  try {
+    const params = new URLSearchParams({
+      client_id: clientId(cfg),
+      refresh_token: tok.refresh_token,
+      grant_type: 'refresh_token',
+    });
+    const secret = clientSecret(cfg);
+    if (secret) params.set('client_secret', secret);
+    const res = await fetch(cfg.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+    if (!res.ok) {
+      console.error(`[oauth] ${cfg.name}: fallo al refrescar token (status ${res.status}).`);
+      return null;
+    }
+    const data = await res.json();
+    all[platform] = {
+      ...tok,
+      access_token: data.access_token,
+      // Google no siempre reenvía un refresh_token nuevo al refrescar — conserva el viejo.
+      refresh_token: data.refresh_token || tok.refresh_token,
+      expires_at: data.expires_in ? Date.now() + data.expires_in * 1000 : null,
+    };
+    writeTokens(all);
+    return all[platform].access_token;
+  } catch (err) {
+    console.error(`[oauth] ${cfg.name}: excepción al refrescar token —`, err.message);
+    return null;
+  }
+}
+
+// Usado por el polling de chat de YouTube — refresca proactivamente si el access_token
+// está por vencer (margen de 2 min) en vez de esperar a que la API devuelva 401.
+export async function getValidToken(platform) {
+  const tok = readTokens()[platform];
+  if (!tok?.access_token) return null;
+  const nearExpiry = tok.expires_at && Date.now() > tok.expires_at - 120000;
+  return nearExpiry ? refreshAccessToken(platform) : tok.access_token;
 }
 
 export function getStatus() {
@@ -322,4 +419,63 @@ export function getStatus() {
 
 export function getToken(platform) {
   return readTokens()[platform] || null;
+}
+
+// Título global — aplica el mismo título a las plataformas conectadas que lo soportan.
+// YouTube queda fuera a propósito: necesita scope 'youtube'/'youtube.force-ssl' (mucho más
+// amplio que el 'youtube.readonly' actual) y tocar eso ahora complicaría la revisión de
+// verificación OAuth de Google que ya está pendiente — se retoma cuando la aprueben.
+const TITLE_SYNC_PLATFORMS = ['twitch', 'kick'];
+
+async function setTwitchTitle(title) {
+  const cfg = PLATFORMS.twitch;
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: 'Falta broadcasterId — reconecta Twitch.' };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: 'Sesión de Twitch inválida — reconecta.' };
+  const res = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${tok.broadcasterId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Client-Id': clientId(cfg),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+async function setKickTitle(title) {
+  const token = await getValidToken('kick');
+  if (!token) return { ok: false, error: 'Sesión de Kick inválida — reconecta.' };
+  const res = await fetch('https://api.kick.com/public/v1/channels', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stream_title: title }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Kick ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+// Aplica el título a todas las plataformas conectadas que lo soportan — devuelve un
+// resultado por plataforma para que la UI muestre exactamente cuál falló, si alguna falla.
+export async function setStreamTitle(title) {
+  const tokens = readTokens();
+  const results = {};
+  for (const platform of TITLE_SYNC_PLATFORMS) {
+    if (!tokens[platform]) continue; // no conectado — se omite en silencio, no es error
+    try {
+      results[platform] = platform === 'twitch' ? await setTwitchTitle(title) : await setKickTitle(title);
+    } catch (err) {
+      results[platform] = { ok: false, error: err.message };
+    }
+  }
+  return results;
 }

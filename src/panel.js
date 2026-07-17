@@ -714,6 +714,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
           </div>
         </div>
+        <div class="conn">
+          <div class="field">
+            <label>Título del stream (Twitch + Kick)</label>
+            <div class="copyrow">
+              <input type="text" id="titleInput" placeholder="¿Qué vas a transmitir hoy?">
+              <button class="browse-btn" onclick="applyStreamTitle(this)">Aplicar</button>
+            </div>
+          </div>
+        </div>
         <div class="conn pb-block open" id="connInfoBlock">
           <div class="pb-head" onclick="toggleConnInfo()">
             <i class="pb-chevron">&#9654;</i>
@@ -970,7 +979,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   const AUTH_PLATFORMS = [
     { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
     { id: 'youtube', name: 'YouTube', color: '#ff0000' },
-    { id: 'kick',    name: 'Kick',    color: '#53fc18', soon: true },
+    { id: 'kick',    name: 'Kick',    color: '#53fc18' },
     { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
   ];
   // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
@@ -1406,10 +1415,36 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido');
     } catch (e) { toast(e.message, true); }
   }
+  async function applyStreamTitle(btn) {
+    const title = $('#titleInput').value.trim();
+    if (!title) return toast('Escribe un título primero', true);
+    if (!window.msOAuth?.setTitle) return toast('No disponible en esta versión.', true);
+    if (btn) btn.disabled = true;
+    try {
+      const results = await window.msOAuth.setTitle(title);
+      const entries = Object.entries(results || {});
+      if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
+      const failed = entries.filter(([, r]) => !r.ok);
+      if (!failed.length) {
+        toast('Título actualizado en ' + entries.map(([p]) => p).join(' + '));
+      } else {
+        toast('Falló en ' + failed.map(([p]) => p).join(', ') + ' — revisa la conexión.', true);
+      }
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function refresh() {
     if (destBusy) return;
     const activeTag = document.activeElement?.tagName;
     if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+    // El ojito de "mostrar clave" solo cambia el type=password/text del <input> existente —
+    // pero el poll reconstruye esas tarjetas desde cero (innerHTML) cada 2s, y el input nuevo
+    // siempre nace en password. Si hay alguno revelado ahora mismo, no reconstruyas todavía.
+    if (document.querySelector('.url[type="text"], .pb-url[type="text"]')) return;
     try { render(await api('GET', '/api/state')); } catch (e) { console.error('[refresh]', e); }
   }
 

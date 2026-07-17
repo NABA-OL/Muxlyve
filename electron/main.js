@@ -11,7 +11,7 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
-import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected } from './oauth.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle } from './oauth.js';
 import { initUpdater, checkForUpdatesManually } from './updater.js';
 import { initLogBuffer, getRecentLog } from './logbuffer.js';
 
@@ -261,6 +261,7 @@ ipcMain.handle('license:status', () => refreshLicenseStatus());
 ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
 ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
+ipcMain.handle('title:set', (_, title) => setStreamTitle(title));
 
 function loginItemState() {
   // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el

@@ -28,7 +28,10 @@ const env = loadEnv();
 const keys = ['TWITCH_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
 // TWITCH_CLIENT_SECRET es opcional: solo aplica si la app de Twitch es tipo "Confidential"
 // (tiene Client Secret generado). Apps "Public" funcionan con PKCE puro, sin secret.
-const optionalKeys = ['TWITCH_CLIENT_SECRET'];
+// KICK_CLIENT_ID/SECRET opcionales por ahora — Kick recién se está integrando, no todas
+// las máquinas de build tienen la app de Kick registrada todavía. Sin ellos, el botón
+// "Conectar" de Kick simplemente falla con un mensaje claro en vez de romper el build.
+const optionalKeys = ['TWITCH_CLIENT_SECRET', 'KICK_CLIENT_ID', 'KICK_CLIENT_SECRET'];
 const missing = keys.filter((k) => !env[k]);
 if (missing.length) {
   console.error(`[oauth-credentials] ERROR: falta en .env: ${missing.join(', ')}`);
