@@ -284,6 +284,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
     --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
     --header-h: 68px;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   }
   [data-theme="light"] {
     --bg: #f0f2f5; --surface: #ffffff; --surface-2: #e8eaef; --border: #d0d4de;
@@ -315,7 +317,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .wm-ve { color: var(--accent); }
   .wm-li {
     display: inline-block; overflow: hidden; max-width: 0; opacity: 0;
-    transition: max-width .7s cubic-bezier(.4,0,.2,1), opacity .55s;
+    transition: max-width .7s cubic-bezier(.4,0,.2,1), opacity .55s var(--ease-out);
     vertical-align: bottom;
   }
   .wm-li { color: var(--accent); }
@@ -324,8 +326,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
   .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
-    box-shadow: 0 0 0 0 transparent; transition: .3s; }
-  .dot.on { background: var(--live); box-shadow: 0 0 0 4px rgba(46,160,67,.18); }
+    box-shadow: 0 0 0 0 transparent; transition: background .3s var(--ease-out), box-shadow .3s var(--ease-out); }
+  .dot.on {
+    background: var(--live);
+    box-shadow: 0 0 0 4px rgba(46,160,67,.18);
+    animation: live-pulse .5s var(--ease-out);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dot.on { animation: none; }
+  }
+  @keyframes live-pulse {
+    0%   { transform: scale(1); }
+    60%  { transform: scale(1.35); }
+    100% { transform: scale(1); }
+  }
   .header-actions { display: flex; align-items: center; gap: .3rem; }
 
   /* ── Canvas fondo ── */
@@ -361,28 +375,53 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
   .switch .thumb {
     position: absolute; inset: 0; background: var(--off); border-radius: 12px;
-    cursor: pointer; transition: background .2s;
+    cursor: pointer; transition: background .2s var(--ease-out);
   }
   .switch .thumb::before {
     content: ''; position: absolute; width: 18px; height: 18px;
     left: 3px; top: 3px; background: #fff; border-radius: 50%;
-    transition: transform .2s;
+    transition: transform .2s var(--ease-out);
   }
   .switch input:checked ~ .thumb { background: var(--accent); }
   .switch input:checked ~ .thumb::before { transform: translateX(18px); }
 
   /* ── Modal de Preferencias ── */
   .prefs-overlay {
-    display: none; position: fixed; inset: 0;
-    background: rgba(0,0,0,.5); z-index: 50;
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0);
+    z-index: 50;
     align-items: center; justify-content: center;
-    backdrop-filter: blur(3px);
+    backdrop-filter: blur(0px);
+    opacity: 0;
+    transition:
+      opacity 180ms var(--ease-out),
+      background 180ms var(--ease-out),
+      backdrop-filter 180ms var(--ease-out),
+      display 180ms allow-discrete;
   }
-  .prefs-overlay.open { display: flex; }
+  .prefs-overlay.open {
+    display: flex;
+    opacity: 1;
+    background: rgba(0,0,0,.5);
+    backdrop-filter: blur(3px);
+    @starting-style {
+      opacity: 0;
+      background: rgba(0,0,0,0);
+      backdrop-filter: blur(0px);
+    }
+  }
   .prefs-modal {
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
     padding: 1.5rem; width: 420px; max-width: 90vw;
     box-shadow: 0 24px 64px rgba(0,0,0,.5);
+    transform: scale(.96);
+    opacity: 0;
+    transition: transform 180ms var(--ease-out), opacity 180ms var(--ease-out);
+  }
+  .prefs-overlay.open .prefs-modal {
+    transform: scale(1);
+    opacity: 1;
   }
   .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
   .prefs-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
@@ -399,11 +438,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
   .sys-toggle input { opacity: 0; width: 0; height: 0; }
   .sys-toggle-track { position: absolute; inset: 0; background: var(--surface-2);
-    border-radius: 20px; border: 1px solid var(--border); transition: background .2s; cursor: pointer; }
+    border-radius: 20px; border: 1px solid var(--border); transition: background .2s var(--ease-out); cursor: pointer; }
   .sys-toggle input:checked + .sys-toggle-track { background: var(--accent); border-color: var(--accent); }
   .sys-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px;
     width: 14px; height: 14px; border-radius: 50%; background: #fff;
-    transition: transform .2s; }
+    transition: transform .2s var(--ease-out); }
   .sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(16px); }
 
   /* ── Modal licencia ── */
@@ -550,11 +589,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     border-radius: 12px; padding: 1rem 1.2rem; margin-top: .5rem; }
 
   /* ── Toast ── */
-  #msg { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+  #msg { position: fixed; bottom: 1rem; left: 50%;
+    transform: translateX(-50%) translateY(6px);
     background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    padding: .6rem 1rem; border-radius: 8px; opacity: 0; transition: .3s; pointer-events: none;
+    padding: .6rem 1rem; border-radius: 8px; opacity: 0;
+    transition: opacity .3s var(--ease-out), transform .3s var(--ease-out); pointer-events: none;
     white-space: nowrap; z-index: 10; }
-  #msg.show { opacity: 1; }
+  #msg.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #msg.err { border-color: var(--danger); color: var(--danger); }
 
   /* ── Cuentas OAuth ── */
@@ -577,13 +618,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   /* ── Platform blocks ── */
   .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; }
   .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
-    cursor: pointer; user-select: none; background: var(--surface); transition: background .15s; }
+    cursor: pointer; user-select: none; background: var(--surface); transition: background .15s var(--ease-out); }
   .pb-head:hover { background: var(--surface-2); }
-  .pb-chevron { color: var(--muted); transition: transform .2s; flex-shrink: 0;
+  .pb-chevron { color: var(--muted); transition: transform .2s var(--ease-out); flex-shrink: 0;
     font-style: normal; font-size: .6rem; display: inline-block; }
   .pb-block.open .pb-chevron { transform: rotate(90deg); }
-  .pb-body { display: none; border-top: 1px solid var(--border); padding: .65rem .9rem; }
-  .pb-block.open .pb-body { display: block; }
+  .pb-body {
+    display: grid;
+    grid-template-rows: 0fr;
+    border-top: 0px solid var(--border);
+    transition: grid-template-rows .2s var(--ease-out), border-top-width .2s var(--ease-out);
+  }
+  .pb-block.open .pb-body { grid-template-rows: 1fr; border-top-width: 1px; }
+  .pb-body-inner { overflow: hidden; padding: 0 .9rem; }
+  .pb-block.open .pb-body-inner { padding: .65rem .9rem; }
   .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
   .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
     max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -666,6 +714,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
           </div>
         </div>
+        <div class="conn">
+          <div class="field">
+            <label>Título del stream (Twitch + Kick)</label>
+            <div class="copyrow">
+              <input type="text" id="titleInput" placeholder="¿Qué vas a transmitir hoy?">
+              <button class="browse-btn" onclick="applyStreamTitle(this)">Aplicar</button>
+            </div>
+          </div>
+        </div>
         <div class="conn pb-block open" id="connInfoBlock">
           <div class="pb-head" onclick="toggleConnInfo()">
             <i class="pb-chevron">&#9654;</i>
@@ -677,7 +734,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             </svg>
             <span class="pb-head-name">Información de conexión</span>
           </div>
-          <div class="pb-body">
+          <div class="pb-body"><div class="pb-body-inner">
             <div class="field">
               <label>Servidor RTMP (en tu software de streaming)</label>
               <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
@@ -698,7 +755,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                 <button onclick="copy('pubRtmpUrl')">copiar</button>
               </div>
             </div>
-          </div>
+          </div></div>
         </div>
         <!-- Grabador de clips -->
         <div class="rec-section">
@@ -922,7 +979,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   const AUTH_PLATFORMS = [
     { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
     { id: 'youtube', name: 'YouTube', color: '#ff0000' },
-    { id: 'kick',    name: 'Kick',    color: '#53fc18', soon: true },
+    { id: 'kick',    name: 'Kick',    color: '#53fc18' },
     { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
   ];
   // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
@@ -1184,7 +1241,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         '<span class="pb-head-name">' + p.name + '</span>' +
         oauthHtml +
         '</div>' +
-        '<div class="pb-body">' + bodyHtml + '</div>';
+        '<div class="pb-body"><div class="pb-body-inner">' + bodyHtml + '</div></div>';
 
       if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
       if (pbAddDraft[p.id]) {
@@ -1290,15 +1347,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (inp) inp.value = '';
   }
 
+  // Evita que el poll de refresh() (cada 2s) pise una mutación en curso o
+  // los campos que el usuario está llenando — root cause de que el formulario
+  // "añadir servidor" se borrara solo, clics se perdieran, o un borrado se
+  // revirtiera por una respuesta de refresh() llegando después.
+  let destBusy = false;
+  async function withDestBusy(fn) {
+    destBusy = true;
+    try { await fn(); } finally { destBusy = false; }
+  }
+
   async function addPlatformRtmp(pid) {
     const inp = $('#pb-new-url-' + pid);
     const url = inp ? inp.value.trim() : '';
     if (!url) { toast('Pon una URL', true); return; }
     const name = (AUTH_PLATFORMS.find(p => p.id === pid) || {}).name || pid;
     try {
-      pbAddOpen[pid] = false;
-      delete pbAddDraft[pid];
-      render(await api('POST', '/api/destinations', { name, url, enabled: false }));
+      await withDestBusy(async () => {
+        pbAddOpen[pid] = false;
+        delete pbAddDraft[pid];
+        render(await api('POST', '/api/destinations', { name, url, enabled: false }));
+      });
       toast(name + ' RTMP añadido');
     } catch (e) { toast(e.message, true); }
   }
@@ -1318,32 +1387,64 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   async function doRetry(name) {
-    try { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name)));
-      toast('Reintentando ' + name); }
-    catch (e) { toast(e.message, true); }
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name))); });
+      toast('Reintentando ' + name);
+    } catch (e) { toast(e.message, true); }
   }
 
   async function save(name, url, enabled) {
-    try { render(await api('POST', '/api/destinations', { name, url, enabled }));
-      toast(enabled ? name + ' activado' : name + ' guardado'); }
-    catch (e) { toast(e.message, true); refresh(); }
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled })); });
+      toast(enabled ? name + ' activado' : name + ' guardado');
+    } catch (e) { toast(e.message, true); refresh(); }
   }
   async function del(name) {
     if (!confirm('¿Borrar ' + name + '?')) return;
-    try { render(await api('DELETE', '/api/destinations?name=' + encodeURIComponent(name)));
-      toast(name + ' borrado'); }
-    catch (e) { toast(e.message, true); }
+    try {
+      await withDestBusy(async () => { render(await api('DELETE', '/api/destinations?name=' + encodeURIComponent(name))); });
+      toast(name + ' borrado');
+    } catch (e) { toast(e.message, true); }
   }
   async function addDest() {
     const name = $('#newName').value.trim();
     const url = $('#newUrl').value.trim();
     if (!name) return toast('Pon un nombre', true);
-    try { render(await api('POST', '/api/destinations', { name, url, enabled: false }));
-      $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido'); }
-    catch (e) { toast(e.message, true); }
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled: false })); });
+      $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido');
+    } catch (e) { toast(e.message, true); }
   }
+  async function applyStreamTitle(btn) {
+    const title = $('#titleInput').value.trim();
+    if (!title) return toast('Escribe un título primero', true);
+    if (!window.msOAuth?.setTitle) return toast('No disponible en esta versión.', true);
+    if (btn) btn.disabled = true;
+    try {
+      const results = await window.msOAuth.setTitle(title);
+      const entries = Object.entries(results || {});
+      if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
+      const failed = entries.filter(([, r]) => !r.ok);
+      if (!failed.length) {
+        toast('Título actualizado en ' + entries.map(([p]) => p).join(' + '));
+      } else {
+        toast('Falló en ' + failed.map(([p]) => p).join(', ') + ' — revisa la conexión.', true);
+      }
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function refresh() {
-    if (document.activeElement?.classList.contains('url')) return;
+    if (destBusy) return;
+    const activeTag = document.activeElement?.tagName;
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+    // El ojito de "mostrar clave" solo cambia el type=password/text del <input> existente —
+    // pero el poll reconstruye esas tarjetas desde cero (innerHTML) cada 2s, y el input nuevo
+    // siempre nace en password. Si hay alguno revelado ahora mismo, no reconstruyas todavía.
+    if (document.querySelector('.url[type="text"], .pb-url[type="text"]')) return;
     try { render(await api('GET', '/api/state')); } catch (e) { console.error('[refresh]', e); }
   }
 
@@ -1383,23 +1484,33 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
-  // cuando OBS publica (si no, el FLV no existe y daría error).
+  // cuando OBS publica (si no, el FLV no existe y daría error). También se
+  // destruye mientras la ventana está oculta/tapada (Espacios en Mac, minimizada
+  // o detrás de otra app en Windows) — si no, el preview queda congelado en el
+  // frame de cuando se ocultó y al volver parece un delay real de transmisión,
+  // cuando en realidad el relay real (procesos FFmpeg aparte) nunca se detuvo.
   function updatePreview(live) {
     const ph = $('#videoPh');
-    if (live && !player && flvUrl && window.flvjs && flvjs.isSupported()) {
+    const shouldPlay = live && !document.hidden;
+    if (shouldPlay && !player) {
+      if (!(flvUrl && window.flvjs && flvjs.isSupported())) return;
       const video = $('#player');
       player = flvjs.createPlayer({ type: 'flv', url: flvUrl, isLive: true });
       player.attachMediaElement(video);
       player.load();
       player.play().catch(() => {});
       ph.style.display = 'none';
-    } else if (!live && player) {
-      player.destroy();
-      player = null;
-      ph.textContent = 'Esperando señal de tu streaming…';
+    } else if (!shouldPlay) {
+      if (player) { player.destroy(); player = null; }
+      ph.textContent = document.hidden
+        ? 'Vista en pausa (ventana en segundo plano)…'
+        : 'Esperando señal de tu streaming…';
       ph.style.display = 'flex';
     }
   }
+  document.addEventListener('visibilitychange', () => {
+    updatePreview(lastState ? lastState.live : false);
+  });
 
   async function loadConfig() {
     try {
@@ -1469,6 +1580,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const ctx = canvas.getContext('2d');
     const N = 18, D = 170, FPS = 15, MS = 1000 / FPS;
     let nodes = [], last = 0;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     function resize() {
       canvas.width = innerWidth; canvas.height = innerHeight;
       nodes = Array.from({length: N}, () => ({
@@ -1477,7 +1589,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       }));
     }
     function draw(ts) {
-      requestAnimationFrame(draw);
+      if (!reduceMotion) requestAnimationFrame(draw);
       if (ts - last < MS) return;
       last = ts;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1503,7 +1615,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     }
     resize();
     window.addEventListener('resize', resize);
-    requestAnimationFrame(draw);
+    if (reduceMotion) draw(0); else requestAnimationFrame(draw);
   })();
 
   // ── Tema claro/oscuro ──
@@ -1809,6 +1921,9 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     animation: twinkle 3.5s ease-in-out infinite; }
   @keyframes twinkle {
     0%, 100% { opacity: .15; } 50% { opacity: .9; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .star { animation: none; opacity: .5; }
   }
   #dragbar { position: fixed; top: 0; left: 0; right: 0; height: 40px;
     -webkit-app-region: drag; z-index: 2; }

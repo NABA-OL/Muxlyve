@@ -11,7 +11,7 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
-import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected } from './oauth.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle } from './oauth.js';
 import { initUpdater, checkForUpdatesManually } from './updater.js';
 import { initLogBuffer, getRecentLog } from './logbuffer.js';
 
@@ -25,9 +25,14 @@ const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
 // macOS: ícono monocromo + setTemplateImage — el sistema lo pinta blanco/negro según el
 // fondo de la barra de menú, igual que WiFi/Bluetooth/batería. Windows no tiene ese
 // convenio (sus íconos de bandeja siempre van a color), así que ahí se usa el logo real.
+// OJO: usa src/public, no build/ — build/ es "buildResources" para electron-builder
+// (íconos que se embeben en el .exe/.app al compilar) y NO se empaqueta como recurso
+// en tiempo de ejecución. Leerlo desde ahí con fs funciona en dev (carpeta real en disco)
+// pero falla en silencio en la app empaquetada (catch de abajo → nativeImage vacío →
+// ícono de bandeja invisible aunque el menú sigue funcionando). src/public sí se empaqueta.
 const TRAY_ICON_PATH = path.join(__dirname, process.platform === 'darwin'
-  ? '../build/tray-icon-template.png'
-  : '../build/icon-muxlyve.png');
+  ? '../src/public/tray-icon-template.png'
+  : '../src/public/tray-icon-win.png');
 const PRELOAD       = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
 const SPLASH_HTML   = path.join(__dirname, 'splash.html');
@@ -256,6 +261,7 @@ ipcMain.handle('license:status', () => refreshLicenseStatus());
 ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
 ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
+ipcMain.handle('title:set', (_, title) => setStreamTitle(title));
 
 function loginItemState() {
   // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el

@@ -12,6 +12,10 @@
 !define MUI_HEADERIMAGE_BITMAP "${PROJECT_DIR}\build\installer-header.bmp"
 !define MUI_HEADERIMAGE_RIGHT
 
+!macro customWelcomePage
+  !insertmacro MUI_PAGE_WELCOME
+!macroend
+
 !macro customInit
   SetRegView 64
 !macroend

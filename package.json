@@ -1,6 +1,6 @@
 {
   "name": "muxlyve",
-  "version": "0.3.1",
+  "version": "0.3.5",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
   "author": "BLACKRAKEN SOLUTIONS <nabaol.dev@gmail.com>",
   "type": "module",
@@ -13,9 +13,9 @@
     "test:unit": "node --test \"test/**/*.test.mjs\"",
     "test": "npm run test:unit && bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
-    "predist": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs",
+    "predist": "node scripts/generate-installer-bmps.mjs && node -r dotenv/config scripts/generate-oauth-credentials.mjs",
     "dist": "node -r dotenv/config node_modules/electron-builder/cli.js --win",
-    "predist:publish": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/make-installer-bitmaps.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
+    "predist:publish": "node scripts/generate-installer-bmps.mjs && node -r dotenv/config scripts/generate-oauth-credentials.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
     "dist:publish": "node -r dotenv/config node_modules/electron-builder/cli.js --publish always",
     "postdist:publish": "node -r dotenv/config scripts/cleanup-orphan-releases.mjs",
     "dist:mac": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
@@ -78,7 +78,7 @@
       "menuCategory": "Muxlyve",
       "shortcutName": "Muxlyve",
       "installerIcon": "build/icon-muxlyve.ico",
-      "uninstallerIcon": "build/icon-muxlyve.ico",
+      "uninstallerIcon": "build/unicon-muxlyve.ico",
       "installerHeaderIcon": "build/icon-muxlyve.ico",
       "installerSidebar": "build/installer-sidebar.bmp",
       "uninstallerSidebar": "build/installer-sidebar.bmp",

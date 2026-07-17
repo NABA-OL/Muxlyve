@@ -16,6 +16,7 @@
       --accent: #7c5cff;
       --danger: #f85149;
       --ok: #2ea043;
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
     }
 
     * {
@@ -125,7 +126,7 @@
       font-size: .9rem;
       font-weight: 600;
       cursor: pointer;
-      transition: opacity .15s, transform .1s;
+      transition: opacity .15s var(--ease-out), transform .1s var(--ease-out);
     }
 
     button:hover:not(:disabled) {
@@ -133,7 +134,7 @@
     }
 
     button:active:not(:disabled) {
-      transform: scale(.99);
+      transform: scale(.97);
     }
 
     button:disabled {
