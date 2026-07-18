@@ -25,4 +25,6 @@ contextBridge.exposeInMainWorld('msApp', {
   openChatWindow: (theme) => ipcRenderer.invoke('chat:open-window', theme),
   getCloseToTray: () => ipcRenderer.invoke('app:get-close-to-tray'),
   setCloseToTray: (val) => ipcRenderer.invoke('app:set-close-to-tray', val),
+  getLanguage: () => ipcRenderer.invoke('app:get-language'),
+  setLanguage: (lang) => ipcRenderer.invoke('app:set-language', lang),
 });

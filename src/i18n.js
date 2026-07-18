@@ -76,5 +76,75 @@ export const tMap = {
   'Falta el parámetro name.': 'Missing name parameter.',
   'No hay transmisión activa.': 'No active stream.',
   'Selector solo disponible en la app de escritorio.': 'Selector only available in the desktop app.',
-  'No encontrado.': 'Not found.'
+  'Solo disponible en la app de escritorio': 'Only available in the desktop app',
+  'No disponible': 'Not available',
+  'No encontrado.': 'Not found.',
+
+  // ── Preferencias ──
+  'Preferencias': 'Settings',
+  'Iniciar con el sistema': 'Start with the system',
+  'Iniciar minimizado en la bandeja': 'Start minimized in the tray',
+  'Minimizar a la bandeja al cerrar': 'Minimize to tray on close',
+  'Buscar actualizaciones': 'Check for updates',
+  'Buscando…': 'Checking…',
+  'Buscar': 'Check',
+  'Grabador de clips': 'Clip recorder',
+  'Carpeta de destino de clips': 'Clips destination folder',
+  'Predeterminada del sistema': 'System default',
+  'Elegir carpeta': 'Choose folder',
+  'Soporte': 'Support',
+  'Reportar un problema': 'Report an issue',
+  'Describe brevemente el problema…': 'Briefly describe the issue…',
+  'Enviar reporte': 'Send report',
+  'Enviando…': 'Sending…',
+  'Reportar': 'Report',
+
+  // ── Licencia / Acerca de ──
+  'Licencia': 'License',
+  'Correo': 'Email',
+  'Se renueva': 'Renews',
+  'Activado': 'Activated',
+  'Acerca de Muxlyve': 'About Muxlyve',
+  'Liberar este equipo': 'Release this device',
+  'Acerca de': 'About',
+  'Desarrollado por': 'Developed by',
+  'Mensual': 'Monthly',
+  'Anual': 'Annual',
+
+  // ── Header / navegación ──
+  'Cambiar tema': 'Change theme',
+  'Conexiones': 'Connections',
+  'Nivel de audio (L / R)': 'Audio level (L / R)',
+
+  // ── Chat ──
+  'Chat en vivo': 'Live chat',
+  'Moderación (Twitch)': 'Moderation (Twitch)',
+  'Solo emotes': 'Emote only',
+  'Solo suscriptores': 'Subscribers only',
+  'Modo lento': 'Slow mode',
+  'Segundos': 'Seconds',
+  'Abrir en ventana aparte': 'Open in separate window',
+  'Escribir en el chat': 'Type in chat',
+  'Enviar a todas las plataformas': 'Send to all platforms',
+  'Vos (streamer)': 'You (streamer)',
+  'Fijar este mensaje en Twitch': 'Pin this message on Twitch',
+  'Aplicando…': 'Applying…',
+  'Aplicado ✓': 'Applied ✓',
+  'Error de conexión.': 'Connection error.',
+
+  // ── Conexión / destinos ──
+  'Servidor RTMP (en tu software de streaming)': 'RTMP server (in your streaming software)',
+  'Desde fuera de tu red (requiere port forwarding en tu router)': 'From outside your network (requires port forwarding on your router)',
+  'copiar': 'copy',
+  'Mostrar/ocultar': 'Show/hide',
+  'Nombre': 'Name',
+
+  // ── Estado de destinos (píldoras) ──
+  '⚠ rezagado': '⚠ lagging',
+  '● reenviando': '● relaying',
+  '⟳ conectando…': '⟳ connecting…',
+  '⟳ reconectando… intento ': '⟳ reconnecting… attempt ',
+  'activo': 'active',
+  'apagado': 'off',
+  'comprobando…': 'checking…'
 };

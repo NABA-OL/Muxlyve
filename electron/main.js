@@ -153,6 +153,15 @@ function createWindow() {
 }
 
 // ── Bandeja del sistema ──────────────────────────────────────────────────────
+// Aparte de createTray() para poder reconstruir el menú al cambiar de idioma en caliente
+// (setContextMenu de nuevo) sin tener que recrear el ícono de la bandeja entero.
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
+    { label: APP_LANG === 'es' ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
+    { type: 'separator' },
+    { label: APP_LANG === 'es' ? 'Salir' : 'Quit', click: () => { app.exit(0); } },
+  ]);
+}
 function createTray() {
   if (tray) return;
   // createFromPath() a veces falla en silencio leyendo rutas dentro del .asar en Windows
@@ -169,11 +178,7 @@ function createTray() {
   if (process.platform === 'darwin' && !icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Muxlyve');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: APP_LANG === 'es' ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
-    { type: 'separator' },
-    { label: APP_LANG === 'es' ? 'Salir' : 'Quit', click: () => { app.exit(0); } },
-  ]));
+  tray.setContextMenu(buildTrayMenu());
   tray.on('click', () => {
     if (!win) return;
     if (win.isVisible()) win.hide(); else { win.show(); win.focus(); }
@@ -211,7 +216,7 @@ function showActivationWindow() {
       resizable: false,
       center: true,
       backgroundColor: '#0d1117',
-      title: 'Muxlyve — Activar licencia',
+      title: APP_LANG === 'es' ? 'Muxlyve — Activar licencia' : 'Muxlyve — Activate license',
       icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
       autoHideMenuBar: true,
       webPreferences: {
@@ -224,7 +229,7 @@ function showActivationWindow() {
       shell.openExternal(url);
       return { action: 'deny' };
     });
-    activationWin.loadFile(ACTIVATE_HTML);
+    activationWin.loadFile(ACTIVATE_HTML, { query: { lang: APP_LANG } });
     activationWin.on('closed', () => {
       activationWin = null;
       // Cerrado sin activar → salir de la app.
@@ -305,6 +310,20 @@ ipcMain.handle('app:set-titlebar-theme', (_, isDark) => {
 });
 ipcMain.handle('chat:open-window', (_, theme) => { openChatWindow(theme); return true; });
 
+ipcMain.handle('app:get-language', () => APP_LANG);
+ipcMain.handle('app:set-language', (_, lang) => {
+  APP_LANG = lang === 'es' ? 'es' : 'en';
+  process.env.APP_LANG = APP_LANG;
+  prefs.language = APP_LANG;
+  savePrefs(prefs);
+  // El panel se traduce server-side por request — recargar basta, no hace falta reiniciar
+  // toda la app. El menú de bandeja sí hay que repintarlo a mano (no vive en un webContents).
+  if (tray) tray.setContextMenu(buildTrayMenu());
+  if (win) win.reload();
+  if (chatWin && !chatWin.isDestroyed()) chatWin.reload();
+  return APP_LANG;
+});
+
 ipcMain.handle('app:get-close-to-tray', () => !!prefs.closeToTray);
 ipcMain.handle('app:set-close-to-tray', (_, val) => {
   prefs.closeToTray = !!val;
@@ -343,8 +362,10 @@ ipcMain.handle('report:send', async (_, description) => {
 app.setAsDefaultProtocolClient('muxlyve');
 
 app.whenReady().then(async () => {
+  // El usuario puede elegir idioma a mano (Preferencias / modal de licencia) — eso manda
+  // sobre el idioma del sistema. Sin preferencia guardada, se detecta por primera vez.
   const locale = app.getLocale();
-  APP_LANG = locale.startsWith('es') ? 'es' : 'en';
+  APP_LANG = prefs.language || (locale.startsWith('es') ? 'es' : 'en');
   process.env.APP_LANG = APP_LANG;
 
   // Carga .env desde userData sin dependencias externas.

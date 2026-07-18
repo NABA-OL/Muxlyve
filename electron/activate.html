@@ -173,10 +173,45 @@
     .sep {
       margin: .3rem 0;
     }
+
+    body {
+      position: relative;
+    }
+
+    .lang-switch {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+    }
+
+    .lang-btn {
+      width: auto;
+      margin: 0;
+      padding: .28rem .55rem;
+      font-size: .68rem;
+      font-weight: 600;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+    }
+
+    .lang-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
   </style>
 </head>
 
 <body>
+  <div class="lang-switch">
+    <button type="button" class="lang-btn" data-lang="es" onclick="switchLang('es')">ES</button>
+    <button type="button" class="lang-btn" data-lang="en" onclick="switchLang('en')">EN</button>
+  </div>
   <div class="logo">
     <img src="../build/icon-muxlyve.png" alt="Muxlyve">
     <span class="logo-name">Muxlyve</span>
@@ -246,7 +281,25 @@
         errUnexpected: 'Unexpected error. Try again.'
       }
     };
-    const i18n = t[lang] || t.en;
+    let currentLang = (lang === 'es' ? 'es' : 'en');
+    let i18n = t[currentLang];
+
+    function updateLangButtons() {
+      document.querySelectorAll('.lang-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.lang === currentLang);
+      });
+    }
+
+    function switchLang(newLang) {
+      if (newLang === currentLang) return;
+      currentLang = newLang;
+      i18n = t[currentLang];
+      applyTranslations();
+      updateLangButtons();
+      // Persiste la elección para que la app principal abra en el mismo idioma después de
+      // activar — msApp viene del mismo preload.cjs que usa la ventana principal.
+      window.msApp?.setLanguage?.(currentLang).catch(() => {});
+    }
 
     function applyTranslations() {
       document.title = i18n.title;
@@ -269,6 +322,7 @@
     // Al cargar: si la suscripción está cancelada, reemplaza el formulario.
     window.addEventListener('DOMContentLoaded', async () => {
       applyTranslations();
+      updateLangButtons();
       try {
         const info = await window.msLicense?.getInfo();
         if (info?.status === 'cancelled') {

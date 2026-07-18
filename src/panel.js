@@ -11,11 +11,17 @@ import { getViewerCounts } from './viewers.js';
 import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend } from './chatmod.js';
 import { tMap } from './i18n.js';
 
+// Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
+// una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
+// matchear y queda mezclada en dos idiomas. Ordenar así lo evita sin depender de mantener
+// tMap en un orden particular a mano — se auto-corrige aunque se agreguen keys nuevas.
+const TMAP_KEYS_BY_LENGTH = Object.keys(tMap).sort((a, b) => b.length - a.length);
+
 function translateHtml(html) {
   if (process.env.APP_LANG === 'es' || !process.env.APP_LANG) return html;
   let translated = html;
-  for (const [es, en] of Object.entries(tMap)) {
-    translated = translated.split(es).join(en);
+  for (const es of TMAP_KEYS_BY_LENGTH) {
+    translated = translated.split(es).join(tMap[es]);
   }
   return translated;
 }
@@ -174,7 +180,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/chat-send') {
     const body = await readBody(req);
     const text = String(body.text || '').trim().slice(0, 500);
-    if (!text) return json(res, 400, { error: 'Mensaje vacío.' });
+    if (!text) return json(res, 400, { error: t('Mensaje vacío.') });
     const result = await sendChatMessageBackend(text);
     return json(res, 200, result);
   }
@@ -183,7 +189,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/chat-pin') {
     const body = await readBody(req);
     const messageId = String(body.messageId || '').trim();
-    if (!messageId) return json(res, 400, { error: 'Falta el id del mensaje.' });
+    if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
     const result = await pinChatMessageBackend(messageId);
     return json(res, 200, result);
   }
@@ -210,7 +216,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/retry') {
     const name = url.searchParams.get('name');
     const dest = loadAll().find((d) => d.name === name);
-    if (!dest) return json(res, 404, { error: 'Destino no encontrado.' });
+    if (!dest) return json(res, 404, { error: t('Destino no encontrado.') });
     retry(dest);
     return json(res, 200, buildState());
   }
@@ -218,7 +224,7 @@ async function handleApi(req, res, url) {
   // DELETE /api/destinations?name=X
   if (req.method === 'DELETE' && url.pathname === '/api/destinations') {
     const name = url.searchParams.get('name');
-    if (!name) return json(res, 400, { error: 'Falta el parámetro name.' });
+    if (!name) return json(res, 400, { error: t('Falta el parámetro name.') });
     stopByName(name);
     saveAll(loadAll().filter((d) => d.name !== name));
     return json(res, 200, buildState());
@@ -229,7 +235,7 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
-    if (!isLive()) return json(res, 409, { error: 'No hay transmisión activa.' });
+    if (!isLive()) return json(res, 409, { error: t('No hay transmisión activa.') });
     startRecording(dur);
     return json(res, 200, buildState());
   }
@@ -262,11 +268,11 @@ async function handleApi(req, res, url) {
       const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de clips' });
       return json(res, 200, { path: result.canceled ? null : result.filePaths[0] });
     } catch {
-      return json(res, 501, { error: 'Selector solo disponible en la app de escritorio.' });
+      return json(res, 501, { error: t('Selector solo disponible en la app de escritorio.') });
     }
   }
 
-  return json(res, 404, { error: 'No encontrado.' });
+  return json(res, 404, { error: t('No encontrado.') });
 }
 
 export function startPanel(port, config = {}) {
@@ -311,7 +317,7 @@ export function startPanel(port, config = {}) {
       res.writeHead(404).end('No encontrado');
     } catch (err) {
       console.error('[panel] error:', err.message);
-      json(res, 500, { error: 'Error interno del panel.' });
+      json(res, 500, { error: t('Error interno del panel.') });
     }
   });
   // Solo localhost: el panel nunca debe quedar expuesto en la red.
@@ -324,7 +330,7 @@ export function startPanel(port, config = {}) {
   return server;
 }
 
-const PANEL_HTML = /* html */ `<!doctype html>
+export const PANEL_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -497,6 +503,11 @@ const PANEL_HTML = /* html */ `<!doctype html>
     width: 14px; height: 14px; border-radius: 50%; background: #fff;
     transition: transform .2s var(--ease-out); }
   .sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(16px); }
+  .lang-opt-btn { padding: .3rem .65rem; font-size: .78rem; border-radius: 7px;
+    border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer;
+    transition: background .2s var(--ease-out), color .2s var(--ease-out), border-color .2s var(--ease-out); }
+  .lang-opt-btn:hover { color: var(--text); }
+  .lang-opt-btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* ── Modal licencia ── */
   .lic-modal { width: 380px; }
@@ -919,6 +930,15 @@ const PANEL_HTML = /* html */ `<!doctype html>
     </div>
     <div class="prefs-section" id="sysSection" style="display:none">
       <h3>Sistema</h3>
+      <div class="pref-row">
+        <div>
+          <div>Idioma / Language</div>
+        </div>
+        <div style="display:flex;gap:.4rem">
+          <button type="button" class="lang-opt-btn" id="langEsBtn" onclick="setAppLanguage('es')">Español</button>
+          <button type="button" class="lang-opt-btn" id="langEnBtn" onclick="setAppLanguage('en')">English</button>
+        </div>
+      </div>
       <div class="pref-row">
         <div>
           <div>Iniciar con el sistema</div>
@@ -1395,7 +1415,7 @@ const PANEL_HTML = /* html */ `<!doctype html>
           <span class="metrics"></span>
         </div>
         <div class="field">
-          <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal de TikTok' : ''}</label>
+          <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal TikTok' : ''}</label>
           <div class="eyerow">
             <input type="password" class="url" value="" autocomplete="off">
             <button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">\${eyeSvg(false)}</button>
@@ -1846,10 +1866,20 @@ const PANEL_HTML = /* html */ `<!doctype html>
         $('#startMinChk').checked = s.startMinimized;
         $('#startMinRow').style.display = s.openAtLogin ? '' : 'none';
         $('#closeToTrayChk').checked = await window.msApp.getCloseToTray();
+        markActiveLanguageBtn(await window.msApp.getLanguage());
       } catch {}
     }
   }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
+  function markActiveLanguageBtn(lang) {
+    $('#langEsBtn')?.classList.toggle('sel', lang === 'es');
+    $('#langEnBtn')?.classList.toggle('sel', lang === 'en');
+  }
+  async function setAppLanguage(lang) {
+    if (!window.msApp?.setLanguage) return;
+    markActiveLanguageBtn(lang); // feedback inmediato — la recarga real la dispara main.js
+    await window.msApp.setLanguage(lang);
+  }
   async function toggleLoginItem() {
     if (!window.msApp) return;
     const openAtLogin = $('#loginItemChk').checked;
