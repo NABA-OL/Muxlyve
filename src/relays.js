@@ -65,6 +65,23 @@ function parseProgress(name, line) {
   if (r.attempts > 0 && Date.now() - r.startedAt > STABLE_MS) r.attempts = 0;
 }
 
+// Kick espera la stream key bajo la ruta /app (rtmps://host/app/<key>). El dashboard
+// suele mostrar Server URL = ".../app" y Stream Key aparte; si el usuario pegó la key
+// pegada tras el host sin /app, el servidor cierra el TLS con "End of file". Esta
+// normalización inserta /app cuando falta en los hosts de Kick.
+function normalizeKickUrl(url) {
+  try {
+    const u = new URL(url);
+    if (/global-contribute\.live-video\.net$/i.test(u.hostname) && !u.pathname.startsWith('/app')) {
+      const key = u.pathname.replace(/^\//, '');
+      return `${u.protocol}//${u.host}/app/${key}`;
+    }
+  } catch {
+    return url;
+  }
+  return url;
+}
+
 function startRelay(dest) {
   if (!sourceUrl) return;
   const prev = relays.get(dest.name);
@@ -72,7 +89,8 @@ function startRelay(dest) {
 
   // -c copy = reenvío sin recodificar (carga mínima de CPU)
   const fmt = dest.url.startsWith('srt://') ? 'mpegts' : 'flv';
-  const args = ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', fmt, dest.url];
+  const targetUrl = normalizeKickUrl(dest.url);
+  const args = ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', fmt, targetUrl];
   const proc = spawn(FFMPEG, args);
 
   const entry = {
