@@ -1,9 +1,14 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
-import { BrowserWindow, safeStorage, app, session } from 'electron';
+import { BrowserWindow, safeStorage, app, session, net } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat } from '../src/chat.js';
+import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
+
+// El lookup de chatroom de Kick (ver src/chat.js) necesita el stack de red de Chromium
+// para no chocar con el bloqueo de Cloudflare — net.fetch corre por ahí, el fetch global
+// de Node no.
+setKickFetchImpl(net.fetch);
 
 const PLATFORMS = {
   twitch: {

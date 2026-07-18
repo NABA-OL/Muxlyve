@@ -524,6 +524,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     gap: .3rem; padding-right: .2rem; }
   .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
   .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
+  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
   .chat-panel { display: flex; flex-direction: column; height: 100%; }
   .chat-panel-head { display: flex; align-items: center; justify-content: space-between;
@@ -1426,6 +1427,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
       const failed = entries.filter(([, r]) => !r.ok);
       if (!failed.length) {
+        localStorage.setItem('ms_stream_title', title);
         toast('Título actualizado en ' + entries.map(([p]) => p).join(' + '));
       } else {
         toast('Falló en ' + failed.map(([p]) => p).join(', ') + ' — revisa la conexión.', true);
@@ -1649,6 +1651,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#iconMoon').style.display = '';
   }
   syncTitleBarTheme();
+  const savedTitle = localStorage.getItem('ms_stream_title');
+  if (savedTitle) $('#titleInput').value = savedTitle;
 
   // ── Wordmark animation: Muxlyve → Muxly Live ──
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -1855,6 +1859,25 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   // ── Chat unificado (fase 1: Twitch) ──
+  // Intercala texto e imágenes de emote dentro de container, usando los rangos ya
+  // normalizados por chat.js (mismo shape sea Twitch o Kick — ver parseTwitchEmotes/
+  // parseKickEmotes ahí). Compartido conceptualmente con el de CHAT_WINDOW_HTML — no se
+  // puede importar entre los dos documentos (ventanas separadas), así que está duplicado.
+  function renderMessageBody(container, text, emotes) {
+    if (!emotes || !emotes.length) { container.appendChild(document.createTextNode(text)); return; }
+    let cursor = 0;
+    for (const e of emotes) {
+      if (e.start > cursor) container.appendChild(document.createTextNode(text.slice(cursor, e.start)));
+      const img = document.createElement('img');
+      img.className = 'chat-emote';
+      img.src = e.url;
+      img.alt = '';
+      container.appendChild(img);
+      cursor = e.end;
+    }
+    if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
   function appendChatMessage(msg) {
     const box = $('#chatMessages');
     if (!box) return;
@@ -1875,7 +1898,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     nameEl.style.color = msg.color || '#9147ff';
     nameEl.textContent = msg.username || '???';
     textWrap.appendChild(nameEl);
-    textWrap.appendChild(document.createTextNode(': ' + (msg.message || '')));
+    textWrap.appendChild(document.createTextNode(': '));
+    renderMessageBody(textWrap, msg.message || '', msg.emotes);
     row.appendChild(textWrap);
     box.appendChild(row);
     while (box.children.length > 200) box.removeChild(box.firstChild);
@@ -1929,8 +1953,11 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     -webkit-app-region: drag; z-index: 2; }
   #box { position: relative; z-index: 1; height: 100vh; overflow-y: auto; padding: .75rem;
     padding-top: 44px; display: flex; flex-direction: column; gap: .3rem; }
-  .row { font-size: .85rem; line-height: 1.4; overflow-wrap: break-word; }
+  .row { font-size: .85rem; line-height: 1.4; overflow-wrap: break-word;
+    display: flex; gap: .35rem; align-items: flex-start; }
+  .row .chat-icon { flex-shrink: 0; margin-top: .15rem; }
   .row strong { margin-right: .3rem; }
+  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .empty { color: var(--muted); font-size: .8rem; }
 </style>
 </head>
@@ -1965,6 +1992,39 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     }
   })();
 
+  // Subset de platformIconSvg() del panel principal — este documento es una ventana
+  // aparte (popout), no comparte script con el panel, así que va duplicado a propósito.
+  var PLATFORM_ICON_GLYPHS = {
+    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
+    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
+    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
+    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
+  };
+  var PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
+  function platformIconSvg(id) {
+    var glyph = PLATFORM_ICON_GLYPHS[id];
+    if (!glyph) return '';
+    return '<svg width="14" height="14" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:4px">' +
+      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
+  }
+
+  // Mismo shape normalizado {start, end, url} que arma chat.js sea Twitch o Kick.
+  function renderMessageBody(container, text, emotes) {
+    if (!emotes || !emotes.length) { container.appendChild(document.createTextNode(text)); return; }
+    var cursor = 0;
+    for (var i = 0; i < emotes.length; i++) {
+      var e = emotes[i];
+      if (e.start > cursor) container.appendChild(document.createTextNode(text.slice(cursor, e.start)));
+      var img = document.createElement('img');
+      img.className = 'chat-emote';
+      img.src = e.url;
+      img.alt = '';
+      container.appendChild(img);
+      cursor = e.end;
+    }
+    if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
   function append(msg) {
     var box = document.getElementById('box');
     var empty = box.querySelector('.empty');
@@ -1972,11 +2032,20 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
     var row = document.createElement('div');
     row.className = 'row';
+    var iconHtml = platformIconSvg(msg.platform);
+    if (iconHtml) {
+      var iconWrap = document.createElement('span');
+      iconWrap.className = 'chat-icon';
+      iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
+      row.appendChild(iconWrap);
+    }
+    var textWrap = document.createElement('span');
     var strong = document.createElement('strong');
     strong.style.color = msg.color || '#9147ff';
     strong.textContent = msg.username || '???';
-    row.appendChild(strong);
-    row.appendChild(document.createTextNode(msg.message || ''));
+    textWrap.appendChild(strong);
+    renderMessageBody(textWrap, msg.message || '', msg.emotes);
+    row.appendChild(textWrap);
     box.appendChild(row);
     while (box.children.length > 300) box.removeChild(box.firstChild);
     if (atBottom) box.scrollTop = box.scrollHeight;
