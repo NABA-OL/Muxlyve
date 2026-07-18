@@ -7,6 +7,8 @@ import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
 import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
+import { getViewerCounts } from './viewers.js';
+import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend } from './chatmod.js';
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -133,6 +135,42 @@ async function handleApi(req, res, url) {
     chatBus.on('message', onMessage);
     req.on('close', () => chatBus.off('message', onMessage));
     return;
+  }
+
+  // GET /api/viewers -> { twitch: {count, live}, kick: {...} } — último valor sondeado
+  // por electron/oauth.js. Lo consultan tanto el panel principal como el popout de chat.
+  if (req.method === 'GET' && url.pathname === '/api/viewers') {
+    return json(res, 200, getViewerCounts());
+  }
+
+  // POST /api/chat-mode -> modo lento / solo emotes (solo Twitch, ver src/chatmod.js).
+  // Por HTTP y no IPC para que el popout de chat también lo pueda usar (no tiene preload).
+  if (req.method === 'POST' && url.pathname === '/api/chat-mode') {
+    const body = await readBody(req);
+    const result = await applyChatModeBackend({
+      emoteOnly: !!body.emoteOnly,
+      subscriberOnly: !!body.subscriberOnly,
+      slowSeconds: Number(body.slowSeconds) || 0,
+    });
+    return json(res, 200, result);
+  }
+
+  // POST /api/chat-send -> publica un mensaje como el streamer en Twitch + Kick (chatmod.js).
+  if (req.method === 'POST' && url.pathname === '/api/chat-send') {
+    const body = await readBody(req);
+    const text = String(body.text || '').trim().slice(0, 500);
+    if (!text) return json(res, 400, { error: 'Mensaje vacío.' });
+    const result = await sendChatMessageBackend(text);
+    return json(res, 200, result);
+  }
+
+  // POST /api/chat-pin -> fija un mensaje (solo Twitch, ver src/chatmod.js).
+  if (req.method === 'POST' && url.pathname === '/api/chat-pin') {
+    const body = await readBody(req);
+    const messageId = String(body.messageId || '').trim();
+    if (!messageId) return json(res, 400, { error: 'Falta el id del mensaje.' });
+    const result = await pinChatMessageBackend(messageId);
+    return json(res, 200, result);
   }
 
   // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
@@ -523,6 +561,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
     gap: .3rem; padding-right: .2rem; }
   .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
+  .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
+    color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s var(--ease-out);
+    padding: 0 2px; display: flex; align-items: center; }
+  .chat-row:hover .chat-pin-btn { opacity: 1; }
+  .chat-pin-btn:hover { color: var(--accent); }
+  .chat-pin-btn:disabled { opacity: .4; cursor: default; }
   .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
   .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
@@ -534,7 +578,21 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     border-radius: 6px; width: 28px; height: 28px; padding: 0; flex-shrink: 0; cursor: pointer;
     display: flex; align-items: center; justify-content: center; }
   .chat-popout-btn:hover { color: var(--text); }
+  .chat-menu-wrap { position: relative; flex-shrink: 0; }
+  .chat-menu-dd { position: absolute; top: 34px; right: 0; z-index: 20; display: none;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: .65rem; width: 210px; box-shadow: 0 12px 28px rgba(0,0,0,.35); }
+  .chat-menu-dd.open { display: block; }
+  .chat-menu-dd .cmd-note { font-size: .68rem; color: var(--muted); margin-bottom: .5rem; line-height: 1.3; }
+  .chat-menu-dd .cmd-row { display: flex; align-items: center; justify-content: space-between; padding: .3rem 0; }
+  .chat-menu-dd .cmd-label { font-size: .8rem; }
+  .chat-menu-dd input[type=number] { width: 55px; }
   .chat-box.chat-box-full { flex: 1; min-height: 0; max-height: none; }
+  .chat-send-row { display: flex; gap: .4rem; padding-top: .5rem; flex-shrink: 0; }
+  .chat-send-row input { flex: 1; min-width: 0; }
+  .viewer-bar { display: flex; gap: .7rem; flex-wrap: wrap; padding-top: .5rem;
+    margin-top: .3rem; border-top: 1px solid var(--border); font-size: .75rem; color: var(--muted); }
+  .viewer-bar .vb-item { display: flex; align-items: center; gap: .3rem; }
   .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
     color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
@@ -720,6 +778,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <label>Título del stream (Twitch + Kick)</label>
             <div class="copyrow">
               <input type="text" id="titleInput" placeholder="¿Qué vas a transmitir hoy?">
+            </div>
+          </div>
+          <div class="field" style="margin-top:.5rem">
+            <label>Categoría / juego</label>
+            <div class="copyrow">
+              <input type="text" id="categoryInput" placeholder="Just Chatting, Minecraft…">
               <button class="browse-btn" onclick="applyStreamTitle(this)">Aplicar</button>
             </div>
           </div>
@@ -789,15 +853,45 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="sidebar-inner chat-panel" id="chatPanel" style="display:none">
       <div class="chat-panel-head">
         <span class="chat-panel-title">Chat en vivo</span>
-        <button class="chat-popout-btn" onclick="openChatWindow()" title="Abrir en ventana aparte">
+        <div style="display:flex;gap:.35rem">
+          <div class="chat-menu-wrap">
+            <button class="chat-popout-btn" onclick="toggleChatMenu(event)" title="Moderación (Twitch)">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
+            <div class="chat-menu-dd" id="chatMenuDd" onclick="event.stopPropagation()">
+              <div class="cmd-note">Moderación (solo Twitch — Kick no lo soporta por API)</div>
+              <div class="cmd-row"><span class="cmd-label">Solo emotes</span>
+                <label class="switch"><input type="checkbox" id="emoteOnlyChk"><span class="thumb"></span></label></div>
+              <div class="cmd-row"><span class="cmd-label">Solo suscriptores</span>
+                <label class="switch"><input type="checkbox" id="subOnlyChk"><span class="thumb"></span></label></div>
+              <div class="cmd-row"><span class="cmd-label">Modo lento</span>
+                <label class="switch"><input type="checkbox" id="slowModeChk"><span class="thumb"></span></label></div>
+              <div class="cmd-row"><span class="cmd-label">Segundos</span>
+                <input type="number" id="slowSecondsInput" value="30" min="1" max="1800"></div>
+              <button class="browse-btn" style="width:100%;margin-top:.4rem" onclick="applyChatMode(this)">Aplicar</button>
+            </div>
+          </div>
+          <button class="chat-popout-btn" onclick="openChatWindow()" title="Abrir en ventana aparte">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="chatMessages" class="chat-box chat-box-full"></div>
+      <div class="chat-send-row">
+        <input type="text" id="chatSendInput" placeholder="Escribir en Twitch + Kick…" maxlength="500">
+        <button class="chat-popout-btn" onclick="sendChatMessageUi(this)" title="Enviar a todas las plataformas">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-            <polyline points="15 3 21 3 21 9"/>
-            <line x1="10" y1="14" x2="21" y2="3"/>
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
         </button>
       </div>
-      <div id="chatMessages" class="chat-box chat-box-full"></div>
+      <div id="viewerBar" class="viewer-bar" style="display:none"></div>
     </div>
   </aside>
 </main>
@@ -944,8 +1038,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-version" id="aboutVersion">v0.0.0</div>
     <div class="about-divider"></div>
     <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
-    <div class="about-copy" id="aboutCopy">© 2026 NABA-OL. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
-    <a class="about-link" href="https://github.com/NABA-OL/Muxlyve" target="_blank">github.com/NABA-OL/Muxlyve ↗</a>
+    <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
+    <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken.vercel.app ↗</a>
     <div class="about-btn-row">
       <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
     </div>
@@ -1038,6 +1132,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
   };
   const PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
+  // Insignia propia (no imitamos el ícono nativo de cada plataforma) para marcar "este
+  // mensaje lo escribiste vos, el streamer" — chat.js ya calcula msg.isBroadcaster.
+  const BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
+  const PIN_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
   function platformIconSvg(id, size) {
     const glyph = PLATFORM_ICON_GLYPHS[id];
     if (!glyph) return '';
@@ -1418,19 +1516,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   async function applyStreamTitle(btn) {
     const title = $('#titleInput').value.trim();
-    if (!title) return toast('Escribe un título primero', true);
+    const category = $('#categoryInput').value.trim();
+    if (!title && !category) return toast('Escribe un título o una categoría primero', true);
     if (!window.msOAuth?.setTitle) return toast('No disponible en esta versión.', true);
     if (btn) btn.disabled = true;
     try {
-      const results = await window.msOAuth.setTitle(title);
+      const results = await window.msOAuth.setTitle(title, category);
       const entries = Object.entries(results || {});
       if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
       const failed = entries.filter(([, r]) => !r.ok);
       if (!failed.length) {
-        localStorage.setItem('ms_stream_title', title);
-        toast('Título actualizado en ' + entries.map(([p]) => p).join(' + '));
+        if (title) localStorage.setItem('ms_stream_title', title);
+        if (category) localStorage.setItem('ms_stream_category', category);
+        toast('Actualizado en ' + entries.map(([p]) => p).join(' + '));
       } else {
-        toast('Falló en ' + failed.map(([p]) => p).join(', ') + ' — revisa la conexión.', true);
+        const [, firstErr] = failed[0];
+        toast((firstErr.error || ('Falló en ' + failed.map(([p]) => p).join(', '))), true);
       }
     } catch (e) {
       toast(e.message, true);
@@ -1438,6 +1539,54 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       if (btn) btn.disabled = false;
     }
   }
+
+  function toggleChatMenu(e) {
+    e.stopPropagation();
+    $('#chatMenuDd').classList.toggle('open');
+  }
+  document.addEventListener('click', () => {
+    const dd = $('#chatMenuDd');
+    if (dd) dd.classList.remove('open');
+  });
+
+  async function applyChatMode(btn) {
+    const emoteOnly = $('#emoteOnlyChk').checked;
+    const subscriberOnly = $('#subOnlyChk').checked;
+    const slowOn = $('#slowModeChk').checked;
+    const slowSeconds = slowOn ? Math.max(1, Number($('#slowSecondsInput').value) || 30) : 0;
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api('POST', '/api/chat-mode', { emoteOnly, subscriberOnly, slowSeconds });
+      if (r.ok) toast('Chat de Twitch actualizado');
+      else toast(r.error || 'No se pudo aplicar — ¿Twitch conectado?', true);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function sendChatMessageUi(btn) {
+    const input = $('#chatSendInput');
+    const text = input.value.trim();
+    if (!text) return;
+    if (btn) btn.disabled = true;
+    try {
+      const results = await api('POST', '/api/chat-send', { text });
+      const entries = Object.entries(results || {});
+      if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
+      const failed = entries.filter(([, r]) => !r.ok);
+      if (!failed.length) { input.value = ''; }
+      else toast('Falló en ' + failed.map(([p]) => p).join(', '), true);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  $('#chatSendInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendChatMessageUi($('.chat-send-row .chat-popout-btn'));
+  });
 
   async function refresh() {
     if (destBusy) return;
@@ -1653,6 +1802,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   syncTitleBarTheme();
   const savedTitle = localStorage.getItem('ms_stream_title');
   if (savedTitle) $('#titleInput').value = savedTitle;
+  const savedCategory = localStorage.getItem('ms_stream_category');
+  if (savedCategory) $('#categoryInput').value = savedCategory;
 
   // ── Wordmark animation: Muxlyve → Muxly Live ──
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -1782,7 +1933,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     closeLic();
     // Versión ya cargada en init (appVersion global); año dinámico
     $('#aboutVersion').textContent = 'v' + (window._appVersion || '—');
-    $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' NABA-OL. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
+    $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
     $('#aboutOverlay').classList.add('open');
   }
   function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
@@ -1893,6 +2044,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
       row.appendChild(iconWrap);
     }
+    if (msg.isBroadcaster) {
+      const badge = document.createElement('span');
+      badge.className = 'chat-icon';
+      badge.title = 'Vos (streamer)';
+      badge.innerHTML = BROADCASTER_BADGE_SVG;
+      row.appendChild(badge);
+    }
     const textWrap = document.createElement('span');
     const nameEl = document.createElement('strong');
     nameEl.style.color = msg.color || '#9147ff';
@@ -1901,9 +2059,31 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     textWrap.appendChild(document.createTextNode(': '));
     renderMessageBody(textWrap, msg.message || '', msg.emotes);
     row.appendChild(textWrap);
+    // Fijar: solo Twitch tiene API pública real para esto — Kick lo tiene en su dashboard
+    // pero es un endpoint interno no expuesto a apps de terceros; YouTube no lo tiene.
+    if (msg.platform === 'twitch' && msg.id) {
+      const pinBtn = document.createElement('button');
+      pinBtn.className = 'chat-pin-btn';
+      pinBtn.title = 'Fijar este mensaje en Twitch';
+      pinBtn.innerHTML = PIN_ICON_SVG;
+      pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
+      row.appendChild(pinBtn);
+    }
     box.appendChild(row);
     while (box.children.length > 200) box.removeChild(box.firstChild);
     if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  async function pinChatMessageUi(btn, messageId) {
+    btn.disabled = true;
+    try {
+      const r = await api('POST', '/api/chat-pin', { messageId });
+      if (r.ok) toast('Mensaje fijado en Twitch');
+      else toast(r.error || 'No se pudo fijar', true);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
   }
   function connectChatStream() {
     if (!window.EventSource) return;
@@ -1915,6 +2095,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     };
   }
 
+  function renderViewerBar(counts) {
+    const bar = $('#viewerBar');
+    if (!bar) return;
+    bar.innerHTML = '';
+    let any = false;
+    for (const p of ['twitch', 'kick', 'youtube']) {
+      const v = counts[p];
+      if (!v || !v.live) continue;
+      any = true;
+      const item = document.createElement('span');
+      item.className = 'vb-item';
+      item.innerHTML = platformIconSvg(p, 12);
+      item.appendChild(document.createTextNode(v.count.toLocaleString('es')));
+      bar.appendChild(item);
+    }
+    bar.style.display = any ? 'flex' : 'none';
+  }
+  async function pollViewers() {
+    try { renderViewerBar(await api('GET', '/api/viewers')); } catch {}
+  }
+
   if (window.msApp) { window.msApp.isPackaged().then(v => { window._isPackaged = v; }).catch(() => {}); }
 
   loadConfig();
@@ -1922,7 +2123,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   loadAuthStatus();
   showSidebarTab('chat'); // arranca siempre mostrando el chat
   connectChatStream();
+  pollViewers();
   setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
+  setInterval(pollViewers, 20000); // el backend sondea Twitch/Kick/YouTube cada 30s, no hace falta más seguido
 </script>
 </body>
 </html>`;
@@ -1949,23 +2152,166 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   @media (prefers-reduced-motion: reduce) {
     .star { animation: none; opacity: .5; }
   }
-  #dragbar { position: fixed; top: 0; left: 0; right: 0; height: 40px;
-    -webkit-app-region: drag; z-index: 2; }
+  #chatHeader { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 3;
+    -webkit-app-region: drag; display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 8px; }
+  #chatHeader button, #chatHeader .chat-menu-dd { -webkit-app-region: no-drag; }
+  /* Botones nativos: Mac los deja a la izquierda (traffic lights), Windows a la derecha
+     (titleBarOverlay) — el menú siempre va a la derecha del header, así que solo Windows
+     necesita espacio extra para no quedar debajo de esos botones. */
+  body.platform-win32 #chatHeader { padding-right: 150px; }
+  .chat-menu-wrap { position: relative; }
+  .chat-menu-btn { background: transparent; color: var(--muted); border: none;
+    border-radius: 6px; width: 26px; height: 26px; padding: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .chat-menu-btn:hover { color: var(--text); background: rgba(128,128,128,.15); }
+  .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch .thumb { position: absolute; inset: 0; background: rgba(128,128,128,.4);
+    border-radius: 10px; cursor: pointer; transition: background .2s ease; }
+  .switch .thumb::before { content: ''; position: absolute; width: 14px; height: 14px;
+    left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s ease; }
+  .switch input:checked ~ .thumb { background: #7c5cff; }
+  .switch input:checked ~ .thumb::before { transform: translateX(16px); }
+  .chat-menu-dd { position: absolute; top: 30px; right: 0; z-index: 20; display: none;
+    background: var(--bg); border: 1px solid rgba(128,128,128,.25); border-radius: 10px;
+    padding: .6rem; width: 200px; box-shadow: 0 12px 28px rgba(0,0,0,.4); }
+  .chat-menu-dd.open { display: block; }
+  .chat-menu-dd .cmd-note { font-size: .66rem; color: var(--muted); margin-bottom: .5rem; line-height: 1.3; }
+  .chat-menu-dd .cmd-row { display: flex; align-items: center; justify-content: space-between; padding: .25rem 0; font-size: .78rem; }
+  .chat-menu-dd input[type=number] { width: 50px; }
+  .chat-menu-dd button.apply { width: 100%; margin-top: .4rem; padding: .35rem; border-radius: 6px;
+    border: none; background: var(--accent, #7c5cff); color: #fff; cursor: pointer; font-size: .78rem; }
+  .cmd-status { font-size: .68rem; margin-top: .35rem; min-height: 1em; }
   #box { position: relative; z-index: 1; height: 100vh; overflow-y: auto; padding: .75rem;
-    padding-top: 44px; display: flex; flex-direction: column; gap: .3rem; }
+    padding-top: 44px; padding-bottom: 74px; display: flex; flex-direction: column; gap: .3rem; }
   .row { font-size: .85rem; line-height: 1.4; overflow-wrap: break-word;
     display: flex; gap: .35rem; align-items: flex-start; }
   .row .chat-icon { flex-shrink: 0; margin-top: .15rem; }
   .row strong { margin-right: .3rem; }
   .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .empty { color: var(--muted); font-size: .8rem; }
+  .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
+    color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s ease; padding: 0 2px;
+    display: flex; align-items: center; }
+  .row:hover .chat-pin-btn { opacity: 1; }
+  .chat-pin-btn:hover { color: #7c5cff; }
+  .chat-pin-btn:disabled { opacity: .4; cursor: default; }
+  #chatFooter { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; background: var(--bg); }
+  #chatSendRow { display: flex; gap: .4rem; padding: .4rem .75rem; border-top: 1px solid rgba(128,128,128,.2); }
+  #chatSendRow input { flex: 1; min-width: 0; background: rgba(128,128,128,.12);
+    border: 1px solid rgba(128,128,128,.25); border-radius: 6px; color: var(--text);
+    padding: .3rem .5rem; font-size: .8rem; }
+  #chatSendRow button { background: #7c5cff; border: none; border-radius: 6px; width: 30px;
+    color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  #viewerBar { display: none; gap: .7rem; padding: .3rem .75rem .5rem;
+    border-top: 1px solid rgba(128,128,128,.2); font-size: .72rem; color: var(--muted); }
+  #viewerBar .vb-item { display: flex; align-items: center; gap: .3rem; }
 </style>
 </head>
 <body>
-<div id="dragbar"></div>
+<div id="chatHeader">
+  <div class="chat-menu-wrap">
+    <button class="chat-menu-btn" onclick="toggleChatMenu(event)" title="Moderación (Twitch)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <div class="chat-menu-dd" id="chatMenuDd" onclick="event.stopPropagation()">
+      <div class="cmd-note">Moderación (solo Twitch — Kick no lo soporta por API)</div>
+      <div class="cmd-row"><span>Solo emotes</span><label class="switch"><input type="checkbox" id="emoteOnlyChk"><span class="thumb"></span></label></div>
+      <div class="cmd-row"><span>Solo suscriptores</span><label class="switch"><input type="checkbox" id="subOnlyChk"><span class="thumb"></span></label></div>
+      <div class="cmd-row"><span>Modo lento</span><label class="switch"><input type="checkbox" id="slowModeChk"><span class="thumb"></span></label></div>
+      <div class="cmd-row"><span>Segundos</span><input type="number" id="slowSecondsInput" value="30" min="1" max="1800"></div>
+      <button class="apply" onclick="applyChatMode(this)">Aplicar</button>
+      <div class="cmd-status" id="chatModeStatus"></div>
+    </div>
+  </div>
+</div>
 <div id="stars"></div>
 <div id="box"><div class="empty">Esperando mensajes…</div></div>
+<div id="chatFooter">
+  <div id="chatSendRow">
+    <input type="text" id="chatSendInput" placeholder="Escribir en Twitch + Kick…" maxlength="500">
+    <button onclick="sendChatMessageUi(this)" title="Enviar a todas las plataformas">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+    </button>
+  </div>
+  <div class="cmd-status" id="chatSendStatus" style="padding:0 .75rem"></div>
+  <div id="viewerBar"></div>
+</div>
 <script>
+  var ua = navigator.userAgent;
+  if (ua.includes('Mac')) document.body.classList.add('platform-darwin');
+  else if (ua.includes('Windows')) document.body.classList.add('platform-win32');
+
+  function toggleChatMenu(e) {
+    e.stopPropagation();
+    document.getElementById('chatMenuDd').classList.toggle('open');
+  }
+  document.addEventListener('click', function () {
+    var dd = document.getElementById('chatMenuDd');
+    if (dd) dd.classList.remove('open');
+  });
+  function applyChatMode(btn) {
+    var emoteOnly = document.getElementById('emoteOnlyChk').checked;
+    var subscriberOnly = document.getElementById('subOnlyChk').checked;
+    var slowOn = document.getElementById('slowModeChk').checked;
+    var slowSeconds = slowOn ? Math.max(1, Number(document.getElementById('slowSecondsInput').value) || 30) : 0;
+    var status = document.getElementById('chatModeStatus');
+    btn.disabled = true;
+    if (status) { status.textContent = 'Aplicando…'; status.style.color = ''; }
+    fetch('/api/chat-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emoteOnly: emoteOnly, subscriberOnly: subscriberOnly, slowSeconds: slowSeconds }),
+    }).then(function (r) { return r.json(); }).then(function (r) {
+      btn.disabled = false;
+      if (!status) return;
+      if (r && r.ok) { status.textContent = 'Aplicado ✓'; status.style.color = '#3fb950'; }
+      else { status.textContent = (r && r.error) || 'No se pudo aplicar — ¿Twitch conectado?'; status.style.color = '#f85149'; }
+    }).catch(function () {
+      btn.disabled = false;
+      if (status) { status.textContent = 'Error de conexión.'; status.style.color = '#f85149'; }
+    });
+  }
+
+  function sendChatMessageUi(btn) {
+    var input = document.getElementById('chatSendInput');
+    var status = document.getElementById('chatSendStatus');
+    var text = input.value.trim();
+    if (!text) return;
+    btn.disabled = true;
+    fetch('/api/chat-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text }),
+    }).then(function (r) { return r.json(); }).then(function (results) {
+      btn.disabled = false;
+      var entries = Object.keys(results || {});
+      if (!entries.length) {
+        if (status) { status.textContent = 'Conecta Twitch o Kick primero.'; status.style.color = '#f85149'; }
+        return;
+      }
+      var failed = entries.filter(function (p) { return !results[p].ok; });
+      if (!failed.length) {
+        input.value = '';
+        if (status) { status.textContent = ''; }
+      } else if (status) {
+        status.textContent = 'Falló en ' + failed.join(', ');
+        status.style.color = '#f85149';
+      }
+    }).catch(function () {
+      btn.disabled = false;
+      if (status) { status.textContent = 'Error de conexión.'; status.style.color = '#f85149'; }
+    });
+  }
+  document.getElementById('chatSendInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') sendChatMessageUi(document.querySelector('#chatSendRow button'));
+  });
+
   // Tema inicial: viene por query string al abrir la ventana. Se mantiene sincronizado
   // en vivo con la app principal vía BroadcastChannel (mismo origen http://localhost).
   document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : '';
@@ -2007,6 +2353,19 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     return '<svg width="14" height="14" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:4px">' +
       '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
   }
+  var BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
+  var PIN_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
+
+  function pinChatMessageUi(btn, messageId) {
+    btn.disabled = true;
+    fetch('/api/chat-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId: messageId }),
+    }).then(function (r) { return r.json(); }).then(function () {
+      btn.disabled = false;
+    }).catch(function () { btn.disabled = false; });
+  }
 
   // Mismo shape normalizado {start, end, url} que arma chat.js sea Twitch o Kick.
   function renderMessageBody(container, text, emotes) {
@@ -2039,6 +2398,13 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
       row.appendChild(iconWrap);
     }
+    if (msg.isBroadcaster) {
+      var badge = document.createElement('span');
+      badge.className = 'chat-icon';
+      badge.title = 'Vos (streamer)';
+      badge.innerHTML = BROADCASTER_BADGE_SVG;
+      row.appendChild(badge);
+    }
     var textWrap = document.createElement('span');
     var strong = document.createElement('strong');
     strong.style.color = msg.color || '#9147ff';
@@ -2046,6 +2412,14 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     textWrap.appendChild(strong);
     renderMessageBody(textWrap, msg.message || '', msg.emotes);
     row.appendChild(textWrap);
+    if (msg.platform === 'twitch' && msg.id) {
+      var pinBtn = document.createElement('button');
+      pinBtn.className = 'chat-pin-btn';
+      pinBtn.title = 'Fijar este mensaje en Twitch';
+      pinBtn.innerHTML = PIN_ICON_SVG;
+      pinBtn.onclick = (function (id) { return function () { pinChatMessageUi(pinBtn, id); }; })(msg.id);
+      row.appendChild(pinBtn);
+    }
     box.appendChild(row);
     while (box.children.length > 300) box.removeChild(box.firstChild);
     if (atBottom) box.scrollTop = box.scrollHeight;
@@ -2054,6 +2428,29 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   es.onmessage = function (e) {
     try { append(JSON.parse(e.data)); } catch (err) {}
   };
+
+  function renderViewerBar(counts) {
+    var bar = document.getElementById('viewerBar');
+    if (!bar) return;
+    bar.innerHTML = '';
+    var any = false;
+    ['twitch', 'kick', 'youtube'].forEach(function (p) {
+      var v = counts[p];
+      if (!v || !v.live) return;
+      any = true;
+      var item = document.createElement('span');
+      item.className = 'vb-item';
+      item.innerHTML = platformIconSvg(p);
+      item.appendChild(document.createTextNode(v.count.toLocaleString('es')));
+      bar.appendChild(item);
+    });
+    bar.style.display = any ? 'flex' : 'none';
+  }
+  function pollViewers() {
+    fetch('/api/viewers').then(function (r) { return r.json(); }).then(renderViewerBar).catch(function () {});
+  }
+  pollViewers();
+  setInterval(pollViewers, 20000);
 </script>
 </body>
 </html>`;

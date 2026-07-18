@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('msOAuth', {
   connect:    (platform) => ipcRenderer.invoke('oauth:connect', platform),
   status:     ()         => ipcRenderer.invoke('oauth:status'),
   disconnect: (platform) => ipcRenderer.invoke('oauth:disconnect', platform),
-  setTitle:   (title)    => ipcRenderer.invoke('title:set', title),
+  setTitle:   (title, category) => ipcRenderer.invoke('title:set', title, category),
 });
 contextBridge.exposeInMainWorld('msApp', {
   getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),

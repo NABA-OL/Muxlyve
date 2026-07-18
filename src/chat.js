@@ -77,6 +77,11 @@ function handleLine(line) {
     message: text,
     color: tags.color || null,
     emotes: parseTwitchEmotes(tags.emotes),
+    // El nick de IRC de Twitch siempre es el login en minúsculas (aunque el display-name
+    // tenga mayúsculas/acentos) — currentLogin viene de la misma fuente (Helix), comparación exacta.
+    isBroadcaster: !!currentLogin && nick.toLowerCase() === currentLogin.toLowerCase(),
+    // id: UUID del mensaje (tag IRCv3) — lo exige /helix/chat/messages/pin como message_id.
+    id: tags.id || null,
     timestamp: Date.now(),
   });
 }
@@ -245,6 +250,10 @@ let kickReconnectTimer = null;
 let kickReconnectDelay = 2000;
 let kickSlug = null;
 let kickStopped = true;
+// El slug del canal (para el lookup de chatroom) no siempre es igual al username que
+// Kick muestra en el chat (mayúsculas/formato distinto) — se guarda aparte para comparar
+// bien contra sender.username y marcar isBroadcaster.
+let kickBroadcasterName = null;
 
 // fetch inyectable — por defecto el global de Node, pero ese SIEMPRE recibe 403 de
 // Cloudflare en kick.com/api/v2 (probado: bloquea aunque mandes headers de navegador
@@ -310,6 +319,7 @@ function handleKickPusherEvent(raw) {
     message: text,
     color: payload.sender?.identity?.color || null,
     emotes: parseKickEmotes(text),
+    isBroadcaster: !!kickBroadcasterName && username.toLowerCase() === kickBroadcasterName.toLowerCase(),
     timestamp: Date.now(),
   });
 }
@@ -343,17 +353,19 @@ function scheduleKickReconnect() {
   kickReconnectDelay = Math.min(kickReconnectDelay * 2, MAX_RECONNECT_DELAY);
 }
 
-export function startKickChat(slug) {
+export function startKickChat(slug, broadcasterName) {
   if (!slug) return;
   if (!kickStopped && kickSlug === slug) return; // ya conectado a ese canal
   stopKickChat();
   kickStopped = false;
   kickSlug = slug;
+  kickBroadcasterName = broadcasterName || null;
   connectKick();
 }
 
 export function stopKickChat() {
   kickStopped = true;
+  kickBroadcasterName = null;
   clearTimeout(kickReconnectTimer);
   kickSlug = null;
   if (kickWs) { try { kickWs.close(); } catch {} kickWs = null; }

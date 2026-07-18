@@ -149,7 +149,15 @@ function stopRelay(name) {
   if (!r) return;
   r.stopping = true; // distingue parada manual de caída
   if (r.timer) clearTimeout(r.timer);
-  if (r.proc) r.proc.kill('SIGKILL');
+  if (r.proc) {
+    const proc = r.proc;
+    // SIGINT (no SIGKILL): le da a ffmpeg oportunidad de cerrar la conexión RTMP en limpio
+    // y vaciar lo último que tenga en el buffer de salida, en vez de cortar en seco a mitad
+    // de un frame/paquete. Con -c copy el cierre es casi instantáneo, así que 2s de margen
+    // alcanza de sobra; si por lo que sea no salió solo, ahí sí SIGKILL de respaldo.
+    proc.kill('SIGINT');
+    setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 2000);
+  }
   relays.delete(name);
   console.log(`[relay:${name}] detenido`);
 }

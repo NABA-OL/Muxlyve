@@ -261,7 +261,7 @@ ipcMain.handle('license:status', () => refreshLicenseStatus());
 ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
 ipcMain.handle('oauth:status', () => oauthStatus());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
-ipcMain.handle('title:set', (_, title) => setStreamTitle(title));
+ipcMain.handle('title:set', (_, title, category) => setStreamTitle(title, category));
 
 function loginItemState() {
   // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el
