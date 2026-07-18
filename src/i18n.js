@@ -1,4 +1,12 @@
 export const tMap = {
+  // oauth.js — errores directos por IPC / puente chatmod.js (no pasan por translateHtml)
+  'Respuesta inválida (state mismatch).': 'Invalid response (state mismatch).',
+  'Ventana cerrada.': 'Window closed.',
+  'Falta broadcasterId — reconecta Twitch.': 'Missing broadcasterId — reconnect Twitch.',
+  'Sesión de Twitch inválida — reconecta.': 'Invalid Twitch session — reconnect.',
+  'Nada que actualizar.': 'Nothing to update.',
+  'Sesión de Kick inválida — reconecta.': 'Invalid Kick session — reconnect.',
+  'Mensaje sin id — no se puede fijar.': 'Message has no id — cannot pin.',
   '<html lang="es">': '<html lang="en">',
   'Muxlyve — Panel': 'Muxlyve — Panel',
   'Muxlyve — Chat': 'Muxlyve — Chat',
@@ -129,6 +137,10 @@ export const tMap = {
   'Vos (streamer)': 'You (streamer)',
   'Fijar este mensaje en Twitch': 'Pin this message on Twitch',
   'Aplicando…': 'Applying…',
+  '¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Agrega una fuente de Navegador con esta URL — sin fondo ni menús, solo el chat.': 'Want to show the chat in your streaming software (OBS, Streamlabs, etc.)? Add a Browser source with this URL — no background or menus, just the chat.',
+  'Usar chat en OBS / Streamlabs': 'Use chat in OBS / Streamlabs',
+  'Copiar URL': 'Copy URL',
+  '¡Copiado!': 'Copied!',
   'Aplicado ✓': 'Applied ✓',
   'Error de conexión.': 'Connection error.',
 

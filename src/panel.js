@@ -308,6 +308,13 @@ export function startPanel(port, config = {}) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(translateHtml(CHAT_WINDOW_HTML));
       }
+      // Fuente de navegador para OBS — mismo feed SSE que /chat-window, sin chrome de
+      // ventana (estrellas, header, menú de moderación, caja de envío): solo mensajes,
+      // fondo transparente para componer directo sobre la escena.
+      if (url.pathname === '/chat-overlay') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(translateHtml(CHAT_OVERLAY_HTML));
+      }
       // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
       // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
       if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
@@ -897,6 +904,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="cmd-row"><span class="cmd-label">Segundos</span>
                 <input type="number" id="slowSecondsInput" value="30" min="1" max="1800"></div>
               <button class="browse-btn" style="width:100%;margin-top:.4rem" onclick="applyChatMode(this)">Aplicar</button>
+            </div>
+          </div>
+          <div class="chat-menu-wrap">
+            <button class="chat-popout-btn" onclick="toggleOverlayInfo(event)" title="Usar chat en OBS / Streamlabs">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+            </button>
+            <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
+              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Agrega una fuente de Navegador con esta URL — sin fondo ni menús, solo el chat.</div>
+              <input type="text" id="overlayUrlInput" readonly style="width:100%;font-size:.72rem;padding:.35rem;border-radius:6px;background:var(--bg-2,rgba(128,128,128,.12));border:1px solid var(--border,rgba(128,128,128,.25));color:inherit;margin-bottom:.4rem">
+              <button class="browse-btn" style="width:100%" onclick="copyOverlayUrl(this)">Copiar URL</button>
             </div>
           </div>
           <button class="chat-popout-btn" onclick="openChatWindow()" title="Abrir en ventana aparte">
@@ -1579,9 +1598,26 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     e.stopPropagation();
     $('#chatMenuDd').classList.toggle('open');
   }
+  function toggleOverlayInfo(e) {
+    e.stopPropagation();
+    const input = $('#overlayUrlInput');
+    if (input) input.value = location.origin + '/chat-overlay';
+    $('#overlayInfoDd').classList.toggle('open');
+  }
+  function copyOverlayUrl(btn) {
+    const input = $('#overlayUrlInput');
+    input.select();
+    navigator.clipboard.writeText(input.value).then(() => {
+      const original = btn.textContent;
+      btn.textContent = '¡Copiado!';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    }).catch(() => {});
+  }
   document.addEventListener('click', () => {
     const dd = $('#chatMenuDd');
     if (dd) dd.classList.remove('open');
+    const infoDd = $('#overlayInfoDd');
+    if (infoDd) infoDd.classList.remove('open');
   });
 
   async function applyChatMode(btn) {
@@ -2272,6 +2308,18 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       <div class="cmd-status" id="chatModeStatus"></div>
     </div>
   </div>
+  <div class="chat-menu-wrap">
+    <button class="chat-menu-btn" onclick="toggleOverlayInfo(event)" title="Usar chat en OBS / Streamlabs">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+      </svg>
+    </button>
+    <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
+      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Agrega una fuente de Navegador con esta URL — sin fondo ni menús, solo el chat.</div>
+      <input type="text" id="overlayUrlInput" readonly style="width:100%;font-size:.72rem;padding:.35rem;border-radius:6px;background:rgba(128,128,128,.12);border:1px solid rgba(128,128,128,.25);color:inherit;margin-bottom:.4rem">
+      <button class="apply" onclick="copyOverlayUrl(this)">Copiar URL</button>
+    </div>
+  </div>
 </div>
 <div id="stars"></div>
 <div id="box"><div class="empty">Esperando mensajes…</div></div>
@@ -2296,9 +2344,26 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     e.stopPropagation();
     document.getElementById('chatMenuDd').classList.toggle('open');
   }
+  function toggleOverlayInfo(e) {
+    e.stopPropagation();
+    var input = document.getElementById('overlayUrlInput');
+    if (input) input.value = location.origin + '/chat-overlay';
+    document.getElementById('overlayInfoDd').classList.toggle('open');
+  }
+  function copyOverlayUrl(btn) {
+    var input = document.getElementById('overlayUrlInput');
+    input.select();
+    navigator.clipboard.writeText(input.value).then(function () {
+      var original = btn.textContent;
+      btn.textContent = '¡Copiado!';
+      setTimeout(function () { btn.textContent = original; }, 1500);
+    }).catch(function () {});
+  }
   document.addEventListener('click', function () {
     var dd = document.getElementById('chatMenuDd');
     if (dd) dd.classList.remove('open');
+    var infoDd = document.getElementById('overlayInfoDd');
+    if (infoDd) infoDd.classList.remove('open');
   });
   function applyChatMode(btn) {
     var emoteOnly = document.getElementById('emoteOnlyChk').checked;
@@ -2496,6 +2561,98 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   }
   pollViewers();
   setInterval(pollViewers, 20000);
+</script>
+</body>
+</html>`;
+
+// Fuente de navegador para OBS. Sin electron/preload — corre dentro del proceso Chromium
+// embebido de OBS, así que solo puede depender de HTTP/SSE, igual que CHAT_WINDOW_HTML.
+// Duplica el render de mensajes a propósito (mismo motivo que ese: documento aparte, sin
+// script compartido) pero recorta todo lo interactivo — es solo para mostrar en escena.
+const CHAT_OVERLAY_HTML = /* html */ `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Muxlyve — Chat overlay</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: transparent; overflow: hidden;
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  #box { height: 100vh; overflow-y: hidden; padding: .6rem; display: flex;
+    flex-direction: column; gap: .3rem; justify-content: flex-end; }
+  .row { font-size: 1.05rem; line-height: 1.4; overflow-wrap: break-word;
+    display: flex; gap: .35rem; align-items: flex-start; color: #fff;
+    text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 6px rgba(0,0,0,.6); }
+  .row .chat-icon { flex-shrink: 0; margin-top: .15rem; }
+  .row strong { margin-right: .3rem; }
+  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
+</style>
+</head>
+<body>
+<div id="box"></div>
+<script>
+  var PLATFORM_ICON_GLYPHS = {
+    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
+    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
+    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
+    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
+  };
+  var PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
+  function platformIconSvg(id) {
+    var glyph = PLATFORM_ICON_GLYPHS[id];
+    if (!glyph) return '';
+    return '<svg width="14" height="14" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:4px">' +
+      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
+  }
+  var BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
+
+  function renderMessageBody(container, text, emotes) {
+    if (!emotes || !emotes.length) { container.appendChild(document.createTextNode(text)); return; }
+    var cursor = 0;
+    for (var i = 0; i < emotes.length; i++) {
+      var e = emotes[i];
+      if (e.start > cursor) container.appendChild(document.createTextNode(text.slice(cursor, e.start)));
+      var img = document.createElement('img');
+      img.className = 'chat-emote';
+      img.src = e.url;
+      img.alt = '';
+      container.appendChild(img);
+      cursor = e.end;
+    }
+    if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
+  function append(msg) {
+    var box = document.getElementById('box');
+    var row = document.createElement('div');
+    row.className = 'row';
+    var iconHtml = platformIconSvg(msg.platform);
+    if (iconHtml) {
+      var iconWrap = document.createElement('span');
+      iconWrap.className = 'chat-icon';
+      iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
+      row.appendChild(iconWrap);
+    }
+    if (msg.isBroadcaster) {
+      var badge = document.createElement('span');
+      badge.className = 'chat-icon';
+      badge.innerHTML = BROADCASTER_BADGE_SVG;
+      row.appendChild(badge);
+    }
+    var textWrap = document.createElement('span');
+    var strong = document.createElement('strong');
+    strong.style.color = msg.color || '#9147ff';
+    strong.textContent = msg.username || '???';
+    textWrap.appendChild(strong);
+    renderMessageBody(textWrap, msg.message || '', msg.emotes);
+    row.appendChild(textWrap);
+    box.appendChild(row);
+    while (box.children.length > 40) box.removeChild(box.firstChild);
+  }
+  var es = new EventSource('/api/chat');
+  es.onmessage = function (e) {
+    try { append(JSON.parse(e.data)); } catch (err) {}
+  };
 </script>
 </body>
 </html>`;

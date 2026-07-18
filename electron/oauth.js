@@ -6,6 +6,17 @@ import path from 'node:path';
 import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
 import { setViewerCounts } from '../src/viewers.js';
 import { setChatModeHandler, setChatSendHandler, setChatPinHandler } from '../src/chatmod.js';
+import { tMap } from '../src/i18n.js';
+
+// Los resultados de este módulo llegan al renderer directo (IPC) o vía el puente HTTP de
+// chatmod.js — ninguno de los dos pasa por translateHtml() de src/panel.js (eso solo
+// traduce el HTML servido), así que hay que traducir acá mismo, en la fuente. Mismo
+// diccionario que usa el panel, mismo criterio: APP_LANG se lee en el momento (no al
+// importar), igual que el resto de este archivo — ver nota en CLAUDE.md.
+function t(text) {
+  if (process.env.APP_LANG === 'es' || !process.env.APP_LANG) return text;
+  return tMap[text] || text;
+}
 
 // El lookup de chatroom de Kick (ver src/chat.js) necesita el stack de red de Chromium
 // para no chocar con el bloqueo de Cloudflare — net.fetch corre por ahí, el fetch global
@@ -326,7 +337,7 @@ export async function connect(platform, panelPort) {
 
       if (oauthError) return finish({ ok: false, error: `OAuth rechazado: ${oauthError}` });
       if (!code || returnedState !== state) {
-        return finish({ ok: false, error: 'Respuesta inválida (state mismatch).' });
+        return finish({ ok: false, error: t('Respuesta inválida (state mismatch).') });
       }
 
       exchangeCode(platform, code, rUri, pkcePair?.verifier)
@@ -352,7 +363,7 @@ export async function connect(platform, panelPort) {
     popup.webContents.on('will-navigate', handleRedirect);
     popup.webContents.on('will-redirect', handleRedirect);
 
-    popup.on('closed', () => finish({ ok: false, error: 'Ventana cerrada.' }));
+    popup.on('closed', () => finish({ ok: false, error: t('Ventana cerrada.') }));
     popup.loadURL(`${cfg.authUrl}?${params}`);
   });
 }
@@ -466,18 +477,18 @@ async function findKickCategoryId(category, token) {
 async function setTwitchTitle(title, category) {
   const cfg = PLATFORMS.twitch;
   const tok = readTokens().twitch;
-  if (!tok?.broadcasterId) return { ok: false, error: 'Falta broadcasterId — reconecta Twitch.' };
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
   const token = await getValidToken('twitch');
-  if (!token) return { ok: false, error: 'Sesión de Twitch inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
   // Solo se manda lo que realmente cambió — mandar title:'' borraría el título existente.
   const body = {};
   if (title) body.title = title;
   if (category) {
     const gameId = await findTwitchCategoryId(category, token);
-    if (!gameId) return { ok: false, error: `Categoría "${category}" no encontrada en Twitch.` };
+    if (!gameId) return { ok: false, error: process.env.APP_LANG === 'es' || !process.env.APP_LANG ? `Categoría "${category}" no encontrada en Twitch.` : `Category "${category}" not found on Twitch.` };
     body.game_id = gameId;
   }
-  if (!Object.keys(body).length) return { ok: false, error: 'Nada que actualizar.' };
+  if (!Object.keys(body).length) return { ok: false, error: t('Nada que actualizar.') };
   const res = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${tok.broadcasterId}`, {
     method: 'PATCH',
     headers: {
@@ -496,15 +507,15 @@ async function setTwitchTitle(title, category) {
 
 async function setKickTitle(title, category) {
   const token = await getValidToken('kick');
-  if (!token) return { ok: false, error: 'Sesión de Kick inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Kick inválida — reconecta.') };
   const body = {};
   if (title) body.stream_title = title;
   if (category) {
     const categoryId = await findKickCategoryId(category, token);
-    if (!categoryId) return { ok: false, error: `Categoría "${category}" no encontrada en Kick.` };
+    if (!categoryId) return { ok: false, error: process.env.APP_LANG === 'es' || !process.env.APP_LANG ? `Categoría "${category}" no encontrada en Kick.` : `Category "${category}" not found on Kick.` };
     body.category_id = categoryId;
   }
-  if (!Object.keys(body).length) return { ok: false, error: 'Nada que actualizar.' };
+  if (!Object.keys(body).length) return { ok: false, error: t('Nada que actualizar.') };
   const res = await fetch('https://api.kick.com/public/v1/channels', {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -606,9 +617,9 @@ pollViewerCounts();
 // acá, mismo criterio que el título (scope más amplio, revisión de Google pendiente).
 export async function setTwitchChatMode({ emoteOnly, slowSeconds, subscriberOnly }) {
   const tok = readTokens().twitch;
-  if (!tok?.broadcasterId) return { ok: false, error: 'Falta broadcasterId — reconecta Twitch.' };
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
   const token = await getValidToken('twitch');
-  if (!token) return { ok: false, error: 'Sesión de Twitch inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
   const body = { emote_mode: !!emoteOnly, slow_mode: !!slowSeconds, subscriber_mode: !!subscriberOnly };
   if (slowSeconds) body.slow_mode_wait_time = slowSeconds;
   const res = await fetch(
@@ -639,9 +650,9 @@ const CHAT_SEND_PLATFORMS = ['twitch', 'kick'];
 
 async function sendTwitchMessage(text) {
   const tok = readTokens().twitch;
-  if (!tok?.broadcasterId) return { ok: false, error: 'Falta broadcasterId — reconecta Twitch.' };
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
   const token = await getValidToken('twitch');
-  if (!token) return { ok: false, error: 'Sesión de Twitch inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
   const res = await fetch('https://api.twitch.tv/helix/chat/messages', {
     method: 'POST',
     headers: {
@@ -662,7 +673,7 @@ async function sendTwitchMessage(text) {
 async function sendKickMessage(text) {
   const tok = readTokens().kick;
   const token = await getValidToken('kick');
-  if (!token) return { ok: false, error: 'Sesión de Kick inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Kick inválida — reconecta.') };
   const body = { content: text, type: 'user' };
   if (tok?.broadcasterId) body.broadcaster_user_id = tok.broadcasterId;
   const res = await fetch('https://api.kick.com/public/v1/chat', {
@@ -699,11 +710,11 @@ setChatSendHandler(sendChatMessage);
 // emotes de Kick, ver AskUserQuestion anterior. YouTube no tiene nada de esto en su API
 // pública (liveChatMessages solo trae list/insert/delete/transition, ningún pin).
 export async function pinTwitchMessage(messageId) {
-  if (!messageId) return { ok: false, error: 'Mensaje sin id — no se puede fijar.' };
+  if (!messageId) return { ok: false, error: t('Mensaje sin id — no se puede fijar.') };
   const tok = readTokens().twitch;
-  if (!tok?.broadcasterId) return { ok: false, error: 'Falta broadcasterId — reconecta Twitch.' };
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
   const token = await getValidToken('twitch');
-  if (!token) return { ok: false, error: 'Sesión de Twitch inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
   const res = await fetch('https://api.twitch.tv/helix/chat/messages/pin', {
     method: 'POST',
     headers: {
