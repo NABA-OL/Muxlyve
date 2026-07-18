@@ -1305,7 +1305,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
         if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
         bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
-        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">&#9654; Arrancará cuando empiece la transmisión.</p>';
+        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>';
         if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
         bodyHtml += '</div>';
       } else {
@@ -1395,7 +1395,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
           <button class="del">Borrar</button>
         </div>
-        \${d.enabled && !state.live ? '<p class="auto-note">&#9654; Arrancará cuando empiece la transmisión.</p>' : ''}
+        \${d.enabled && !state.live ? '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>' : ''}
         \${d.note ? '<p class="note"></p>' : ''}
       \`;
       card.querySelector('.name').textContent = d.name;
