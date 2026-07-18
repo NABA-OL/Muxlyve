@@ -35,7 +35,7 @@
   ],
   "license": "MIT",
   "build": {
-    "appId": "com.naba.muxlyve",
+    "appId": "com.blackraken.muxlyve",
     "productName": "Muxlyve",
     "afterPack": "scripts/afterpack-adhoc-sign.cjs",
     "directories": {
