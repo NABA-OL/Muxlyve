@@ -87,10 +87,22 @@ window.finishLoad = function() {
       bar.style.width = '100%';
     });
   });
-  if (status) status.textContent = 'Listo';
+  
+  var urlParams = new URLSearchParams(window.location.search);
+  var lang = urlParams.get('lang') || 'en';
+  if (status) status.textContent = lang === 'es' ? 'Listo' : 'Ready';
+  
   // Fade body after bar completes + brief hold
   setTimeout(function() { document.body.style.opacity = '0'; }, 650);
 };
+
+// Auto-translate initial text
+(function() {
+  var urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('lang') === 'en') {
+    document.getElementById('status').textContent = 'Starting engine…';
+  }
+})();
 </script>
 </body>
 </html>

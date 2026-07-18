@@ -40,6 +40,8 @@ const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
 const START_HIDDEN = process.argv.includes('--hidden');
 
+let APP_LANG = 'en';
+
 // Preferencias simples que persisten entre sesiones, independientes del login item del SO
 // (ej. "minimizar a bandeja al cerrar" — a diferencia de "iniciar minimizado", no depende
 // de que la app arranque sola con el sistema).
@@ -69,7 +71,7 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splash.loadFile(SPLASH_HTML);
+  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG } });
 }
 
 function closeSplash() {
@@ -168,9 +170,9 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('Muxlyve');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Mostrar Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
+    { label: APP_LANG === 'es' ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
     { type: 'separator' },
-    { label: 'Salir', click: () => { app.exit(0); } },
+    { label: APP_LANG === 'es' ? 'Salir' : 'Quit', click: () => { app.exit(0); } },
   ]));
   tray.on('click', () => {
     if (!win) return;
@@ -341,6 +343,10 @@ ipcMain.handle('report:send', async (_, description) => {
 app.setAsDefaultProtocolClient('muxlyve');
 
 app.whenReady().then(async () => {
+  const locale = app.getLocale();
+  APP_LANG = locale.startsWith('es') ? 'es' : 'en';
+  process.env.APP_LANG = APP_LANG;
+
   // Carga .env desde userData sin dependencias externas.
   const userEnv = path.join(app.getPath('userData'), '.env');
   if (existsSync(userEnv)) {
@@ -397,7 +403,10 @@ app.whenReady().then(async () => {
     await import('../src/index.js');
   } catch (err) {
     console.error('[electron] ERROR al arrancar el motor:', err.message, err.stack);
-    dialog.showErrorBox('Error al iniciar Muxlyve', `No se pudo arrancar el motor:\n${err.message}`);
+    dialog.showErrorBox(
+      APP_LANG === 'es' ? 'Error al iniciar Muxlyve' : 'Error starting Muxlyve',
+      APP_LANG === 'es' ? `No se pudo arrancar el motor:\n${err.message}` : `Could not start the engine:\n${err.message}`
+    );
     app.quit();
     return;
   }
@@ -428,11 +437,11 @@ app.whenReady().then(async () => {
         console.log('[license] revalidación: BLOQUEADA —', r.reason);
         await dialog.showMessageBox({
           type: 'warning',
-          title: 'Suscripción inactiva',
+          title: APP_LANG === 'es' ? 'Suscripción inactiva' : 'Inactive subscription',
           message: r.reason === 'subscription-cancelled'
-            ? 'Tu suscripción fue cancelada. La app se cerrará.'
-            : 'Tu licencia ya no es válida. La app se cerrará.',
-          buttons: ['Cerrar'],
+            ? (APP_LANG === 'es' ? 'Tu suscripción fue cancelada. La app se cerrará.' : 'Your subscription was cancelled. The app will close.')
+            : (APP_LANG === 'es' ? 'Tu licencia ya no es válida. La app se cerrará.' : 'Your license is no longer valid. The app will close.'),
+          buttons: [APP_LANG === 'es' ? 'Cerrar' : 'Close'],
         });
         app.relaunch();
         app.quit();

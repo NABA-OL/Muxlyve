@@ -9,6 +9,21 @@ import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
 import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend } from './chatmod.js';
+import { tMap } from './i18n.js';
+
+function translateHtml(html) {
+  if (process.env.APP_LANG === 'es' || !process.env.APP_LANG) return html;
+  let translated = html;
+  for (const [es, en] of Object.entries(tMap)) {
+    translated = translated.split(es).join(en);
+  }
+  return translated;
+}
+
+function t(text) {
+  if (process.env.APP_LANG !== 'es') return tMap[text] || text;
+  return text;
+}
 
 const MAX_NAME = 40;
 const MAX_URL = 500;
@@ -69,12 +84,12 @@ function validateDestination(input) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   const url = typeof input.url === 'string' ? input.url.trim() : '';
   const enabled = Boolean(input.enabled);
-  if (!name) return { error: 'El nombre es obligatorio.' };
-  if (name.length > MAX_NAME) return { error: `Nombre máximo ${MAX_NAME} caracteres.` };
-  if (url.length > MAX_URL) return { error: `URL máxima ${MAX_URL} caracteres.` };
+  if (!name) return { error: t('El nombre es obligatorio.') };
+  if (name.length > MAX_NAME) return { error: t('Nombre máximo ') + MAX_NAME + t(' caracteres.') };
+  if (url.length > MAX_URL) return { error: t('URL máxima ') + MAX_URL + t(' caracteres.') };
   // Solo exigimos URL válida si se quiere habilitar (TikTok puede quedar deshabilitado con placeholder).
   if (enabled && !isValidUrl(url)) {
-    return { error: 'Para activar, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.' };
+    return { error: t('Para activar, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.') };
   }
   return { dest: { name, url, enabled } };
 }
@@ -281,17 +296,17 @@ export function startPanel(port, config = {}) {
       }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(PANEL_HTML);
+        return res.end(translateHtml(PANEL_HTML));
       }
       if (url.pathname === '/chat-window') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(CHAT_WINDOW_HTML);
+        return res.end(translateHtml(CHAT_WINDOW_HTML));
       }
       // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
       // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
       if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>');
+        return res.end(translateHtml('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>'));
       }
       res.writeHead(404).end('No encontrado');
     } catch (err) {
@@ -309,7 +324,7 @@ export function startPanel(port, config = {}) {
   return server;
 }
 
-export const PANEL_HTML = /* html */ `<!doctype html>
+const PANEL_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
