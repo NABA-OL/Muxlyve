@@ -775,7 +775,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </div>
         <div class="conn">
           <div class="field">
-            <label>Título del stream (Twitch + Kick)</label>
+            <label>Título del stream</label>
             <div class="copyrow">
               <input type="text" id="titleInput" placeholder="¿Qué vas a transmitir hoy?">
             </div>
@@ -884,7 +884,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       </div>
       <div id="chatMessages" class="chat-box chat-box-full"></div>
       <div class="chat-send-row">
-        <input type="text" id="chatSendInput" placeholder="Escribir en Twitch + Kick…" maxlength="500">
+        <input type="text" id="chatSendInput" placeholder="Escribir en el chat" maxlength="500">
         <button class="chat-popout-btn" onclick="sendChatMessageUi(this)" title="Enviar a todas las plataformas">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -1039,7 +1039,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-divider"></div>
     <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
     <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
-    <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken.vercel.app ↗</a>
+    <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
     <div class="about-btn-row">
       <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
     </div>
@@ -2232,7 +2232,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
 <div id="box"><div class="empty">Esperando mensajes…</div></div>
 <div id="chatFooter">
   <div id="chatSendRow">
-    <input type="text" id="chatSendInput" placeholder="Escribir en Twitch + Kick…" maxlength="500">
+    <input type="text" id="chatSendInput" placeholder="Escribir en el chat" maxlength="500">
     <button onclick="sendChatMessageUi(this)" title="Enviar a todas las plataformas">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
