@@ -419,6 +419,23 @@ app.whenReady().then(async () => {
   // Si arrancó oculto (login item con --hidden), sáltate el splash — no debe verse nada.
   if (!START_HIDDEN) showSplash();
 
+  // Windows: si el panel va a escuchar en la LAN, intenta agregar la regla de entrada
+  // de una vez — sin esto, Windows Defender muestra su propio diálogo nativo en la
+  // primera conexión entrante (no bloqueante, pero confunde). Best-effort a propósito:
+  // sin privilegios de admin este comando falla en silencio y el usuario ve el diálogo
+  // nativo de todos modos, así que no hay nada que romper.
+  if (process.platform === 'win32' && process.env.ALLOW_LAN_PANEL === 'true') {
+    const panelPort = process.env.PANEL_PORT || '19080';
+    const { exec } = await import('node:child_process');
+    exec(
+      `netsh advfirewall firewall add rule name="Muxlyve Panel" dir=in action=allow protocol=TCP localport=${panelPort}`,
+      (err) => {
+        if (err) console.warn('[electron] No se pudo agregar la regla de firewall (requiere admin) — Windows pedirá permiso manual:', err.message);
+        else console.log(`[electron] Regla de firewall agregada para el puerto ${panelPort}.`);
+      },
+    );
+  }
+
   // Arranca el motor (NMS + relays + panel) por efecto de import.
   try {
     await import('../src/index.js');

@@ -137,6 +137,15 @@ export const tMap = {
   'Vos (streamer)': 'You (streamer)',
   'Fijar este mensaje en Twitch': 'Pin this message on Twitch',
   'Aplicando…': 'Applying…',
+  'No autorizado — falta o es inválido el token del panel.': 'Unauthorized — missing or invalid panel token.',
+  'Token de acceso remoto (ALLOW_LAN_PANEL)': 'Remote access token (ALLOW_LAN_PANEL)',
+  'Conexión plugin Stream Deck': 'Stream Deck plugin connection',
+  'Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.': 'Only needed if you\'ll control Muxlyve from a Stream Deck on another machine (secondary streaming machine). If the Stream Deck is on this same computer, you don\'t need this.',
+  // Key incluye el HTML embebido a propósito — fragmentarlo en pedazos cortos tipo
+  // "Activa"/"en tu" choca con substrings de otras palabras ya en tMap ("Activar buffer",
+  // etc.), mismo bug de sustring que TMAP_KEYS_BY_LENGTH ya corrige para keys entre sí,
+  // pero no protege contra texto SIN key propia que comparta la palabra corta.
+  'Activa <code>ALLOW_LAN_PANEL=true</code> en tu <code>.env</code> y reinicia Muxlyve para generar el token.': 'Enable <code>ALLOW_LAN_PANEL=true</code> in your <code>.env</code> and restart Muxlyve to generate the token.',
   '¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Información de conexión" → "Conexión del chat".': 'Want to show the chat in your streaming software (OBS, Streamlabs, etc.)? The URL for your Browser source is under "Connection info" → "Chat connection".',
   '¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → "Información de conexión" → "Conexión del chat" para copiar la URL.': 'Want to show the chat in your streaming software (OBS, Streamlabs, etc.)? Open the main Muxlyve panel → "Connection info" → "Chat connection" to copy the URL.',
   'Usar chat en OBS / Streamlabs': 'Use chat in OBS / Streamlabs',

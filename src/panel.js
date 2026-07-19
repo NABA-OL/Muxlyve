@@ -10,6 +10,7 @@ import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
 import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend } from './chatmod.js';
 import { tMap } from './i18n.js';
+import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
@@ -275,10 +276,25 @@ async function handleApi(req, res, url) {
   return json(res, 404, { error: t('No encontrado.') });
 }
 
+// Rutas que siguen abiertas en LAN sin token aunque ALLOW_LAN_PANEL esté activo: el
+// overlay de chat para OBS/Streamlabs se pega por URL en una fuente de Navegador, que no
+// puede mandar headers — exigirle token rompería la razón de ser de la función. No exponen
+// nada sensible (mensajes de chat ya públicos en Twitch/Kick, sin claves ni control).
+const PUBLIC_LAN_PATHS = new Set(['/chat-overlay', '/api/chat']);
+
 export function startPanel(port, config = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     try {
+      // Fuera de loopback, con LAN habilitada: todo lo que no esté en el allowlist de
+      // arriba exige el token compartido (claves RTMP, control de destinos, envío de
+      // chat como el streamer, etc. — nada de eso tiene otra protección).
+      if (process.env.ALLOW_LAN_PANEL === 'true' && !isLoopback(req) && !PUBLIC_LAN_PATHS.has(url.pathname)) {
+        const expected = `Bearer ${getOrCreatePanelToken()}`;
+        if (req.headers.authorization !== expected) {
+          return json(res, 401, { error: t('No autorizado — falta o es inválido el token del panel.') });
+        }
+      }
       // Config del ingest (URL/clave/preview) — estática, el panel la pide una vez.
       if (req.method === 'GET' && url.pathname === '/api/config') {
         return json(res, 200, {
@@ -289,6 +305,7 @@ export function startPanel(port, config = {}) {
           streamKey: config.streamKey || '',
           flvUrl: config.flvUrl || '',
           version: config.version || '0.0.0',
+          panelToken: process.env.ALLOW_LAN_PANEL === 'true' ? getOrCreatePanelToken() : null,
         });
       }
       if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
@@ -328,12 +345,17 @@ export function startPanel(port, config = {}) {
       json(res, 500, { error: t('Error interno del panel.') });
     }
   });
-  // Solo localhost: el panel nunca debe quedar expuesto en la red.
+  // Por defecto solo localhost — la API no tiene auth (claves RTMP en texto plano,
+  // envío/fijado de chat como el streamer, prender/apagar destinos), así que exponerla
+  // es opt-in explícito. ALLOW_LAN_PANEL=true la abre a la LAN (0.0.0.0) para el chat
+  // overlay y el plugin de Stream Deck desde otra máquina — bajo cuenta y riesgo del
+  // usuario, cualquiera en esa red la puede tocar sin restricción adicional.
+  const bindHost = process.env.ALLOW_LAN_PANEL === 'true' ? '0.0.0.0' : '127.0.0.1';
   server.on('error', (err) => {
     console.error(`[panel] ERROR al iniciar en puerto ${port}:`, err.code, err.message);
   });
-  server.listen(port, '127.0.0.1', () => {
-    console.log(` Panel web:    http://localhost:${port}`);
+  server.listen(port, bindHost, () => {
+    console.log(` Panel web:    http://localhost:${port}` + (bindHost === '0.0.0.0' ? ' (también accesible desde tu red local)' : ''));
   });
   return server;
 }
@@ -930,6 +952,24 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                     <button onclick="copy('chatPubUrl')">copiar</button>
                   </div>
                 </div>
+              </div></div>
+            </div>
+            <div class="conn pb-block pb-subblock" id="connStreamDeckBlock">
+              <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
+                <i class="pb-chevron">&#9654;</i>
+                <span class="pb-head-name">Conexión plugin Stream Deck</span>
+              </div>
+              <div class="pb-body"><div class="pb-body-inner">
+                <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
+                <div class="field" id="panelTokenField" style="display:none">
+                  <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
+                  <div class="copyrow">
+                    <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
+                    <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                    <button onclick="copy('panelTokenCode')">copiar</button>
+                  </div>
+                </div>
+                <p class="auto-note" id="panelTokenHint">Activa <code>ALLOW_LAN_PANEL=true</code> en tu <code>.env</code> y reinicia Muxlyve para generar el token.</p>
               </div></div>
             </div>
           </div></div>
@@ -1701,6 +1741,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   if (localStorage.getItem('ms_pb_connServerBlock') === '1') $('#connServerBlock').classList.add('open');
   if (localStorage.getItem('ms_pb_connChatBlock') === '1') $('#connChatBlock').classList.add('open');
+  if (localStorage.getItem('ms_pb_connStreamDeckBlock') === '1') $('#connStreamDeckBlock').classList.add('open');
   document.addEventListener('click', () => {
     const dd = $('#chatMenuDd');
     if (dd) dd.classList.remove('open');
@@ -1784,6 +1825,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (btn) btn.innerHTML = eyeSvg(pubIpVisible);
   }
 
+  let panelTokenVisible = false;
+  function togglePanelToken() {
+    const el = $('#panelTokenCode');
+    const btn = $('#panelTokenEyeBtn');
+    panelTokenVisible = !panelTokenVisible;
+    el.textContent = panelTokenVisible ? (el.dataset.real || '—') : '•'.repeat(12);
+    if (btn) btn.innerHTML = eyeSvg(panelTokenVisible);
+  }
+
   let chatPubIpVisible = false;
   async function toggleChatPubIp() {
     const el = $('#chatPubUrl');
@@ -1861,6 +1911,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         $('#chatLanField').style.display = '';
       }
       $('#chatPubField').style.display = '';
+      if (c.panelToken) {
+        $('#panelTokenCode').dataset.real = c.panelToken;
+        $('#panelTokenField').style.display = '';
+        $('#panelTokenHint').style.display = 'none';
+      }
       if (c.version) window._appVersion = c.version;
     } catch {}
   }
