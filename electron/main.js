@@ -125,7 +125,7 @@ function titleBarConfig(height = TITLEBAR_HEIGHT, isDark = true) {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1100, height: 760, minWidth: 900, minHeight: 600,
+    width: 1200, height: 860, minWidth: 900, minHeight: 600,
     show: false,
     backgroundColor: '#0d1117',
     title: 'Muxlyve',

@@ -2,6 +2,7 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
 import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
@@ -123,6 +124,7 @@ async function fetchPublicIp() {
 async function handleApi(req, res, url) {
   // GET /api/state
   if (req.method === 'GET' && url.pathname === '/api/state') {
+    debugLog('log', 'GET /api/state -> 200 (buildState() OK)');
     return json(res, 200, buildState());
   }
 
@@ -156,6 +158,21 @@ async function handleApi(req, res, url) {
     const onMessage = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
     chatBus.on('message', onMessage);
     req.on('close', () => chatBus.off('message', onMessage));
+    return;
+  }
+
+  // GET /api/debug-log -> SSE de debugBus (ver DEBUG_LOG_ROUTES arriba) — PANEL_HTML lo
+  // vuelca a console.log/error para verlo en DevTools, ya que este proceso Node no
+  // comparte consola con el renderer de Electron.
+  if (req.method === 'GET' && url.pathname === '/api/debug-log') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    const onLog = (entry) => res.write(`data: ${JSON.stringify(entry)}\n\n`);
+    debugBus.on('log', onLog);
+    req.on('close', () => debugBus.off('log', onLog));
     return;
   }
 
@@ -199,9 +216,16 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/destinations') {
     let input;
     try { input = await readBody(req); }
-    catch (err) { return json(res, 400, { error: err.message }); }
+    catch (err) {
+      debugLog('error', `POST /api/destinations -> 400 leyendo el body: ${err.message}`);
+      return json(res, 400, { error: err.message });
+    }
+    debugLog('log', `POST /api/destinations body recibido: ${JSON.stringify(input)}`);
     const { error, dest } = validateDestination(input);
-    if (error) return json(res, 400, { error });
+    if (error) {
+      debugLog('error', `POST /api/destinations -> 400 validateDestination: ${error}`);
+      return json(res, 400, { error });
+    }
 
     const list = loadAll();
     const idx = list.findIndex((d) => d.name === dest.name);
@@ -210,6 +234,7 @@ async function handleApi(req, res, url) {
       : [...list, dest];
     saveAll(next);
     applyChange(dest); // arranca/para el relay en caliente si hay emisión
+    debugLog('log', `POST /api/destinations -> 200, "${dest.name}" enabled=${dest.enabled}`);
     return json(res, 200, buildState());
   }
 
@@ -282,18 +307,56 @@ async function handleApi(req, res, url) {
 // nada sensible (mensajes de chat ya públicos en Twitch/Kick, sin claves ni control).
 const PUBLIC_LAN_PATHS = new Set(['/chat-overlay', '/api/chat']);
 
+// Debug del LAN pairing (Stream Deck, etc.) — panel.js corre en el proceso Node del motor,
+// no comparte consola con el renderer de Electron, así que console.log acá solo se ve en
+// la terminal (o ni eso, en la app empaquetada sin terminal). Este bus reemite cada línea
+// por SSE (/api/debug-log) para que PANEL_HTML la vuelque a su propio console.log/error —
+// esa sí es la consola de DevTools real que el usuario puede abrir. Acotado a propósito a
+// las rutas de abajo, no es logging general.
+const debugBus = new EventEmitter();
+const DEBUG_LOG_ROUTES = new Set(['/api/state', '/api/destinations']);
+// Silencio total si ALLOW_LAN_PANEL está apagado (default para casi todos): sin esto,
+// cada poll de /api/state (~cada 2s, de TODOS los usuarios) satura el buffer de 500
+// líneas que alimenta "Reportar un problema" (ver electron/logbuffer.js) y empuja afuera
+// lo útil. El check vive acá adentro para no tener que acordarse en cada call site.
+function debugLog(level, line) {
+  if (process.env.ALLOW_LAN_PANEL !== 'true') return;
+  (level === 'error' ? console.error : console.log)(`[panel-debug] ${line}`);
+  debugBus.emit('log', { level, line, at: Date.now() });
+}
+
 export function startPanel(port, config = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     try {
+      // debugLog() ya se auto-silencia si ALLOW_LAN_PANEL está apagado — acá solo se
+      // acota a las 2 rutas que hace falta depurar (ver DEBUG_LOG_ROUTES).
+      const dbg = DEBUG_LOG_ROUTES.has(url.pathname);
+      if (dbg) {
+        debugLog('log', `REQUEST ${req.method} ${url.pathname} desde ${req.socket.remoteAddress} — Authorization: ${req.headers.authorization ? 'presente' : 'ausente'}`);
+      }
       // Fuera de loopback, con LAN habilitada: todo lo que no esté en el allowlist de
       // arriba exige el token compartido (claves RTMP, control de destinos, envío de
       // chat como el streamer, etc. — nada de eso tiene otra protección).
+      // OJO: este bloque es UNO SOLO, corre para cualquier req.method antes de que se
+      // rutee por método/path más abajo — no hay middleware distinto entre GET y POST,
+      // ambos pasan por acá exactamente igual.
       if (process.env.ALLOW_LAN_PANEL === 'true' && !isLoopback(req) && !PUBLIC_LAN_PATHS.has(url.pathname)) {
         const expected = `Bearer ${getOrCreatePanelToken()}`;
-        if (req.headers.authorization !== expected) {
+        const got = req.headers.authorization;
+        if (got !== expected) {
+          const reason = !got ? 'token ausente (sin header Authorization)' : 'token presente pero no coincide con el esperado';
+          if (dbg) debugLog('error', `AUTH RECHAZADO ${req.method} ${url.pathname} — ${reason}`);
           return json(res, 401, { error: t('No autorizado — falta o es inválido el token del panel.') });
         }
+        if (dbg) debugLog('log', `AUTH OK ${req.method} ${url.pathname} — token válido, no-loopback`);
+      } else if (dbg) {
+        const why = process.env.ALLOW_LAN_PANEL !== 'true'
+          ? 'ALLOW_LAN_PANEL desactivado, no se exige token'
+          : isLoopback(req)
+            ? 'request desde loopback, no se exige token'
+            : 'ruta en el allowlist público, no se exige token';
+        debugLog('log', `AUTH OMITIDO ${req.method} ${url.pathname} — ${why}`);
       }
       // Config del ingest (URL/clave/preview) — estática, el panel la pide una vez.
       if (req.method === 'GET' && url.pathname === '/api/config') {
@@ -702,10 +765,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     font-variant-numeric: tabular-nums; white-space: nowrap; }
   .retry { background: var(--danger); color: #fff; }
   label { display: block; font-size: .75rem; color: var(--muted); margin: 0 0 .25rem; }
-  input[type=text] { width: 100%; background: var(--bg); border: 1px solid var(--border);
+  input[type=text], input[type=password], input[type=number] { width: 100%; background: var(--bg); border: 1px solid var(--border);
     color: var(--text); border-radius: 8px; padding: .5rem .65rem; font-size: .88rem;
     font-family: ui-monospace, monospace; }
-  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  input[type=text]:focus, input[type=password]:focus, input[type=number]:focus { outline: none; border-color: var(--accent); }
+  /* Los navegadores agregan un ícono nativo de mostrar/ocultar en type=password — ya
+     tenemos nuestro propio .eye-btn al lado, el nativo duplica y no matchea el tema. */
+  input[type=password]::-ms-reveal, input[type=password]::-ms-clear { display: none; }
+  input[type=password]::-webkit-credentials-auto-fill-button,
+  input[type=password]::-webkit-textfield-decoration-container { display: none !important; }
   .row { display: flex; gap: .6rem; align-items: flex-end; margin-top: .75rem; }
   .row .field { flex: 1; }
   button { cursor: pointer; border: none; border-radius: 8px; padding: .5rem .85rem;
@@ -797,9 +865,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
     max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pb-soon-tag { font-size: .65rem; color: var(--off); font-style: italic; }
-  /* Compact RTMP card inside platform block */
-  .pb-rtmp { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: .6rem .7rem; margin-bottom: .55rem; }
+  /* Plano a propósito — iba con su propia tarjeta (bg + borde) igual que .pb-block que
+     lo contiene, mismo look "caja dentro de caja" que ya se corrigió en Información de
+     conexión (.pb-subblock). Acá no hace falta ni ese nivel intermedio. */
+  .pb-rtmp { margin-bottom: .55rem; }
   .pb-rtmp label { font-size: .7rem; }
   .pb-rtmp input[type=text] { font-size: .82rem; padding: .38rem .5rem; }
   .pb-rtmp .row { margin-top: .5rem; gap: .4rem; }
@@ -1414,6 +1483,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       try { const l = JSON.parse(e.data); vu.tL = l.l; vu.tR = l.r; } catch {}
     };
     // EventSource reconecta solo ante error; nada más que hacer.
+  })();
+
+  // Vuelca src/panel.js:debugLog() acá — es la única consola que el usuario puede abrir
+  // en la app empaquetada (DevTools de esta ventana). Ver LAN pairing con Stream Deck.
+  (function initDebugLogSSE() {
+    if (typeof EventSource === 'undefined') return;
+    const es = new EventSource('/api/debug-log');
+    es.onmessage = (e) => {
+      try {
+        const entry = JSON.parse(e.data);
+        (entry.level === 'error' ? console.error : console.log)('[panel-debug]', entry.line);
+      } catch {}
+    };
   })();
 
   function updateIngest(state) {
@@ -2458,7 +2540,9 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   .chat-menu-dd.open { display: block; }
   .chat-menu-dd .cmd-note { font-size: .66rem; color: var(--muted); margin-bottom: .5rem; line-height: 1.3; }
   .chat-menu-dd .cmd-row { display: flex; align-items: center; justify-content: space-between; padding: .25rem 0; font-size: .78rem; }
-  .chat-menu-dd input[type=number] { width: 50px; }
+  .chat-menu-dd input[type=number] { width: 50px; background: var(--bg); border: 1px solid rgba(128,128,128,.25);
+    color: var(--text); border-radius: 6px; padding: .25rem .35rem; font-size: .78rem; }
+  .chat-menu-dd input[type=number]:focus { outline: none; border-color: var(--accent); }
   .chat-menu-dd button.apply { width: 100%; margin-top: .4rem; padding: .35rem; border-radius: 6px;
     border: none; background: var(--accent, #7c5cff); color: #fff; cursor: pointer; font-size: .78rem; }
   .cmd-status { font-size: .68rem; margin-top: .35rem; min-height: 1em; }
