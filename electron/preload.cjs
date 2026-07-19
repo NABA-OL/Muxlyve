@@ -27,4 +27,7 @@ contextBridge.exposeInMainWorld('msApp', {
   setCloseToTray: (val) => ipcRenderer.invoke('app:set-close-to-tray', val),
   getLanguage: () => ipcRenderer.invoke('app:get-language'),
   setLanguage: (lang) => ipcRenderer.invoke('app:set-language', lang),
+  getAllowLanPanel: () => ipcRenderer.invoke('app:get-allow-lan-panel'),
+  setAllowLanPanel: (val) => ipcRenderer.invoke('app:set-allow-lan-panel', val),
+  relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
 });

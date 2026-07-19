@@ -969,7 +969,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                     <button onclick="copy('panelTokenCode')">copiar</button>
                   </div>
                 </div>
-                <p class="auto-note" id="panelTokenHint">Activa <code>ALLOW_LAN_PANEL=true</code> en tu <code>.env</code> y reinicia Muxlyve para generar el token.</p>
+                <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
               </div></div>
             </div>
           </div></div>
@@ -1112,6 +1112,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
         </div>
         <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
+      </div>
+      <div class="pref-row">
+        <div>
+          <div>Permitir Stream Deck / chat desde otra máquina</div>
+          <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
+        </div>
+        <label class="sys-toggle">
+          <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
+      <div class="pref-row" id="allowLanRestartRow" style="display:none">
+        <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
+        <button onclick="relaunchApp()">Reiniciar ahora</button>
       </div>
     </div>
     <div class="prefs-section">
@@ -2059,6 +2073,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     })();
   }
 
+  function closeConnInfoAndOpenPrefs(e) {
+    e.preventDefault();
+    openPrefs();
+  }
   async function openPrefs() {
     $('#prefsOverlay').classList.add('open');
     if (window.msApp) {
@@ -2070,6 +2088,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         $('#startMinChk').checked = s.startMinimized;
         $('#startMinRow').style.display = s.openAtLogin ? '' : 'none';
         $('#closeToTrayChk').checked = await window.msApp.getCloseToTray();
+        $('#allowLanChk').checked = await window.msApp.getAllowLanPanel();
         markActiveLanguageBtn(await window.msApp.getLanguage());
       } catch {}
     }
@@ -2094,6 +2113,17 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   async function toggleCloseToTray() {
     if (!window.msApp) return;
     try { await window.msApp.setCloseToTray($('#closeToTrayChk').checked); } catch {}
+  }
+  async function toggleAllowLan() {
+    if (!window.msApp) return;
+    try {
+      await window.msApp.setAllowLanPanel($('#allowLanChk').checked);
+      $('#allowLanRestartRow').style.display = '';
+    } catch {}
+  }
+  async function relaunchApp() {
+    if (!window.msApp) return;
+    try { await window.msApp.relaunchApp(); } catch {}
   }
 
   async function checkForUpdates() {

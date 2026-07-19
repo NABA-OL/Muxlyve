@@ -331,6 +331,21 @@ ipcMain.handle('app:set-close-to-tray', (_, val) => {
   return prefs.closeToTray;
 });
 
+// Permitir Stream Deck / chat overlay desde otra máquina — expone el panel a la LAN.
+// Solo guarda la preferencia; el bind real pasa en src/panel.js leyendo ALLOW_LAN_PANEL
+// de process.env AL ARRANCAR, así que el cambio no aplica hasta reiniciar la app entera
+// (ver app:relaunch) — nunca en caliente, para no cortar una transmisión en curso.
+ipcMain.handle('app:get-allow-lan-panel', () => !!prefs.allowLanPanel);
+ipcMain.handle('app:set-allow-lan-panel', (_, val) => {
+  prefs.allowLanPanel = !!val;
+  savePrefs(prefs);
+  return prefs.allowLanPanel;
+});
+ipcMain.handle('app:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
+});
+
 ipcMain.handle('report:send', async (_, description) => {
   try {
     const license = getLicenseInfo();
@@ -376,6 +391,12 @@ app.whenReady().then(async () => {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
       if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
     }
+  }
+
+  // Toggle de Preferencias → LAN. Un ALLOW_LAN_PANEL puesto a mano en el .env (arriba)
+  // manda igual — esto solo cubre el caso normal, sin editar archivos.
+  if (prefs.allowLanPanel && !process.env.ALLOW_LAN_PANEL) {
+    process.env.ALLOW_LAN_PANEL = 'true';
   }
 
   const license = await checkLicense({ isPackaged: app.isPackaged });

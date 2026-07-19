@@ -141,11 +141,15 @@ export const tMap = {
   'Token de acceso remoto (ALLOW_LAN_PANEL)': 'Remote access token (ALLOW_LAN_PANEL)',
   'Conexión plugin Stream Deck': 'Stream Deck plugin connection',
   'Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.': 'Only needed if you\'ll control Muxlyve from a Stream Deck on another machine (secondary streaming machine). If the Stream Deck is on this same computer, you don\'t need this.',
-  // Key incluye el HTML embebido a propósito — fragmentarlo en pedazos cortos tipo
-  // "Activa"/"en tu" choca con substrings de otras palabras ya en tMap ("Activar buffer",
-  // etc.), mismo bug de sustring que TMAP_KEYS_BY_LENGTH ya corrige para keys entre sí,
-  // pero no protege contra texto SIN key propia que comparta la palabra corta.
-  'Activa <code>ALLOW_LAN_PANEL=true</code> en tu <code>.env</code> y reinicia Muxlyve para generar el token.': 'Enable <code>ALLOW_LAN_PANEL=true</code> in your <code>.env</code> and restart Muxlyve to generate the token.',
+  // Keys de abajo incluyen el HTML embebido a propósito — fragmentarlas en pedazos cortos
+  // choca con substrings de otras palabras ya en tMap ("Activar buffer", etc.), mismo bug
+  // de sustring que TMAP_KEYS_BY_LENGTH corrige para keys entre sí, pero no protege contra
+  // texto sin key propia que comparta una palabra corta.
+  'Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.': 'Enable it in <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferences → System → "Allow Stream Deck / chat from another machine"</a> and restart Muxlyve to generate the token.',
+  'Permitir Stream Deck / chat desde otra máquina': 'Allow Stream Deck / chat from another machine',
+  'Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.': 'Opens the panel to your local network (LAN). Without this, the Stream Deck plugin and the OBS chat overlay only work on this same computer. Anyone on your network could control your destinations while this is on.',
+  'Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.': 'Restart Muxlyve to apply this change — it won\'t interrupt an ongoing stream until you do.',
+  'Reiniciar ahora': 'Restart now',
   '¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Información de conexión" → "Conexión del chat".': 'Want to show the chat in your streaming software (OBS, Streamlabs, etc.)? The URL for your Browser source is under "Connection info" → "Chat connection".',
   '¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → "Información de conexión" → "Conexión del chat" para copiar la URL.': 'Want to show the chat in your streaming software (OBS, Streamlabs, etc.)? Open the main Muxlyve panel → "Connection info" → "Chat connection" to copy the URL.',
   'Usar chat en OBS / Streamlabs': 'Use chat in OBS / Streamlabs',
