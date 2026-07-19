@@ -62,6 +62,7 @@ nms.run();
 startPanel(PANEL_PORT, {
   rtmpUrl: `rtmp://localhost:${RTMP_PORT}/live`,
   lanRtmpUrl: LAN_IP ? `rtmp://${LAN_IP}:${RTMP_PORT}/live` : null,
+  lanIp: LAN_IP,
   rtmpPort: RTMP_PORT,
   streamKey: STREAM_KEY,
   // node-media-server expone el ingest como HTTP-FLV en su puerto HTTP.

@@ -284,6 +284,7 @@ export function startPanel(port, config = {}) {
         return json(res, 200, {
           rtmpUrl: config.rtmpUrl || '',
           lanRtmpUrl: config.lanRtmpUrl || '',
+          lanIp: config.lanIp || null,
           rtmpPort: config.rtmpPort || null,
           streamKey: config.streamKey || '',
           flvUrl: config.flvUrl || '',
@@ -573,14 +574,37 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   /* ── Preview ── */
   .preview { margin-bottom: 1rem; }
-  .video-wrap { position: relative; background: #000; border: 1px solid var(--border);
-    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9; }
+  /* Registrada como <color> para que @keyframes la interpole en vez de saltar entre valores. */
+  @property --glow-video { syntax: '<color>'; inherits: false; initial-value: #7c5cff; }
+  .video-wrap { position: relative; background: #000;
+    border: 1px solid color-mix(in srgb, var(--glow-video) 45%, var(--border));
+    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9;
+    box-shadow:
+      0 8px 25px -8px color-mix(in srgb, var(--glow-video) 55%, transparent),
+      inset 0 0 16px -8px color-mix(in srgb, var(--glow-video) 50%, transparent);
+    animation: videoGlowOffline 4s ease-in-out infinite; }
+  /* Sin señal: rojo↔naranja, ciclo más corto (llama la atención). En vivo: morado↔azul de marca. */
+  @keyframes videoGlowOffline {
+    0%, 100% { --glow-video: #f85149; }
+    50% { --glow-video: #f0a23a; }
+  }
+  @keyframes videoGlowLive {
+    0%, 100% { --glow-video: #7c5cff; }
+    50% { --glow-video: #4da3ff; }
+  }
+  .video-wrap.live { animation: videoGlowLive 6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .video-wrap { animation: none; --glow-video: #f85149; }
+    .video-wrap.live { animation: none; --glow-video: #7c5cff; }
+  }
   .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
   .video-ph { position: absolute; inset: 0; display: flex; align-items: center;
     justify-content: center; color: var(--muted); font-size: .88rem; text-align: center; padding: 1rem; }
   .conn { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
   .conn .field { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: .5rem .65rem; }
+    border-radius: 10px; padding: .6rem .75rem; box-shadow: 0 1px 2px rgba(0,0,0,.15);
+    transition: border-color .15s var(--ease-out); }
+  .conn .field:hover { border-color: var(--muted); }
   .copyrow { display: flex; gap: .4rem; align-items: center; }
   .copyrow input[type="text"] { flex: 1; min-width: 0; }
   .browse-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px;
@@ -709,21 +733,44 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   /* ── Platform blocks ── */
   .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; }
+  /* Glow por estado del toggle de reenvío (solo bloques con destino RTMP configurado). */
+  .pb-block.pb-on, .pb-block.pb-off {
+    --glow: var(--live);
+    border-color: color-mix(in srgb, var(--glow) 45%, transparent);
+    box-shadow:
+      0 8px 25px -8px color-mix(in srgb, var(--glow) 55%, transparent),
+      inset 0 0 16px -8px color-mix(in srgb, var(--glow) 50%, transparent);
+    transition: border-color .2s var(--ease-out), box-shadow .2s var(--ease-out);
+  }
+  .pb-block.pb-off { --glow: var(--danger); }
   .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
     cursor: pointer; user-select: none; background: var(--surface); transition: background .15s var(--ease-out); }
   .pb-head:hover { background: var(--surface-2); }
   .pb-chevron { color: var(--muted); transition: transform .2s var(--ease-out); flex-shrink: 0;
     font-style: normal; font-size: .6rem; display: inline-block; }
-  .pb-block.open .pb-chevron { transform: rotate(90deg); }
+  .pb-block.open > .pb-head .pb-chevron { transform: rotate(90deg); }
   .pb-body {
     display: grid;
     grid-template-rows: 0fr;
     border-top: 0px solid var(--border);
     transition: grid-template-rows .2s var(--ease-out), border-top-width .2s var(--ease-out);
   }
-  .pb-block.open .pb-body { grid-template-rows: 1fr; border-top-width: 1px; }
+  .pb-block.open > .pb-body { grid-template-rows: 1fr; border-top-width: 1px; }
   .pb-body-inner { overflow: hidden; padding: 0 .9rem; }
-  .pb-block.open .pb-body-inner { padding: .65rem .9rem; }
+  .pb-block.open > .pb-body > .pb-body-inner { padding: .65rem .9rem; }
+
+  /* Submenú anidado (ej. Conexión servidor / Conexión del chat dentro de Información de
+     conexión): plano, sin su propia tarjeta — evita el look "caja dentro de caja dentro
+     de caja" cuando ya está adentro de un .pb-block con borde. */
+  .pb-subblock { border: none; border-radius: 0; margin-bottom: 0; background: transparent; }
+  .pb-subblock + .pb-subblock { margin-top: .35rem; padding-top: .35rem; border-top: 1px solid var(--border); }
+  .pb-subblock > .pb-head { background: transparent; padding: .3rem .1rem; }
+  .pb-subblock > .pb-head:hover { background: transparent; }
+  .pb-subblock > .pb-head:hover .pb-head-name { color: var(--text); }
+  .pb-subblock.open > .pb-body { border-top-width: 0; }
+  /* .conn en el wrapper del submenú no alcanza a los .field (quedan 2 niveles más abajo,
+     dentro de .pb-body-inner) — el gap real va acá, donde sí son hijos directos. */
+  .pb-subblock.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; padding: .5rem .1rem .15rem; }
   .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
   .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
     max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -795,7 +842,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   <!-- Principal: preview + config OBS + grabador -->
   <div class="main-col">
     <section class="preview">
-        <div class="video-wrap">
+        <div class="video-wrap" id="videoWrap">
           <video id="player" muted playsinline></video>
           <div class="video-ph" id="videoPh">Esperando señal de tu streaming…</div>
         </div>
@@ -821,7 +868,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             </div>
           </div>
         </div>
-        <div class="conn pb-block open" id="connInfoBlock">
+        <div class="pb-block open" id="connInfoBlock" style="margin-top:.75rem">
           <div class="pb-head" onclick="toggleConnInfo()">
             <i class="pb-chevron">&#9654;</i>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
@@ -833,25 +880,57 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <span class="pb-head-name">Información de conexión</span>
           </div>
           <div class="pb-body"><div class="pb-body-inner">
-            <div class="field">
-              <label>Servidor RTMP (en tu software de streaming)</label>
-              <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
-            </div>
-            <div class="field">
-              <label>Clave de retransmisión</label>
-              <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
-            </div>
-            <div class="field" id="lanField" style="display:none">
-              <label>Desde otra máquina en tu red</label>
-              <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
-            </div>
-            <div class="field" id="pubField" style="display:none">
-              <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-              <div class="copyrow">
-                <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
-                <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                <button onclick="copy('pubRtmpUrl')">copiar</button>
+            <div class="conn pb-block pb-subblock" id="connServerBlock">
+              <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
+                <i class="pb-chevron">&#9654;</i>
+                <span class="pb-head-name">Conexión servidor de streaming</span>
               </div>
+              <div class="pb-body"><div class="pb-body-inner">
+                <div class="field">
+                  <label>Servidor RTMP (en tu software de streaming)</label>
+                  <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
+                </div>
+                <div class="field">
+                  <label>Clave de retransmisión</label>
+                  <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+                </div>
+                <div class="field" id="lanField" style="display:none">
+                  <label>Desde otra máquina en tu red</label>
+                  <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
+                </div>
+                <div class="field" id="pubField" style="display:none">
+                  <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+                  <div class="copyrow">
+                    <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+                    <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                    <button onclick="copy('pubRtmpUrl')">copiar</button>
+                  </div>
+                </div>
+              </div></div>
+            </div>
+            <div class="conn pb-block pb-subblock" id="connChatBlock">
+              <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
+                <i class="pb-chevron">&#9654;</i>
+                <span class="pb-head-name">Conexión del chat</span>
+              </div>
+              <div class="pb-body"><div class="pb-body-inner">
+                <div class="field">
+                  <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
+                  <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')">copiar</button></div>
+                </div>
+                <div class="field" id="chatLanField" style="display:none">
+                  <label>Desde otra máquina en tu red</label>
+                  <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')">copiar</button></div>
+                </div>
+                <div class="field" id="chatPubField" style="display:none">
+                  <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+                  <div class="copyrow">
+                    <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
+                    <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                    <button onclick="copy('chatPubUrl')">copiar</button>
+                  </div>
+                </div>
+              </div></div>
             </div>
           </div></div>
         </div>
@@ -913,9 +992,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               </svg>
             </button>
             <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Agrega una fuente de Navegador con esta URL — sin fondo ni menús, solo el chat.</div>
-              <input type="text" id="overlayUrlInput" readonly style="width:100%;font-size:.72rem;padding:.35rem;border-radius:6px;background:var(--bg-2,rgba(128,128,128,.12));border:1px solid var(--border,rgba(128,128,128,.25));color:inherit;margin-bottom:.4rem">
-              <button class="browse-btn" style="width:100%" onclick="copyOverlayUrl(this)">Copiar URL</button>
+              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Información de conexión" → "Conexión del chat".</div>
+              <button class="browse-btn" style="width:100%" onclick="openChatConnInfo()">Ver información de conexión</button>
             </div>
           </div>
           <button class="chat-popout-btn" onclick="openChatWindow()" title="Abrir en ventana aparte">
@@ -1305,6 +1383,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
+    $('#videoWrap').classList.toggle('live', state.live);
     updatePreview(state.live);
     updateRecorder(state);
     updateIngest(state);
@@ -1322,9 +1401,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       const rtmpDest = state.destinations.find(d => d.name.toLowerCase() === p.id) || null;
       const authS = authSt[p.id] || {};
       const storedOpen = localStorage.getItem('ms_pb_' + p.id);
-      const isOpen = storedOpen === null ? true : storedOpen !== '0';
+      const isOpen = storedOpen === '1';
       const block = document.createElement('div');
-      block.className = 'pb-block' + (isOpen ? ' open' : '');
+      const stateClass = (rtmpDest && rtmpDest.url) ? (rtmpDest.enabled ? ' pb-on' : ' pb-off') : '';
+      block.className = 'pb-block' + (isOpen ? ' open' : '') + stateClass;
       block.id = 'pb-' + p.id;
 
       // OAuth header part
@@ -1600,19 +1680,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   function toggleOverlayInfo(e) {
     e.stopPropagation();
-    const input = $('#overlayUrlInput');
-    if (input) input.value = location.origin + '/chat-overlay';
     $('#overlayInfoDd').classList.toggle('open');
   }
-  function copyOverlayUrl(btn) {
-    const input = $('#overlayUrlInput');
-    input.select();
-    navigator.clipboard.writeText(input.value).then(() => {
-      const original = btn.textContent;
-      btn.textContent = '¡Copiado!';
-      setTimeout(() => { btn.textContent = original; }, 1500);
-    }).catch(() => {});
+  function openChatConnInfo() {
+    $('#overlayInfoDd').classList.remove('open');
+    openSubBlock('connInfoBlock');
+    openSubBlock('connChatBlock');
+    $('#connChatBlock').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
+  function openSubBlock(id) {
+    const block = $('#' + id);
+    if (!block) return;
+    block.classList.add('open');
+    localStorage.setItem('ms_pb_' + id, '1');
+  }
+  function toggleConnSub(id) {
+    const block = $('#' + id);
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pb_' + id, isOpen ? '1' : '0');
+  }
+  if (localStorage.getItem('ms_pb_connServerBlock') === '1') $('#connServerBlock').classList.add('open');
+  if (localStorage.getItem('ms_pb_connChatBlock') === '1') $('#connChatBlock').classList.add('open');
   document.addEventListener('click', () => {
     const dd = $('#chatMenuDd');
     if (dd) dd.classList.remove('open');
@@ -1696,6 +1784,25 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (btn) btn.innerHTML = eyeSvg(pubIpVisible);
   }
 
+  let chatPubIpVisible = false;
+  async function toggleChatPubIp() {
+    const el = $('#chatPubUrl');
+    const btn = $('#chatPubEyeBtn');
+    chatPubIpVisible = !chatPubIpVisible;
+    if (chatPubIpVisible) {
+      if (!el.dataset.real) {
+        try {
+          const { ip } = await api('GET', '/api/public-ip');
+          if (ip) el.dataset.real = 'http://' + ip + ':' + location.port + '/chat-overlay';
+        } catch {}
+      }
+      el.textContent = el.dataset.real || 'No disponible';
+    } else {
+      el.textContent = 'http://' + '•'.repeat(12) + '/chat-overlay';
+    }
+    if (btn) btn.innerHTML = eyeSvg(chatPubIpVisible);
+  }
+
   // Alterna type=password/text de cualquier <input> junto a un botón .eye-btn dentro de .eyerow.
   function toggleFieldEye(btn) {
     const input = btn.previousElementSibling;
@@ -1748,6 +1855,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         window._rtmpPort = c.rtmpPort;
         $('#pubField').style.display = '';
       }
+      $('#chatLocalUrl').textContent = location.origin + '/chat-overlay';
+      if (c.lanIp) {
+        $('#chatLanUrl').textContent = 'http://' + c.lanIp + ':' + location.port + '/chat-overlay';
+        $('#chatLanField').style.display = '';
+      }
+      $('#chatPubField').style.display = '';
       if (c.version) window._appVersion = c.version;
     } catch {}
   }
@@ -2315,9 +2428,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       </svg>
     </button>
     <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Agrega una fuente de Navegador con esta URL — sin fondo ni menús, solo el chat.</div>
-      <input type="text" id="overlayUrlInput" readonly style="width:100%;font-size:.72rem;padding:.35rem;border-radius:6px;background:rgba(128,128,128,.12);border:1px solid rgba(128,128,128,.25);color:inherit;margin-bottom:.4rem">
-      <button class="apply" onclick="copyOverlayUrl(this)">Copiar URL</button>
+      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → "Información de conexión" → "Conexión del chat" para copiar la URL.</div>
     </div>
   </div>
 </div>
@@ -2346,18 +2457,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   }
   function toggleOverlayInfo(e) {
     e.stopPropagation();
-    var input = document.getElementById('overlayUrlInput');
-    if (input) input.value = location.origin + '/chat-overlay';
     document.getElementById('overlayInfoDd').classList.toggle('open');
-  }
-  function copyOverlayUrl(btn) {
-    var input = document.getElementById('overlayUrlInput');
-    input.select();
-    navigator.clipboard.writeText(input.value).then(function () {
-      var original = btn.textContent;
-      btn.textContent = '¡Copiado!';
-      setTimeout(function () { btn.textContent = original; }, 1500);
-    }).catch(function () {});
   }
   document.addEventListener('click', function () {
     var dd = document.getElementById('chatMenuDd');
