@@ -124,7 +124,6 @@ async function fetchPublicIp() {
 async function handleApi(req, res, url) {
   // GET /api/state
   if (req.method === 'GET' && url.pathname === '/api/state') {
-    debugLog('log', 'GET /api/state -> 200 (buildState() OK)');
     return json(res, 200, buildState());
   }
 
@@ -325,16 +324,39 @@ function debugLog(level, line) {
   debugBus.emit('log', { level, line, at: Date.now() });
 }
 
+// Sin esto, cada poll normal de /api/state (~cada 2s, por cliente) reescribe el buffer de
+// 500 líneas de "Reportar un problema" con puro ruido de "todo bien" — para cuando alguien
+// manda un reporte por otra cosa, lo único que queda son estas líneas. Por eso: un éxito
+// se loguea una vez cada HEARTBEAT_MS por (IP + ruta) salvo que la vez anterior haya sido
+// error, en cuyo caso se loguea de una como "recuperado" — errores SIEMPRE se loguean, sin
+// throttle, porque son justo lo que hace falta ver.
+const HEARTBEAT_MS = 10 * 60 * 1000;
+const lastLogState = new Map(); // key (ip|method|path) -> { at, error }
+function debugLogSmart(key, isError, line) {
+  const prev = lastLogState.get(key);
+  const now = Date.now();
+  if (isError) {
+    lastLogState.set(key, { at: now, error: true });
+    debugLog('error', line);
+    return;
+  }
+  const recovering = prev?.error;
+  const dueHeartbeat = !prev || (now - prev.at >= HEARTBEAT_MS);
+  lastLogState.set(key, { at: now, error: false });
+  if (recovering) debugLog('log', 'RECUPERADO — ' + line);
+  else if (dueHeartbeat) debugLog('log', line);
+}
+
 export function startPanel(port, config = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     try {
       // debugLog() ya se auto-silencia si ALLOW_LAN_PANEL está apagado — acá solo se
-      // acota a las 2 rutas que hace falta depurar (ver DEBUG_LOG_ROUTES).
+      // acota a las 2 rutas que hace falta depurar (ver DEBUG_LOG_ROUTES). Éxitos van
+      // por debugLogSmart (throttled, ver arriba) — errores siempre se loguean de una.
       const dbg = DEBUG_LOG_ROUTES.has(url.pathname);
-      if (dbg) {
-        debugLog('log', `REQUEST ${req.method} ${url.pathname} desde ${req.socket.remoteAddress} — Authorization: ${req.headers.authorization ? 'presente' : 'ausente'}`);
-      }
+      const dbgKey = `${req.socket.remoteAddress}|${req.method}|${url.pathname}`;
+      const dbgId = `${req.method} ${url.pathname} desde ${req.socket.remoteAddress} (Authorization: ${req.headers.authorization ? 'presente' : 'ausente'})`;
       // Fuera de loopback, con LAN habilitada: todo lo que no esté en el allowlist de
       // arriba exige el token compartido (claves RTMP, control de destinos, envío de
       // chat como el streamer, etc. — nada de eso tiene otra protección).
@@ -346,17 +368,17 @@ export function startPanel(port, config = {}) {
         const got = req.headers.authorization;
         if (got !== expected) {
           const reason = !got ? 'token ausente (sin header Authorization)' : 'token presente pero no coincide con el esperado';
-          if (dbg) debugLog('error', `AUTH RECHAZADO ${req.method} ${url.pathname} — ${reason}`);
+          if (dbg) debugLogSmart(dbgKey, true, `AUTH RECHAZADO ${dbgId} — ${reason}`);
           return json(res, 401, { error: t('No autorizado — falta o es inválido el token del panel.') });
         }
-        if (dbg) debugLog('log', `AUTH OK ${req.method} ${url.pathname} — token válido, no-loopback`);
+        if (dbg) debugLogSmart(dbgKey, false, `AUTH OK ${dbgId} — token válido, no-loopback`);
       } else if (dbg) {
         const why = process.env.ALLOW_LAN_PANEL !== 'true'
           ? 'ALLOW_LAN_PANEL desactivado, no se exige token'
           : isLoopback(req)
             ? 'request desde loopback, no se exige token'
             : 'ruta en el allowlist público, no se exige token';
-        debugLog('log', `AUTH OMITIDO ${req.method} ${url.pathname} — ${why}`);
+        debugLogSmart(dbgKey, false, `AUTH OMITIDO ${dbgId} — ${why}`);
       }
       // Config del ingest (URL/clave/preview) — estática, el panel la pide una vez.
       if (req.method === 'GET' && url.pathname === '/api/config') {
@@ -475,8 +497,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .wm-li { color: var(--accent); }
   .wm-li.show { max-width: 2.4ch; opacity: 1; }
   @media (prefers-reduced-motion: reduce) { .wm-li { transition: none; } }
-  .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); }
-  .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); }
+  .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); min-width: 0; }
+  .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); flex-shrink: 0; }
+  .stream-title-display { color: var(--text); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; min-width: 0; padding-left: .5rem; border-left: 1px solid var(--border); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
     box-shadow: 0 0 0 0 transparent; transition: background .3s var(--ease-out), box-shadow .3s var(--ease-out); }
   .dot.on {
@@ -580,8 +604,29 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .prefs-close { background: transparent; color: var(--muted); border: 1px solid transparent;
     font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
   .prefs-close:hover { color: var(--text); background: var(--surface-2); }
-  .prefs-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .75rem; }
+  .prefs-modal-wide { width: 720px; }
+  .prefs-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+  .prefs-nav { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .prefs-nav-item { display: flex; align-items: center; gap: .55rem; width: 100%;
+    padding: .6rem .7rem; border-radius: 9px; background: transparent; border: none;
+    color: var(--muted); font-size: .85rem; font-weight: 600; text-align: left;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out); }
+  .prefs-nav-item svg:first-child { flex-shrink: 0; }
+  .prefs-nav-item span { flex: 1; }
+  .prefs-nav-chevron { flex-shrink: 0; opacity: 0; transition: opacity .15s var(--ease-out); }
+  .prefs-nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .prefs-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+  .prefs-nav-item.active .prefs-nav-chevron { opacity: 1; }
+  /* Grid con todos los paneles apilados en la misma celda (1/1): el alto de la fila
+     queda fijado por el más alto de los 4 (Sistema, normalmente) aunque esté oculto —
+     visibility:hidden sigue contando para el layout, a diferencia de display:none. Así
+     el modal no salta de tamaño al cambiar de sección, solo cambia el contenido visible. */
+  .prefs-panels { flex: 1; min-width: 0; max-height: 60vh; overflow-y: auto; padding-right: .25rem;
+    display: grid; }
+  .prefs-panel { grid-area: 1 / 1; opacity: 0; visibility: hidden; pointer-events: none; }
+  .prefs-panel.active { opacity: 1; visibility: visible; pointer-events: auto;
+    animation: prefsPanelFade .18s var(--ease-out); }
+  @keyframes prefsPanelFade { from { opacity: 0; } to { opacity: 1; } }
   .pref-row { display: flex; align-items: center; justify-content: space-between;
     padding: .5rem 0; border-bottom: 1px solid var(--border); }
   .pref-row:last-child { border-bottom: none; }
@@ -656,6 +701,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .rec-dur button.sel { border-color: var(--accent); color: var(--accent); background: rgba(124,92,255,.1); }
   .rec-status { font-size: .78rem; color: var(--muted); margin-top: .5rem; min-height: 1.2em; }
   .rec-status.on { color: var(--live); }
+  .rec-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+  .rec-toggle-label { font-size: .85rem; color: var(--text); font-weight: 600; }
+  .rec-toggle-row .rec-status { margin-top: .15rem; }
 
   /* ── Preview ── */
   .preview { margin-bottom: 1rem; }
@@ -879,6 +927,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     width: 100%; padding: .38rem; font-size: .76rem; border-radius: 8px; font-weight: 400; }
   .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
   .pb-add-rtmp-form { margin-top: .45rem; }
+  .stream-info-btn { display: flex; align-items: center; justify-content: center; gap: .45rem;
+    width: 100%; margin-bottom: .75rem; padding: .6rem; border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent); font-size: .85rem; font-weight: 600;
+    transition: background .15s var(--ease-out), border-color .15s var(--ease-out); }
+  .stream-info-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: var(--accent); }
   .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }
 </style>
 </head>
@@ -892,28 +948,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <span class="dot" id="liveDot"></span>
     <span id="liveTxt">comprobando…</span>
     <span class="uptime" id="uptime"></span>
+    <span class="stream-title-display" id="streamTitleDisplay" style="display:none"></span>
   </div>
   <div class="header-actions">
-    <button class="sidebar-toggle-btn" id="themeToggle" onclick="toggleTheme()" title="Cambiar tema">
-      <!-- sun: mostrar cuando modo oscuro activo (click → claro) -->
-      <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="4"/>
-        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
-      </svg>
-      <!-- moon: mostrar cuando modo claro activo (click → oscuro) -->
-      <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-      </svg>
-    </button>
     <button class="sidebar-toggle-btn" id="prefsBtn" onclick="openPrefs()" title="Preferencias">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
         <circle cx="12" cy="12" r="3"/>
-      </svg>
-    </button>
-    <button class="sidebar-toggle-btn" id="licBtn" onclick="openLic()" title="Licencia">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
       </svg>
     </button>
     <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
@@ -942,21 +983,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div class="vu" title="Nivel de audio (L / R)">
             <div class="vu-ch"><span class="vu-fill" id="vuL"></span></div>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
-          </div>
-        </div>
-        <div class="conn">
-          <div class="field">
-            <label>Título del stream</label>
-            <div class="copyrow">
-              <input type="text" id="titleInput" placeholder="¿Qué vas a transmitir hoy?">
-            </div>
-          </div>
-          <div class="field" style="margin-top:.5rem">
-            <label>Categoría / juego</label>
-            <div class="copyrow">
-              <input type="text" id="categoryInput" placeholder="Just Chatting, Minecraft…">
-              <button class="browse-btn" onclick="applyStreamTitle(this)">Aplicar</button>
-            </div>
           </div>
         </div>
         <div class="pb-block open" id="connInfoBlock" style="margin-top:.75rem">
@@ -1045,17 +1071,30 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </div>
         <!-- Grabador de clips -->
         <div class="rec-section">
-          <div class="row">
-            <button id="recToggle" disabled onclick="toggleRec()">Activar buffer</button>
-            <button id="clipSaveBtn" style="display:none" onclick="doSaveClip()">Guardar clip</button>
+          <div class="rec-toggle-row">
+            <div>
+              <div class="rec-toggle-label">Activar buffer</div>
+              <div class="rec-status" id="recStatus">Conecta tu software de streaming para usar el buffer.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="recToggle" disabled onchange="toggleRec()">
+              <span class="sys-toggle-track"></span>
+            </label>
           </div>
-          <div class="rec-status" id="recStatus">Conecta tu software de streaming para usar el buffer.</div>
+          <button id="clipSaveBtn" class="browse-btn" style="display:none;width:100%;margin-top:.65rem" onclick="doSaveClip()">Guardar clip</button>
         </div>
       </section>
   </div>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
     <div class="sidebar-inner" id="connPanel" style="display:none">
+      <button class="stream-info-btn" onclick="openStreamInfo()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>
+        </svg>
+        Modificar información del stream
+      </button>
       <div id="platformList"></div>
       <div id="customList"></div>
 
@@ -1129,102 +1168,172 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 </main>
 <!-- Modal de Preferencias -->
 <div class="prefs-overlay" id="prefsOverlay" onclick="if(event.target===this)closePrefs()">
-  <div class="prefs-modal">
+  <div class="prefs-modal prefs-modal-wide">
     <div class="prefs-head">
       <h2>Preferencias</h2>
       <button class="prefs-close" onclick="closePrefs()">✕</button>
     </div>
-    <div class="prefs-section" id="sysSection" style="display:none">
-      <h3>Sistema</h3>
-      <div class="pref-row">
-        <div>
-          <div>Idioma / Language</div>
+    <div class="prefs-layout">
+      <nav class="prefs-nav">
+        <button class="prefs-nav-item" data-tab="sys" id="prefsNavSys" onclick="switchPrefsTab('sys')" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span>Sistema</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="prefs-nav-item" data-tab="clips" onclick="switchPrefsTab('clips')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="14" x2="15" y2="11"/><circle cx="12" cy="14" r="8"/>
+          </svg>
+          <span>Grabador de clips</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="prefs-nav-item" data-tab="support" id="prefsNavSupport" onclick="switchPrefsTab('support')" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+          </svg>
+          <span>Soporte</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="prefs-nav-item" data-tab="license" onclick="switchPrefsTab('license')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+          </svg>
+          <span>Licencia</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </nav>
+      <div class="prefs-panels">
+        <div class="prefs-panel" id="sysSection" data-panel="sys">
+          <div class="pref-row">
+            <div>
+              <div>Modo oscuro</div>
+              <div class="pref-desc">Cambia entre tema claro y oscuro</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="themeChk" onchange="toggleTheme()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row">
+            <div>
+              <div>Idioma / Language</div>
+            </div>
+            <div style="display:flex;gap:.4rem">
+              <button type="button" class="lang-opt-btn" id="langEsBtn" onclick="setAppLanguage('es')">Español</button>
+              <button type="button" class="lang-opt-btn" id="langEnBtn" onclick="setAppLanguage('en')">English</button>
+            </div>
+          </div>
+          <div class="pref-row">
+            <div>
+              <div>Iniciar con el sistema</div>
+              <div class="pref-desc">Abre Muxlyve al iniciar sesión</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="loginItemChk" onchange="toggleLoginItem()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row" id="startMinRow" style="display:none">
+            <div>
+              <div>Iniciar minimizado en la bandeja</div>
+              <div class="pref-desc">No abre la ventana — queda el ícono junto al reloj</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="startMinChk" onchange="toggleLoginItem()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row">
+            <div>
+              <div>Minimizar a la bandeja al cerrar</div>
+              <div class="pref-desc">El botón cerrar oculta la app en vez de salir — solo se cierra desde el ícono de bandeja</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="closeToTrayChk" onchange="toggleCloseToTray()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row">
+            <div>
+              <div>Buscar actualizaciones</div>
+              <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
+            </div>
+            <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
+          </div>
+          <div class="pref-row">
+            <div>
+              <div>Permitir Stream Deck / chat desde otra máquina</div>
+              <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row" id="allowLanRestartRow" style="display:none">
+            <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
+            <button onclick="relaunchApp()">Reiniciar ahora</button>
+          </div>
         </div>
-        <div style="display:flex;gap:.4rem">
-          <button type="button" class="lang-opt-btn" id="langEsBtn" onclick="setAppLanguage('es')">Español</button>
-          <button type="button" class="lang-opt-btn" id="langEnBtn" onclick="setAppLanguage('en')">English</button>
+        <div class="prefs-panel" id="prefsClipsBlock" data-panel="clips">
+          <div style="margin-bottom:.85rem">
+            <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.4rem">Duración del buffer</label>
+            <div class="rec-dur">
+              <button class="sel" data-dur="30" onclick="setRecDur(30)">30 s</button>
+              <button data-dur="60" onclick="setRecDur(60)">1 min</button>
+              <button data-dur="120" onclick="setRecDur(120)">2 min</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Carpeta de destino de clips</label>
+            <div class="copyrow" style="gap:.4rem;margin-top:.35rem">
+              <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
+                     style="font-family:ui-monospace,monospace;font-size:.78rem"
+                     oninput="localStorage.setItem('ms_clips_dir', this.value)">
+              <button id="browseBtn" class="browse-btn" onclick="browseFolder()" title="Elegir carpeta">…</button>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div>Iniciar con el sistema</div>
-          <div class="pref-desc">Abre Muxlyve al iniciar sesión</div>
+        <div class="prefs-panel" id="reportSection" data-panel="support">
+          <div class="pref-row">
+            <div>
+              <div>Reportar un problema</div>
+              <div class="pref-desc">Envía un log de la app junto con tu descripción</div>
+            </div>
+            <button class="danger-btn" onclick="openReport()">Reportar</button>
+          </div>
         </div>
-        <label class="sys-toggle">
-          <input type="checkbox" id="loginItemChk" onchange="toggleLoginItem()">
-          <span class="sys-toggle-track"></span>
-        </label>
-      </div>
-      <div class="pref-row" id="startMinRow" style="display:none">
-        <div>
-          <div>Iniciar minimizado en la bandeja</div>
-          <div class="pref-desc">No abre la ventana — queda el ícono junto al reloj</div>
+        <div class="prefs-panel" id="prefsLicenseBlock" data-panel="license">
+          <div class="lic-row">
+            <span class="lic-label">Correo</span>
+            <span class="lic-value" id="licEmail">…</span>
+          </div>
+          <div class="lic-status-row">
+            <div>
+              <div class="lic-label" style="margin-bottom:.25rem">Plan</div>
+              <span class="lic-value" id="licPlan">—</span>
+            </div>
+            <span class="lic-badge active" id="licBadge">—</span>
+          </div>
+          <div class="lic-row" id="licRenewRow">
+            <span class="lic-label" id="licRenewLabel">Se renueva</span>
+            <span class="lic-value" id="licRenewDate">—</span>
+          </div>
+          <div class="lic-row">
+            <span class="lic-label">Activado</span>
+            <span class="lic-value" id="licDate">—</span>
+          </div>
+          <div class="lic-danger">
+            <button class="lic-manage-btn" id="licManageBtn"
+              onclick="window.open('https://users.freemius.com','_blank')"
+              style="display:none">Gestionar suscripción ↗</button>
+            <button class="lic-manage-btn" onclick="openAbout()">Acerca de Muxlyve</button>
+            <button class="lic-danger-btn" onclick="releaseLic()">Liberar este equipo</button>
+            <p class="lic-note">Podrás activar la app en otro equipo. Necesitarás tu clave para volver a activarla aquí.</p>
+          </div>
         </div>
-        <label class="sys-toggle">
-          <input type="checkbox" id="startMinChk" onchange="toggleLoginItem()">
-          <span class="sys-toggle-track"></span>
-        </label>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div>Minimizar a la bandeja al cerrar</div>
-          <div class="pref-desc">El botón cerrar oculta la app en vez de salir — solo se cierra desde el ícono de bandeja</div>
-        </div>
-        <label class="sys-toggle">
-          <input type="checkbox" id="closeToTrayChk" onchange="toggleCloseToTray()">
-          <span class="sys-toggle-track"></span>
-        </label>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div>Buscar actualizaciones</div>
-          <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
-        </div>
-        <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
-      </div>
-      <div class="pref-row">
-        <div>
-          <div>Permitir Stream Deck / chat desde otra máquina</div>
-          <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
-        </div>
-        <label class="sys-toggle">
-          <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
-          <span class="sys-toggle-track"></span>
-        </label>
-      </div>
-      <div class="pref-row" id="allowLanRestartRow" style="display:none">
-        <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
-        <button onclick="relaunchApp()">Reiniciar ahora</button>
-      </div>
-    </div>
-    <div class="prefs-section">
-      <h3>Grabador de clips</h3>
-      <div style="margin-bottom:.85rem">
-        <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.4rem">Duración del buffer</label>
-        <div class="rec-dur">
-          <button class="sel" data-dur="30" onclick="setRecDur(30)">30 s</button>
-          <button data-dur="60" onclick="setRecDur(60)">1 min</button>
-          <button data-dur="120" onclick="setRecDur(120)">2 min</button>
-        </div>
-      </div>
-      <div class="field">
-        <label>Carpeta de destino de clips</label>
-        <div class="copyrow" style="gap:.4rem;margin-top:.35rem">
-          <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
-                 style="font-family:ui-monospace,monospace;font-size:.78rem"
-                 oninput="localStorage.setItem('ms_clips_dir', this.value)">
-          <button id="browseBtn" class="browse-btn" onclick="browseFolder()" title="Elegir carpeta">…</button>
-        </div>
-      </div>
-    </div>
-    <div class="prefs-section" id="reportSection" style="display:none">
-      <h3>Soporte</h3>
-      <div class="pref-row">
-        <div>
-          <div>Reportar un problema</div>
-          <div class="pref-desc">Envía un log de la app junto con tu descripción</div>
-        </div>
-        <button class="danger-btn" onclick="openReport()">Reportar</button>
       </div>
     </div>
   </div>
@@ -1247,42 +1356,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <button id="reportSendBtn" onclick="sendReport()" style="width:100%">Enviar reporte</button>
   </div>
 </div>
-<div class="prefs-overlay" id="licOverlay" onclick="if(event.target===this)closeLic()">
-  <div class="prefs-modal lic-modal">
-    <div class="prefs-head">
-      <h2>Licencia</h2>
-      <button class="prefs-close" onclick="closeLic()">✕</button>
-    </div>
-    <div class="lic-row">
-      <span class="lic-label">Correo</span>
-      <span class="lic-value" id="licEmail">…</span>
-    </div>
-    <div class="lic-status-row">
-      <div>
-        <div class="lic-label" style="margin-bottom:.25rem">Plan</div>
-        <span class="lic-value" id="licPlan">—</span>
-      </div>
-      <span class="lic-badge active" id="licBadge">—</span>
-    </div>
-    <div class="lic-row" id="licRenewRow">
-      <span class="lic-label" id="licRenewLabel">Se renueva</span>
-      <span class="lic-value" id="licRenewDate">—</span>
-    </div>
-    <div class="lic-row">
-      <span class="lic-label">Activado</span>
-      <span class="lic-value" id="licDate">—</span>
-    </div>
-    <div class="lic-danger">
-      <button class="lic-manage-btn" id="licManageBtn"
-        onclick="window.open('https://users.freemius.com','_blank')"
-        style="display:none">Gestionar suscripción ↗</button>
-      <button class="lic-manage-btn" onclick="openAbout()">Acerca de Muxlyve</button>
-      <button class="lic-danger-btn" onclick="releaseLic()">Liberar este equipo</button>
-      <p class="lic-note">Podrás activar la app en otro equipo. Necesitarás tu clave para volver a activarla aquí.</p>
-    </div>
-  </div>
-</div>
-
 <div class="prefs-overlay" id="aboutOverlay" onclick="if(event.target===this)closeAbout()">
   <div class="prefs-modal about-modal">
     <div class="prefs-head">
@@ -1298,6 +1371,28 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-btn-row">
       <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
     </div>
+  </div>
+</div>
+
+<div class="prefs-overlay" id="streamInfoOverlay" onclick="if(event.target===this)closeStreamInfo()">
+  <div class="prefs-modal">
+    <div class="prefs-head">
+      <h2>Información del stream</h2>
+      <button class="prefs-close" onclick="closeStreamInfo()">✕</button>
+    </div>
+    <div class="field">
+      <label>Título del stream</label>
+      <div class="copyrow">
+        <input type="text" id="titleInput" placeholder="¿Qué vas a transmitir hoy?">
+      </div>
+    </div>
+    <div class="field" style="margin-top:.65rem">
+      <label>Categoría / juego</label>
+      <div class="copyrow">
+        <input type="text" id="categoryInput" placeholder="Just Chatting, Minecraft…">
+      </div>
+    </div>
+    <button class="browse-btn" style="width:100%;margin-top:1rem" onclick="applyStreamTitle(this)">Aplicar</button>
   </div>
 </div>
 <div id="msg"></div>
@@ -1439,22 +1534,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const status = $('#recStatus');
     if (!state.live && !rec.active) {
       toggle.disabled = true;
-      toggle.textContent = 'Activar buffer';
-      toggle.dataset.active = '0';
+      toggle.checked = false;
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
       status.textContent = 'Conecta tu software de streaming para usar el buffer.';
     } else if (rec.active) {
       toggle.disabled = false;
-      toggle.textContent = 'Detener buffer';
-      toggle.dataset.active = '1';
+      toggle.checked = true;
       saveBtn.style.display = '';
       status.className = 'rec-status on';
       status.textContent = '● Grabando — último ' + fmtDur(rec.duration) + ' disponible';
     } else {
       toggle.disabled = false;
-      toggle.textContent = 'Activar buffer';
-      toggle.dataset.active = '0';
+      toggle.checked = false;
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
       status.textContent = state.live ? 'Buffer inactivo.' : 'Se detuvo la emisión.';
@@ -1798,6 +1890,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       if (!failed.length) {
         if (title) localStorage.setItem('ms_stream_title', title);
         if (category) localStorage.setItem('ms_stream_category', category);
+        updateStreamTitleDisplay();
+        closeStreamInfo();
         toast('Actualizado en ' + entries.map(([p]) => p).join(' + '));
       } else {
         const [, firstErr] = failed[0];
@@ -2025,9 +2119,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   async function toggleRec() {
-    const active = $('#recToggle').dataset.active === '1';
+    const wantActive = $('#recToggle').checked;
     try {
-      await api('POST', active ? '/api/record/stop' : '/api/record/start', { duration: recDurSel });
+      await api('POST', wantActive ? '/api/record/start' : '/api/record/stop', { duration: recDurSel });
       refresh();
     } catch (e) { toast(e.message, true); }
   }
@@ -2119,11 +2213,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   try { themeChannel = new BroadcastChannel('muxlyve-theme'); } catch {}
 
   function toggleTheme() {
-    const isLight = document.documentElement.dataset.theme === 'light';
-    const next = isLight ? 'dark' : 'light';
-    document.documentElement.dataset.theme = next === 'dark' ? '' : 'light';
-    $('#iconSun').style.display = next === 'dark' ? '' : 'none';
-    $('#iconMoon').style.display = next === 'dark' ? 'none' : '';
+    const dark = $('#themeChk').checked;
+    const next = dark ? 'dark' : 'light';
+    document.documentElement.dataset.theme = dark ? '' : 'light';
     localStorage.setItem('ms_theme', next);
     syncTitleBarTheme();
     if (themeChannel) themeChannel.postMessage(next);
@@ -2131,14 +2223,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   const savedTheme = localStorage.getItem('ms_theme');
   if (savedTheme === 'light') {
     document.documentElement.dataset.theme = 'light';
-    $('#iconSun').style.display = 'none';
-    $('#iconMoon').style.display = '';
   }
   syncTitleBarTheme();
   const savedTitle = localStorage.getItem('ms_stream_title');
   if (savedTitle) $('#titleInput').value = savedTitle;
   const savedCategory = localStorage.getItem('ms_stream_category');
   if (savedCategory) $('#categoryInput').value = savedCategory;
+  updateStreamTitleDisplay();
 
   // ── Wordmark animation: Muxlyve → Muxly Live ──
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -2161,9 +2252,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   async function openPrefs() {
     $('#prefsOverlay').classList.add('open');
-    if (window.msApp) {
-      $('#sysSection').style.display = '';
-      $('#reportSection').style.display = '';
+    $('#themeChk').checked = document.documentElement.dataset.theme !== 'light';
+    loadLicenseInfo();
+    const hasElectron = !!window.msApp;
+    $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
+    $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
+    const available = hasElectron ? ['sys', 'clips', 'support', 'license'] : ['clips', 'license'];
+    const stored = localStorage.getItem('ms_prefs_tab');
+    switchPrefsTab(available.includes(stored) ? stored : available[0]);
+    if (hasElectron) {
       try {
         const s = await window.msApp.getLoginItem();
         $('#loginItemChk').checked = s.openAtLogin;
@@ -2174,6 +2271,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         markActiveLanguageBtn(await window.msApp.getLanguage());
       } catch {}
     }
+  }
+  function switchPrefsTab(tab) {
+    document.querySelectorAll('.prefs-nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+    document.querySelectorAll('.prefs-panel').forEach(el => el.classList.toggle('active', el.dataset.panel === tab));
+    localStorage.setItem('ms_prefs_tab', tab);
   }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
   function markActiveLanguageBtn(lang) {
@@ -2250,8 +2352,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     btn.textContent = 'Enviar reporte';
   }
 
-  async function openLic() {
-    $('#licOverlay').classList.add('open');
+  async function loadLicenseInfo() {
     $('#licEmail').textContent = '…';
     const info = await window.msLicense?.getStatus().catch(() => window.msLicense?.getInfo());
     if (!info) { $('#licEmail').textContent = '—'; return; }
@@ -2288,10 +2389,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
     $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
   }
-  function closeLic() { $('#licOverlay').classList.remove('open'); }
 
   function openAbout() {
-    closeLic();
     // Versión ya cargada en init (appVersion global); año dinámico
     $('#aboutVersion').textContent = 'v' + (window._appVersion || '—');
     $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
@@ -2299,12 +2398,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
 
+  function openStreamInfo() { $('#streamInfoOverlay').classList.add('open'); }
+  function closeStreamInfo() { $('#streamInfoOverlay').classList.remove('open'); }
+  function updateStreamTitleDisplay() {
+    const title = localStorage.getItem('ms_stream_title') || '';
+    const el = $('#streamTitleDisplay');
+    el.textContent = title;
+    el.style.display = title ? '' : 'none';
+    el.title = title;
+  }
+
   async function releaseLic() {
     if (!confirm('¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.')) return;
     await window.msLicense?.release();
   }
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeLic(); closeAbout(); closeReport(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeAbout(); closeReport(); } });
 
   // Pestañas del sidebar: Conexiones y Chat son mutuamente excluyentes. Click en la
   // pestaña activa colapsa todo el sidebar (mismo gesto que el botón único de antes).
