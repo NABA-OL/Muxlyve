@@ -18,6 +18,24 @@ import { initLogBuffer, getRecentLog } from './logbuffer.js';
 // Antes que nada — captura logs desde el arranque (la app empaquetada no muestra consola).
 initLogBuffer();
 
+// Instancia única: si ya hay una Muxlyve corriendo, este segundo lanzamiento no debe
+// levantar su propio motor/panel/ventana (chocaría por el puerto y por el ingest RTMP) —
+// se rinde de una y le avisa a la instancia ya abierta que la traiga al frente. Patrón
+// oficial de Electron (funciona igual en Mac y Windows). process.exit(0) además de
+// app.quit() porque quit() no corta la ejecución de este archivo — sin eso, el resto del
+// módulo (ipcMain handlers, app.whenReady) seguiría corriendo en esta segunda instancia
+// mientras se cierra de fondo.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  win.focus();
+});
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
 const PANEL_URL   = `http://127.0.0.1:${PANEL_PORT}/`;
