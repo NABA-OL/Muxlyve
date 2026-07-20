@@ -255,11 +255,14 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
-  // POST /api/record/start  { duration: 30|60|120 }
+  // POST /api/record/start  { duration?: 30|60|120 } — sin duration, usa la última
+  // configurada (recorderInfo().duration): así un cliente que no conoce la preferencia
+  // del usuario (ej. el plugin de Stream Deck) prende el buffer con la misma duración
+  // que ya está seleccionada en Preferencias, sin tener que replicar ese ajuste aparte.
   if (req.method === 'POST' && url.pathname === '/api/record/start') {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
+    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
     if (!isLive()) return json(res, 409, { error: t('No hay transmisión activa.') });
     startRecording(dur);
     return json(res, 200, buildState());
