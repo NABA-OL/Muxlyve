@@ -918,10 +918,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   /* ── Campos ocultables (claves de stream, IP pública) ── */
   .eyerow { display: flex; gap: .4rem; align-items: center; }
   .eyerow input { flex: 1; }
-  .eye-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
+  .eye-btn, .copy-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
     width: 30px; height: 30px; padding: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
     cursor: pointer; }
-  .eye-btn:hover { color: var(--text); }
+  .eye-btn:hover, .copy-btn:hover { color: var(--text); }
 
   /* ── Destination cards ── */
   .card { background: var(--surface); border: 1px solid var(--border);
@@ -935,6 +935,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .pill.reconnecting { background: rgba(240,162,58,.15); color: var(--warn); }
   .pill.failed { background: rgba(248,81,73,.15); color: var(--danger); }
   .pill.lagging { background: rgba(240,162,58,.15); color: var(--warn); }
+  .pill.on { background: rgba(46,160,67,.15); color: var(--live); }
+  .pill.off { background: rgba(248,81,73,.15); color: var(--danger); }
   .metrics { font-size: .72rem; color: var(--muted); margin-left: auto;
     font-variant-numeric: tabular-nums; white-space: nowrap; }
   .retry { background: var(--danger); color: #fff; }
@@ -997,16 +999,25 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   /* ── Platform blocks ── */
   .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; }
-  /* Glow por estado del toggle de reenvío (solo bloques con destino RTMP configurado). */
+  /* Glow por estado del toggle de reenvío (solo bloques con destino RTMP configurado) —
+     mismo patrón pulsante que .video-wrap (@property + @keyframes): verde si está
+     activada, rojo si está apagada. Sin URL configurada no se aplica pb-on/pb-off — el
+     bloque queda gris fijo, sin animar (ver stateClass en renderPlatforms()). */
+  @property --glow-pb { syntax: '<color>'; inherits: false; initial-value: #2ea043; }
   .pb-block.pb-on, .pb-block.pb-off {
-    --glow: var(--live);
-    border-color: color-mix(in srgb, var(--glow) 45%, transparent);
+    border-color: color-mix(in srgb, var(--glow-pb) 45%, var(--border));
     box-shadow:
-      0 8px 25px -8px color-mix(in srgb, var(--glow) 55%, transparent),
-      inset 0 0 16px -8px color-mix(in srgb, var(--glow) 50%, transparent);
-    transition: border-color .2s var(--ease-out), box-shadow .2s var(--ease-out);
+      0 8px 25px -8px color-mix(in srgb, var(--glow-pb) 55%, transparent),
+      inset 0 0 16px -8px color-mix(in srgb, var(--glow-pb) 50%, transparent);
+    animation: pbGlowOn 5s ease-in-out infinite;
   }
-  .pb-block.pb-off { --glow: var(--danger); }
+  @keyframes pbGlowOn { 0%, 100% { --glow-pb: #2ea043; } 50% { --glow-pb: #56d364; } }
+  @keyframes pbGlowOff { 0%, 100% { --glow-pb: #f85149; } 50% { --glow-pb: #f0a23a; } }
+  .pb-block.pb-off { animation-name: pbGlowOff; }
+  @media (prefers-reduced-motion: reduce) {
+    .pb-block.pb-on { animation: none; --glow-pb: #2ea043; }
+    .pb-block.pb-off { animation: none; --glow-pb: #f85149; }
+  }
   .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
     cursor: pointer; user-select: none; background: var(--surface); transition: background .15s var(--ease-out); }
   .pb-head:hover { background: var(--surface-2); }
@@ -1142,22 +1153,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="pb-body"><div class="pb-body-inner">
                 <div class="field">
                   <label>Servidor RTMP (en tu software de streaming)</label>
-                  <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')">copiar</button></div>
+                  <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
                 </div>
                 <div class="field">
                   <label>Clave de retransmisión</label>
-                  <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')">copiar</button></div>
+                  <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
                 </div>
                 <div class="field" id="lanField" style="display:none">
                   <label>Desde otra máquina en tu red</label>
-                  <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')">copiar</button></div>
+                  <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
                 </div>
                 <div class="field" id="pubField" style="display:none">
                   <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
                   <div class="copyrow">
                     <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
                     <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                    <button onclick="copy('pubRtmpUrl')">copiar</button>
+                    <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
                   </div>
                 </div>
               </div></div>
@@ -1170,18 +1181,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="pb-body"><div class="pb-body-inner">
                 <div class="field">
                   <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
-                  <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')">copiar</button></div>
+                  <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
                 </div>
                 <div class="field" id="chatLanField" style="display:none">
                   <label>Desde otra máquina en tu red</label>
-                  <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')">copiar</button></div>
+                  <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
                 </div>
                 <div class="field" id="chatPubField" style="display:none">
                   <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
                   <div class="copyrow">
                     <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
                     <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                    <button onclick="copy('chatPubUrl')">copiar</button>
+                    <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
                   </div>
                 </div>
               </div></div>
@@ -1198,7 +1209,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                   <div class="copyrow">
                     <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
                     <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                    <button onclick="copy('panelTokenCode')">copiar</button>
+                    <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
                   </div>
                 </div>
                 <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
@@ -1680,7 +1691,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (d.status === 'connecting') return { cls: 'reconnecting', text: '⟳ conectando…' };
     if (d.status === 'reconnecting') return { cls: 'reconnecting', text: '⟳ reconectando… intento ' + d.attempts };
     if (d.status === 'failed') return { cls: 'failed', text: '✕ falló' };
-    return { cls: '', text: d.enabled ? 'activo' : 'apagado' };
+    return { cls: d.enabled ? 'on' : 'off', text: d.enabled ? 'activo' : 'apagado' };
   }
 
   function metricsFor(d) {
