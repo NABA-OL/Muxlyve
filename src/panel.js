@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
@@ -43,6 +43,8 @@ const FLV_JS = readFileSync(path.join(PUBLIC, 'flv.min.js'));
 const LOGO_SVG       = readFileSync(path.join(PUBLIC, 'logo-muxlyve.svg'));
 const LOGO_SVG_LIGHT = readFileSync(path.join(PUBLIC, 'logo-muxlyve-light.svg'));
 const ICON_SVG       = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
+const CONNECTIONS_SVG = readFileSync(path.join(PUBLIC, 'connections.svg'));
+const VIDEO_OFF_SVG   = readFileSync(path.join(PUBLIC, 'video-off.svg'));
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -301,6 +303,38 @@ async function handleApi(req, res, url) {
     }
   }
 
+  // GET /api/clips?dir=  → últimos clips guardados en el folder configurado (o el
+  // default si no hay uno elegido) — mismo folder que usa /api/record/save.
+  if (req.method === 'GET' && url.pathname === '/api/clips') {
+    const outputDir = url.searchParams.get('dir') || null;
+    try {
+      const { dir, files } = listRecentClips(outputDir);
+      return json(res, 200, { dir, files });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/clips/open  { path, reveal? }  → abre una carpeta, o revela un archivo
+  // puntual en el explorador nativo (solo Electron).
+  if (req.method === 'POST' && url.pathname === '/api/clips/open') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!input.path) return json(res, 400, { error: 'Falta path.' });
+    try {
+      const { shell } = await import('electron');
+      if (input.reveal) {
+        shell.showItemInFolder(input.path);
+      } else {
+        const err = await shell.openPath(input.path);
+        if (err) return json(res, 500, { error: err });
+      }
+      return json(res, 200, { ok: true });
+    } catch {
+      return json(res, 501, { error: t('Selector solo disponible en la app de escritorio.') });
+    }
+  }
+
   return json(res, 404, { error: t('No encontrado.') });
 }
 
@@ -407,6 +441,10 @@ export function startPanel(port, config = {}) {
         if (url.pathname === '/icon-muxlyve.svg') return res.end(ICON_SVG);
         return res.end(url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
       }
+      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg') {
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+        return res.end(url.pathname === '/connections.svg' ? CONNECTIONS_SVG : VIDEO_OFF_SVG);
+      }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(translateHtml(PANEL_HTML));
@@ -462,6 +500,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
     --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
     --header-h: 68px;
+    --side-bar-w: 56px;
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   }
@@ -479,16 +518,29 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 
   /* ── Header ── */
-  header { display: flex; align-items: center; justify-content: space-between;
+  /* Grid de 3 columnas (no flex+space-between): logo | status | placeholder vacío.
+     Los dos extremos son 1fr — reparten el sobrante en partes iguales, así el status
+     del medio queda centrado de verdad sin importar cuánto mida el logo. Con solo 2
+     hijos y space-between, el status se va pegado al borde derecho (justo el bug que
+     apareció al sacar los botones que antes ocupaban esa 3ra columna). */
+  header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
     gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
     background: var(--surface); position: sticky; top: 0; z-index: 5;
     height: var(--header-h); -webkit-app-region: drag; }
+  .logo-wrap { justify-self: start; }
+  .status { justify-self: center; }
   header button, header a, header input { -webkit-app-region: no-drag; }
   /* Barra de título fundida (hiddenInset en Mac deja los 3 botones a la izquierda;
      titleBarOverlay en Windows deja los suyos a la derecha) — espacio para que no se
-     encimen con el logo o los botones propios de la app. */
+     encimen con el logo o los botones propios de la app. El padding-right base (barra
+     lateral nueva) va aparte más abajo; en Windows los controles nativos ocupan más
+     ancho que la barra sola, así que esa regla más específica manda igual. */
   body.platform-darwin header { padding-left: 96px; }
   body.platform-win32 header { padding-right: 150px; }
+  /* Barra lateral fija a la derecha (ajustes/conexiones/chat) — el header y el
+     contenido principal dejan este ancho libre para que no quede nada debajo. */
+  header { padding-right: var(--side-bar-w); }
+  main { margin-right: var(--side-bar-w); }
   .logo-wrap { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; text-decoration: none; }
   .logo-icon { height: 32px; width: 32px; object-fit: contain; }
   .wordmark { font-size: 1.1rem; font-weight: 700; letter-spacing: -.03em; cursor: default; user-select: none; color: var(--text); }
@@ -520,7 +572,31 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     60%  { transform: scale(1.35); }
     100% { transform: scale(1); }
   }
-  .header-actions { display: flex; align-items: center; gap: .3rem; }
+  /* Barra vertical fija a la derecha — reemplaza los 3 botones que antes vivían en el
+     header. Mismo color que la barra superior (surface), para que se vea como una sola
+     pieza de UI. El grupo de arriba arranca debajo de donde iría el botón de cerrar
+     nativo (--header-h) — en Windows ahí mismo dibuja sus controles el titleBarOverlay,
+     así que dejar ese espacio vacío evita que se encimen. Ajustes queda solo, pegado
+     a la esquina inferior. */
+  /* Arranca justo debajo del header (top: var(--header-h)), no en top:0 — así el header
+     queda de punta a punta arriba, sin que esta barra se le monte encima ni se crucen
+     bordes/z-index entre las dos. */
+  /* Sin borde ni esquina redondeada propia a propósito — mismo fondo que el header,
+     misma línea divisoria (el border-bottom del header sigue derecho por encima) para
+     que se vea como una sola pieza fundida, no como un panel aparte pegado al lado. */
+  .side-actions { position: fixed; top: var(--header-h); right: 0; bottom: 0; width: var(--side-bar-w);
+    background: var(--surface);
+    display: flex; flex-direction: column; align-items: center; z-index: 4;
+    -webkit-app-region: drag; }
+  .side-actions button { -webkit-app-region: no-drag; }
+  .side-actions-top { display: flex; flex-direction: column; gap: .35rem; padding-top: 1rem; }
+  .side-actions-bottom { margin-top: auto; padding-bottom: .85rem; }
+  /* Solo ícono, look tipo rail (WhatsApp Mac) — sin caja/borde por botón, un resaltado
+     redondeado sutil en hover/activo alcanza. */
+  .side-actions .sidebar-toggle-btn { background: transparent; border: none;
+    width: 38px; height: 38px; border-radius: 10px; color: var(--muted); }
+  .side-actions .sidebar-toggle-btn:hover { background: var(--surface-2); color: var(--text); }
+  .side-actions .sidebar-toggle-btn.panel-open { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 
   /* ── Canvas fondo ── */
   #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
@@ -549,6 +625,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   .sidebar-toggle-btn:hover { color: var(--text); border-color: var(--muted); }
   .sidebar-toggle-btn.panel-open { border-color: var(--accent); color: var(--accent); }
+  /* SVG externo de un solo color (fill sólido, sin currentColor propio) pintado vía
+     máscara con background-color: currentColor — así hereda el color del botón (incluida
+     la transición de hover) igual que los íconos inline con stroke="currentColor". */
+  .icon-mask { display: inline-block; background-color: currentColor;
+    -webkit-mask-size: contain; mask-size: contain;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: center; mask-position: center; }
+  .icon-connections { width: 16px; height: 16px;
+    -webkit-mask-image: url(/connections.svg); mask-image: url(/connections.svg); }
 
   /* ── Toggle switch ── */
   .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
@@ -708,6 +793,17 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .rec-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
   .rec-toggle-label { font-size: .85rem; color: var(--text); font-weight: 600; }
   .rec-toggle-row .rec-status { margin-top: .15rem; }
+  .recent-clips { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+  .recent-clips-head { font-size: .72rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: .5rem; }
+  .recent-clip-item { display: flex; align-items: center; gap: .55rem; padding: .4rem .5rem;
+    border-radius: 8px; cursor: pointer; transition: background .15s var(--ease-out); }
+  .recent-clip-item:hover { background: var(--surface-2); }
+  .recent-clip-item svg { flex-shrink: 0; color: var(--muted); }
+  .recent-clip-info { flex: 1; min-width: 0; }
+  .recent-clip-name { font-size: .8rem; color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .recent-clip-meta { font-size: .7rem; color: var(--muted); }
 
   /* ── Preview ── */
   .preview { margin-bottom: 1rem; }
@@ -735,8 +831,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     .video-wrap.live { animation: none; --glow-video: #7c5cff; }
   }
   .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .video-ph { position: absolute; inset: 0; display: flex; align-items: center;
-    justify-content: center; color: var(--muted); font-size: .88rem; text-align: center; padding: 1rem; }
+  .video-ph { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .65rem;
+    align-items: center; justify-content: center; color: var(--muted); font-size: .88rem;
+    text-align: center; padding: 1rem; }
+  /* El fondo del preview es negro fijo (#000) sin importar el tema — el ícono va claro
+     siempre, no var(--muted)/var(--text) que cambian con tema claro/oscuro. */
+  .icon-video-off { width: 40px; height: 40px; background-color: #e6edf3;
+    -webkit-mask-image: url(/video-off.svg); mask-image: url(/video-off.svg);
+    animation: videoOffBlink 3s ease-in-out infinite; }
+  @keyframes videoOffBlink { 0%, 100% { opacity: .3; } 50% { opacity: .9; } }
+  @media (prefers-reduced-motion: reduce) {
+    .icon-video-off { animation: none; opacity: .6; }
+  }
   .conn { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
   .conn .field { background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; padding: .6rem .75rem; box-shadow: 0 1px 2px rgba(0,0,0,.15);
@@ -954,33 +1060,38 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <span class="uptime" id="uptime"></span>
     <span class="stream-title-display" id="streamTitleDisplay" style="display:none"></span>
   </div>
-  <div class="header-actions">
+  <div aria-hidden="true"></div>
+</header>
+<div class="side-actions">
+  <div class="side-actions-top">
+    <button class="sidebar-toggle-btn panel-open" id="chatBtn" onclick="showSidebarTab('chat')" title="Chat">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 3h12v8H5l-3 3V3z"/>
+      </svg>
+    </button>
+    <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
+      <span class="icon-mask icon-connections"></span>
+    </button>
+  </div>
+  <div class="side-actions-bottom">
     <button class="sidebar-toggle-btn" id="prefsBtn" onclick="openPrefs()" title="Preferencias">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
         <circle cx="12" cy="12" r="3"/>
       </svg>
     </button>
-    <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="1" y="1" width="14" height="14" rx="2.5"/>
-        <line x1="10" y1="1.5" x2="10" y2="14.5"/>
-      </svg>
-    </button>
-    <button class="sidebar-toggle-btn panel-open" id="chatBtn" onclick="showSidebarTab('chat')" title="Chat">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M2 3h12v8H5l-3 3V3z"/>
-      </svg>
-    </button>
   </div>
-</header>
+</div>
 <main>
   <!-- Principal: preview + config OBS + grabador -->
   <div class="main-col">
     <section class="preview">
         <div class="video-wrap" id="videoWrap">
           <video id="player" muted playsinline></video>
-          <div class="video-ph" id="videoPh">Esperando señal de tu streaming…</div>
+          <div class="video-ph" id="videoPh">
+            <span class="icon-mask icon-video-off" id="videoOffIcon"></span>
+            <span id="videoPhText"></span>
+          </div>
         </div>
         <div class="ingest-bar" id="ingestBar" style="display:none">
           <span class="ingest-pill" id="ingestVideo">—</span>
@@ -1080,12 +1191,23 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="rec-toggle-label">Activar buffer</div>
               <div class="rec-status" id="recStatus">Conecta tu software de streaming para usar el buffer.</div>
             </div>
-            <label class="sys-toggle">
-              <input type="checkbox" id="recToggle" disabled onchange="toggleRec()">
-              <span class="sys-toggle-track"></span>
-            </label>
+            <div style="display:flex;align-items:center;gap:.5rem">
+              <button class="eye-btn" id="openClipsFolderBtn" onclick="openClipsFolder()" title="Abrir carpeta de clips">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 4h4.7l2 2H20a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>
+                </svg>
+              </button>
+              <label class="sys-toggle">
+                <input type="checkbox" id="recToggle" disabled onchange="toggleRec()">
+                <span class="sys-toggle-track"></span>
+              </label>
+            </div>
           </div>
           <button id="clipSaveBtn" class="browse-btn" style="display:none;width:100%;margin-top:.65rem" onclick="doSaveClip()">Guardar clip</button>
+          <div class="recent-clips" id="recentClips" style="display:none">
+            <div class="recent-clips-head">Clips recientes</div>
+            <div id="recentClipsList"></div>
+          </div>
         </div>
       </section>
   </div>
@@ -2075,9 +2197,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       ph.style.display = 'none';
     } else if (!shouldPlay) {
       if (player) { player.destroy(); player = null; }
-      ph.textContent = document.hidden
-        ? 'Vista en pausa (ventana en segundo plano)…'
-        : 'Esperando señal de tu streaming…';
+      // Sin señal: el ícono parpadeando alcanza — decirlo en texto además es redundante
+      // con "esperando señal" que ya está en la barra superior. En pausa (ventana en
+      // segundo plano) sí es información nueva, esa se queda como texto.
+      $('#videoOffIcon').style.display = document.hidden ? 'none' : '';
+      $('#videoPhText').textContent = document.hidden ? 'Vista en pausa (ventana en segundo plano)…' : '';
       ph.style.display = 'flex';
     }
   }
@@ -2148,8 +2272,72 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       const r = await api('POST', '/api/record/save', { duration: recDurSel, outputDir });
       const name = r.path ? r.path.split(/[\\/]/).pop() : '';
       toast('✓ Clip guardado' + (name ? ': ' + name : ''));
+      loadRecentClips();
     } catch (e) { toast(e.message, true); }
     finally { btn.disabled = false; btn.textContent = 'Guardar clip'; }
+  }
+
+  async function openClipsFolder() {
+    if (!window.msApp) return;
+    try {
+      const outputDir = $('#clipsDir').value.trim() || null;
+      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
+      const { dir } = await api('GET', '/api/clips' + q);
+      await api('POST', '/api/clips/open', { path: dir });
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  function fmtClipSize(bytes) {
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+  // Construido en el cliente en tiempo de ejecución — translateHtml() traduce el HTML
+  // servido una sola vez, no puede alcanzar texto armado después con JS. document.documentElement.lang
+  // sí queda en 'en'/'es' correcto (ese <html lang="es"> es el primer key de tMap), así
+  // que sirve como señal confiable del idioma actual sin duplicar todo el mecanismo de i18n.
+  function fmtClipAge(mtime) {
+    const isEn = document.documentElement.lang === 'en';
+    const mins = Math.floor((Date.now() - mtime) / 60000);
+    if (mins < 1) return isEn ? 'just now' : 'ahora mismo';
+    if (mins < 60) return (isEn ? mins + ' min ago' : 'hace ' + mins + ' min');
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return (isEn ? hrs + 'h ago' : 'hace ' + hrs + 'h');
+    return (isEn ? Math.floor(hrs / 24) + 'd ago' : 'hace ' + Math.floor(hrs / 24) + 'd');
+  }
+  const CLIP_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>';
+
+  async function loadRecentClips() {
+    if (!window.msApp) return;
+    try {
+      const outputDir = $('#clipsDir').value.trim() || null;
+      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
+      const { files } = await api('GET', '/api/clips' + q);
+      const box = $('#recentClips');
+      const list = $('#recentClipsList');
+      if (!files.length) { box.style.display = 'none'; return; }
+      box.style.display = '';
+      list.innerHTML = '';
+      for (const f of files) {
+        const item = document.createElement('div');
+        item.className = 'recent-clip-item';
+        item.innerHTML = CLIP_ICON_SVG +
+          '<div class="recent-clip-info">' +
+          '<div class="recent-clip-name"></div>' +
+          '<div class="recent-clip-meta"></div>' +
+          '</div>';
+        item.querySelector('.recent-clip-name').textContent = f.name;
+        item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
+        item.addEventListener('click', () => revealClip(f.path));
+        list.appendChild(item);
+      }
+    } catch {}
+  }
+
+  async function revealClip(clipPath) {
+    try { await api('POST', '/api/clips/open', { path: clipPath, reveal: true }); }
+    catch (e) { toast(e.message, true); }
   }
 
   // Restaura preferencias guardadas en sesiones anteriores
@@ -2157,6 +2345,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   if (savedDir) $('#clipsDir').value = savedDir;
   const savedDur = Number(localStorage.getItem('ms_rec_dur'));
   if ([30, 60, 120].includes(savedDur)) setRecDur(savedDur);
+
+  if (window.msApp) {
+    loadRecentClips();
+    setInterval(loadRecentClips, 20000);
+  } else {
+    $('#openClipsFolderBtn').style.display = 'none';
+  }
 
   // ── Canvas fondo: nodos conectados ──
   (function initBg() {

@@ -246,6 +246,30 @@ export function stopRecording() {
   console.log('[recorder] buffer detenido');
 }
 
+// Mismo folder para guardar y para listar/abrir — un solo lugar donde vive esta cuenta.
+export function resolveClipsDir(outputDir) {
+  const videosFolder = process.platform === 'darwin' ? 'Movies' : 'Videos';
+  return outputDir || process.env.MS_CLIPS_DIR || path.join(homedir(), videosFolder, 'MultiStream');
+}
+
+// Últimos clips guardados en el folder configurado, para mostrar en el panel.
+export function listRecentClips(outputDir, limit = 6) {
+  const dir = resolveClipsDir(outputDir);
+  let files = [];
+  try {
+    files = readdirSync(dir)
+      .filter(f => /^clip_.*\.mp4$/.test(f))
+      .map(f => {
+        const p = path.join(dir, f);
+        const st = statSync(p);
+        return { name: f, path: p, mtime: st.mtimeMs, size: st.size };
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, limit);
+  } catch { files = []; }
+  return { dir, files };
+}
+
 export function saveClip(durationSecs, outputDir) {
   const dur = durationSecs || recDuration;
   const numSegs = Math.ceil(dur / SEG_SECS) + 1;
@@ -262,8 +286,7 @@ export function saveClip(durationSecs, outputDir) {
 
   if (!files.length) return Promise.reject(new Error('Sin segmentos. Espera unos segundos tras activar el buffer.'));
 
-  const videosFolder = process.platform === 'darwin' ? 'Movies' : 'Videos';
-  const clipsDir = outputDir || process.env.MS_CLIPS_DIR || path.join(homedir(), videosFolder, 'MultiStream');
+  const clipsDir = resolveClipsDir(outputDir);
   mkdirSync(clipsDir, { recursive: true });
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
