@@ -30,4 +30,10 @@ contextBridge.exposeInMainWorld('msApp', {
   getAllowLanPanel: () => ipcRenderer.invoke('app:get-allow-lan-panel'),
   setAllowLanPanel: (val) => ipcRenderer.invoke('app:set-allow-lan-panel', val),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  // Modal propio de actualización (ver electron/updater.js) — reemplaza los diálogos
+  // nativos de dialog.showMessageBox, que Electron no deja personalizar con CSS.
+  onUpdaterEvent: (cb) => ipcRenderer.on('updater:event', (_event, payload) => cb(payload)),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  openUpdateWeb: () => ipcRenderer.invoke('updater:open-web'),
 });

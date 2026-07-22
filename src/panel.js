@@ -598,9 +598,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
      redondeado sutil en hover/activo alcanza. */
   .side-actions .sidebar-toggle-btn { background: transparent; border: none;
     width: 38px; height: 38px; border-radius: 10px; color: var(--muted);
-    padding: 0; justify-content: center; }
+    padding: 0; justify-content: center; position: relative; }
   .side-actions .sidebar-toggle-btn:hover { background: var(--surface-2); color: var(--text); }
   .side-actions .sidebar-toggle-btn.panel-open { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  /* Aviso no invasivo de actualización — ícono discreto arriba de Ajustes, solo visible
+     si hay versión nueva (ver openUpdaterModal/pendingUpdatePayload). Nada de modal al
+     abrir la app: el usuario decide cuándo verlo, con clic. */
+  #updateBtn { color: var(--accent); }
+  #updateBtn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #updateBtn .upd-dot { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
 
   /* ── Canvas fondo ── */
   #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
@@ -700,6 +707,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
   .prefs-close:hover { color: var(--text); background: var(--surface-2); }
   .prefs-modal-wide { width: 720px; }
+  .upd-progress-track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin: .25rem 0 .75rem; }
+  .upd-progress-fill { height: 100%; background: var(--accent); border-radius: 99px; width: 0%; transition: width 160ms linear; }
+  .upd-progress-text { font-size: .8rem; color: var(--muted); margin: 0 0 .75rem; }
   .prefs-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
   .prefs-nav { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: .15rem; }
   .prefs-nav-item { display: flex; align-items: center; gap: .55rem; width: 100%;
@@ -1078,6 +1088,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     </button>
   </div>
   <div class="side-actions-bottom">
+    <button class="sidebar-toggle-btn" id="updateBtn" style="display:none" onclick="openUpdaterModal()" title="Actualización disponible">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      <span class="upd-dot"></span>
+    </button>
     <button class="sidebar-toggle-btn" id="prefsBtn" onclick="openPrefs()" title="Preferencias">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
@@ -1501,6 +1519,25 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-btn-row">
       <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
     </div>
+  </div>
+</div>
+
+<!-- Modal propio de actualización — reemplaza dialog.showMessageBox (nativo, sin estilo
+     propio posible). El contenido se llena en runtime según el evento que llegue de
+     electron/updater.js — ver handleUpdaterEvent(). -->
+<div class="prefs-overlay" id="updaterOverlay" onclick="if(event.target===this)closeUpdaterModal()">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2 id="updaterTitle">Actualización</h2>
+      <button class="prefs-close" onclick="closeUpdaterModal()">✕</button>
+    </div>
+    <p id="updaterMessage" style="margin:0 0 .5rem;font-size:.9rem"></p>
+    <p id="updaterDetail" class="pref-desc" style="margin:0 0 1rem"></p>
+    <div id="updaterProgressBox" style="display:none">
+      <div class="upd-progress-track"><div class="upd-progress-fill" id="updaterProgressFill"></div></div>
+      <p class="upd-progress-text" id="updaterProgressText"></p>
+    </div>
+    <div id="updaterButtons" style="display:flex;flex-direction:column;gap:.5rem"></div>
   </div>
 </div>
 
@@ -2600,6 +2637,92 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#aboutOverlay').classList.add('open');
   }
   function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
+
+  // Botón secundario, estilo bordeado (mismo que "Acerca de Muxlyve"/"Gestionar
+  // suscripción" en Licencia) — .lic-manage-btn. Primario: .browse-btn (morado sólido).
+  function updaterBtn(label, primary, onClick) {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.className = primary ? 'browse-btn' : 'lic-manage-btn';
+    btn.style.width = '100%';
+    btn.onclick = onClick;
+    return btn;
+  }
+  // 'available' no abre el modal solo — queda pendiente y solo se ve un ícono discreto
+  // sobre Ajustes (ver #updateBtn). El usuario decide cuándo ver el aviso completo.
+  let pendingUpdatePayload = null;
+  function openUpdaterModal() {
+    if (!pendingUpdatePayload) return;
+    $('#updateBtn').style.display = 'none';
+    handleUpdaterEvent(pendingUpdatePayload);
+  }
+  function closeUpdaterModal() {
+    $('#updaterOverlay').classList.remove('open');
+    // Si cerró sin descargar (p.ej. "Ahora no"), la actualización sigue pendiente —
+    // el ícono vuelve para que pueda retomarlo cuando quiera.
+    if (pendingUpdatePayload) $('#updateBtn').style.display = 'flex';
+  }
+  function fmtMBs(bytesPerSecond) {
+    return (bytesPerSecond / (1024 * 1024)).toFixed(1) + ' MB/s';
+  }
+  function showUpdaterProgress(percent, speedText) {
+    $('#updaterButtons').style.display = 'none';
+    const progBox = $('#updaterProgressBox');
+    progBox.style.display = '';
+    $('#updaterProgressFill').style.width = Math.max(0, Math.min(100, percent)) + '%';
+    $('#updaterProgressText').textContent = Math.round(percent) + '%' + (speedText ? ' · ' + speedText : '');
+  }
+  function handleUpdaterEvent(payload) {
+    const { type, title, message, detail, percent, bytesPerSecond } = payload || {};
+    const isEn = document.documentElement.lang === 'en';
+    if (type === 'progress') {
+      // Solo actualiza la barra — no toca título/mensaje ya mostrados por el evento 'available'.
+      showUpdaterProgress(percent, fmtMBs(bytesPerSecond));
+      $('#updaterOverlay').classList.add('open');
+      return;
+    }
+    $('#updaterTitle').textContent = title || 'Muxlyve';
+    $('#updaterMessage').textContent = message || '';
+    $('#updaterDetail').textContent = detail || '';
+    $('#updaterDetail').style.display = detail ? '' : 'none';
+    $('#updaterProgressBox').style.display = 'none';
+    const box = $('#updaterButtons');
+    box.style.display = 'flex';
+    box.innerHTML = '';
+    if (type === 'available') {
+      box.appendChild(updaterBtn(isEn ? 'Download' : 'Descargar', true, () => {
+        pendingUpdatePayload = null; // ya en curso — que no vuelva el ícono al cerrar
+        showUpdaterProgress(0, isEn ? 'Starting…' : 'Iniciando…');
+        window.msApp.downloadUpdate();
+      }));
+      box.appendChild(updaterBtn(isEn ? 'Download from the web' : 'Descargar desde la web', false, async () => {
+        await window.msApp.openUpdateWeb();
+        closeUpdaterModal();
+      }));
+      box.appendChild(updaterBtn(isEn ? 'Not now' : 'Ahora no', false, closeUpdaterModal));
+    } else if (type === 'downloaded') {
+      box.appendChild(updaterBtn(isEn ? 'Restart now' : 'Reiniciar ahora', true, () => window.msApp.installUpdate()));
+      box.appendChild(updaterBtn(isEn ? 'Later' : 'Después', false, closeUpdaterModal));
+    } else if (type === 'error') {
+      box.appendChild(updaterBtn(isEn ? 'Download from the web' : 'Descargar desde la web', true, async () => {
+        await window.msApp.openUpdateWeb();
+        closeUpdaterModal();
+      }));
+      box.appendChild(updaterBtn(isEn ? 'Close' : 'Cerrar', false, closeUpdaterModal));
+    } else {
+      box.appendChild(updaterBtn('OK', true, closeUpdaterModal));
+    }
+    $('#updaterOverlay').classList.add('open');
+  }
+  function routeUpdaterEvent(payload) {
+    if (payload && payload.type === 'available') {
+      pendingUpdatePayload = payload;
+      $('#updateBtn').style.display = 'flex';
+      return;
+    }
+    handleUpdaterEvent(payload);
+  }
+  if (window.msApp?.onUpdaterEvent) window.msApp.onUpdaterEvent(routeUpdaterEvent);
 
   function openStreamInfo() { $('#streamInfoOverlay').classList.add('open'); }
   function closeStreamInfo() { $('#streamInfoOverlay').classList.remove('open'); }
