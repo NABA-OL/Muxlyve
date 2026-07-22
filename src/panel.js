@@ -927,7 +927,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .card { background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; padding: 1.1rem 1.2rem; }
   .card.tiktok { border-color: var(--accent); }
-  .card-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .8rem; }
+  /* flex-wrap: la sidebar es angosta — nombre + píldora + métricas + sparkline no siempre
+     caben en una sola línea, que baje a la siguiente en vez de desbordar la tarjeta. */
+  .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin-bottom: .8rem; }
   .card-head .name { font-weight: 600; font-size: 1rem; flex: 1; }
   .pill { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px;
     background: var(--surface-2); color: var(--muted); white-space: nowrap; }
@@ -937,6 +939,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .pill.lagging { background: rgba(240,162,58,.15); color: var(--warn); }
   .pill.on { background: rgba(46,160,67,.15); color: var(--live); }
   .pill.off { background: rgba(248,81,73,.15); color: var(--danger); }
+  /* Gráfico de salud de red por destino — sparkline de bitrate reciente (ver
+     trackMetricsHistory/sparklineSvg()). margin-left:auto la empuja al borde derecho
+     de .card-head aunque no haya un elemento flex:1 hermano (caso de .pb-rtmp). */
+  svg.spark { flex-shrink: 0; opacity: .9; margin-right: .5rem; }
+  .card-head svg.spark { margin-left: auto; }
+  .spark-slot { flex-shrink: 0; }
   .metrics { font-size: .72rem; color: var(--muted); margin-left: auto;
     font-variant-numeric: tabular-nums; white-space: nowrap; }
   .retry { background: var(--danger); color: #fff; }
@@ -1611,6 +1619,44 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   const YOUTUBE_OAUTH_PENDING = true;
   let lastState = null;
   let lastAuthStatus = {};
+  // Gráfico de salud de red por destino — solo en memoria del cliente (sin backend/DB):
+  // ventana corta de bitrate reciente, se borra en cuanto el destino deja de estar 'live'
+  // para no mezclar sesiones de transmisión distintas en la misma línea.
+  const metricsHistory = {};
+  const METRICS_HISTORY_MAX = 30; // ~1 min a ~2s por poll
+  function trackMetricsHistory(state) {
+    for (const d of state.destinations) {
+      if (d.status === 'live' && d.metrics && typeof d.metrics.bitrate === 'number') {
+        const hist = metricsHistory[d.name] || (metricsHistory[d.name] = []);
+        hist.push(d.metrics.bitrate);
+        if (hist.length > METRICS_HISTORY_MAX) hist.shift();
+      } else {
+        delete metricsHistory[d.name];
+      }
+    }
+  }
+  function sparkColor(pillCls) {
+    if (pillCls === 'live') return 'var(--live)';
+    if (pillCls === 'lagging' || pillCls === 'reconnecting') return 'var(--warn)';
+    if (pillCls === 'failed') return 'var(--danger)';
+    return 'var(--muted)';
+  }
+  function sparklineSvg(history, color) {
+    if (!history || history.length < 2) return '';
+    const w = 64, h = 20;
+    const min = Math.min(...history), max = Math.max(...history);
+    const range = (max - min) || 1;
+    const pts = history.map((v, i) => {
+      const x = (i / (history.length - 1)) * w;
+      const y = h - ((v - min) / range) * h;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const last = history[history.length - 1];
+    return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h +
+      '" preserveAspectRatio="none"><title>' + last + ' kbps</title>' +
+      '<polyline points="' + pts + '" fill="none" stroke="' + color +
+      '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
   // El refresh automático (cada 2s) reconstruye los bloques de plataforma desde cero —
   // sin esto, borraría el formulario "+ Añadir servidor RTMP" abierto y lo que llevas escrito.
   const pbAddOpen = {};
@@ -1786,6 +1832,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   function render(state) {
     lastState = state;
+    trackMetricsHistory(state);
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
@@ -1823,6 +1870,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           '<button class="auth-disc" data-id="' + p.id + '" onclick="disconnectPlatform(this.dataset.id)">&#10005;</button>';
       } else {
         oauthHtml = '<button class="auth-conn" data-id="' + p.id + '" onclick="connectPlatform(this.dataset.id)">Conectar</button>';
+      }
+
+      // Sparkline en la cabecera — visible con la tarjeta colapsada o no (entre el
+      // nombre y "Conectar"). La píldora ("rezagado"/"reenviando") y las métricas en
+      // texto se quedan adentro del cuerpo (pb-rtmp), solo visibles al expandir.
+      let headSparkHtml = '';
+      if (rtmpDest) {
+        const headPill = pillFor(rtmpDest);
+        headSparkHtml = sparklineSvg(metricsHistory[rtmpDest.name], sparkColor(headPill.cls));
       }
 
       // RTMP body
@@ -1878,6 +1934,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         '<i class="pb-chevron">&#9654;</i>' +
         (platformIconSvg(p.id) || '<span class="p-dot" style="background:' + p.color + '"></span>') +
         '<span class="pb-head-name">' + p.name + '</span>' +
+        headSparkHtml +
         oauthHtml +
         '</div>' +
         '<div class="pb-body"><div class="pb-body-inner">' + bodyHtml + '</div></div>';
@@ -1918,6 +1975,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span class="name"></span>
           <span class="pill \${pill.cls}"></span>
           <span class="metrics"></span>
+          <span class="spark-slot"></span>
         </div>
         <div class="field">
           <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal TikTok' : ''}</label>
@@ -1941,6 +1999,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       card.querySelector('.name').textContent = d.name;
       card.querySelector('.pill').textContent = pill.text;
       card.querySelector('.metrics').textContent = metrics;
+      card.querySelector('.spark-slot').innerHTML = sparklineSvg(metricsHistory[d.name], sparkColor(pill.cls));
       const urlInput = card.querySelector('.url');
       urlInput.value = d.url;
       if (d.note) card.querySelector('.note').textContent = '&#9651; ' + d.note;

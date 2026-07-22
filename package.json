@@ -92,7 +92,7 @@
       "include": "build/installer.nsh"
     },
     "mac": {
-      "target": "dmg",
+      "target": ["dmg", "zip"],
       "icon": "build/icon.icns",
       "identity": null,
       "extraResources": [
