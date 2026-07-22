@@ -45,6 +45,7 @@ const LOGO_SVG_LIGHT = readFileSync(path.join(PUBLIC, 'logo-muxlyve-light.svg'))
 const ICON_SVG       = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
 const CONNECTIONS_SVG = readFileSync(path.join(PUBLIC, 'connections.svg'));
 const VIDEO_OFF_SVG   = readFileSync(path.join(PUBLIC, 'video-off.svg'));
+const CHAT_SVG        = readFileSync(path.join(PUBLIC, 'chat.svg'));
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -441,9 +442,11 @@ export function startPanel(port, config = {}) {
         if (url.pathname === '/icon-muxlyve.svg') return res.end(ICON_SVG);
         return res.end(url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
       }
-      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg') {
+      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg' || url.pathname === '/chat.svg') {
         res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        return res.end(url.pathname === '/connections.svg' ? CONNECTIONS_SVG : VIDEO_OFF_SVG);
+        if (url.pathname === '/connections.svg') return res.end(CONNECTIONS_SVG);
+        if (url.pathname === '/video-off.svg') return res.end(VIDEO_OFF_SVG);
+        return res.end(CHAT_SVG);
       }
       if (url.pathname === '/' || url.pathname === '/index.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -634,6 +637,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     -webkit-mask-position: center; mask-position: center; }
   .icon-connections { width: 16px; height: 16px;
     -webkit-mask-image: url(/connections.svg); mask-image: url(/connections.svg); }
+  .icon-chat { width: 16px; height: 16px;
+    -webkit-mask-image: url(/chat.svg); mask-image: url(/chat.svg); }
 
   /* ── Toggle switch ── */
   .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
@@ -1065,9 +1070,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 <div class="side-actions">
   <div class="side-actions-top">
     <button class="sidebar-toggle-btn panel-open" id="chatBtn" onclick="showSidebarTab('chat')" title="Chat">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M2 3h12v8H5l-3 3V3z"/>
-      </svg>
+      <span class="icon-mask icon-chat"></span>
     </button>
     <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
       <span class="icon-mask icon-connections"></span>
