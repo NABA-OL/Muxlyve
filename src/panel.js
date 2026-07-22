@@ -274,11 +274,12 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
-  // POST /api/record/save  { duration: 30|60|120, outputDir?: string }
+  // POST /api/record/save  { duration?: 30|60|120, outputDir?: string } — sin duration,
+  // usa la del buffer activo (recorderInfo().duration), mismo criterio que /api/record/start.
   if (req.method === 'POST' && url.pathname === '/api/record/save') {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : 60;
+    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
     const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
     try {
       const filePath = await saveClip(dur, outputDir);
