@@ -597,7 +597,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   /* Solo ícono, look tipo rail (WhatsApp Mac) — sin caja/borde por botón, un resaltado
      redondeado sutil en hover/activo alcanza. */
   .side-actions .sidebar-toggle-btn { background: transparent; border: none;
-    width: 38px; height: 38px; border-radius: 10px; color: var(--muted); }
+    width: 38px; height: 38px; border-radius: 10px; color: var(--muted);
+    padding: 0; justify-content: center; }
   .side-actions .sidebar-toggle-btn:hover { background: var(--surface-2); color: var(--text); }
   .side-actions .sidebar-toggle-btn.panel-open { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 
