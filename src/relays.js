@@ -489,6 +489,46 @@ export function deleteRecording(recordingPath, outputDir) {
   unlinkSync(resolved);
 }
 
+// .ts sueltos que quedaron SIN remuxear a .mp4 — pasa cuando el remux automático
+// (ver startFullRecording, exit handler) falla, o cuando la app se cierra a la fuerza
+// mientras el proceso de FFmpeg de la grabación queda huérfano y nunca dispara ese
+// handler. El .ts en sí es una grabación válida (MPEG-TS no necesita índice final),
+// solo falta convertirla — ver convertOrphanRecording() más abajo.
+export function listOrphanRecordings(outputDir) {
+  const dir = resolveRecordingsDir(outputDir);
+  let files = [];
+  try {
+    files = readdirSync(dir)
+      .filter(f => /^grabacion_.*\.ts$/.test(f))
+      .map(f => {
+        const p = path.join(dir, f);
+        const st = statSync(p);
+        return { name: f, path: p, mtime: st.mtimeMs, size: st.size };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch { files = []; }
+  return { dir, files };
+}
+
+// Convierte un .ts huérfano a .mp4 a pedido del usuario (mismo comando -c copy que el
+// remux automático). Mismo guard de seguridad que deleteRecording(): el path debe
+// resolver DENTRO de la carpeta de grabaciones.
+export function convertOrphanRecording(tsPath, outputDir) {
+  const dir = resolveRecordingsDir(outputDir);
+  const resolvedTs = path.resolve(tsPath);
+  if (path.dirname(resolvedTs) !== path.resolve(dir) || !/\.ts$/.test(resolvedTs)) {
+    throw new Error('Ruta fuera de la carpeta de grabaciones.');
+  }
+  const mp4Path = resolvedTs.replace(/\.ts$/, '.mp4');
+  return new Promise((resolve, reject) => {
+    execFile(FFMPEG, ['-y', '-i', resolvedTs, '-c', 'copy', mp4Path], (err) => {
+      if (err) return reject(new Error('No se pudo convertir: ' + err.message));
+      try { unlinkSync(resolvedTs); } catch {}
+      resolve(mp4Path);
+    });
+  });
+}
+
 export function saveClip(durationSecs, outputDir) {
   const dur = durationSecs || recDuration;
   const numSegs = Math.ceil(dur / SEG_SECS) + 1;

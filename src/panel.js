@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir, listOrphanRecordings, convertOrphanRecording } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
@@ -437,6 +437,32 @@ async function handleApi(req, res, url) {
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     setRecordingsDir(typeof input.dir === 'string' ? input.dir : null);
     return json(res, 200, { ok: true });
+  }
+
+  // GET /api/recordings/orphans?dir=  → .ts que quedaron sin remuxear a .mp4 (crash,
+  // cierre forzado de la app, o falla del remux automático). Ver listOrphanRecordings().
+  if (req.method === 'GET' && url.pathname === '/api/recordings/orphans') {
+    const outputDir = url.searchParams.get('dir') || null;
+    try {
+      const { dir, files } = listOrphanRecordings(outputDir);
+      return json(res, 200, { dir, files });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/recordings/convert  { path, outputDir? } — remuxea un .ts huérfano a .mp4
+  // a pedido del usuario. Mismo guard de seguridad que DELETE /api/recordings.
+  if (req.method === 'POST' && url.pathname === '/api/recordings/convert') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
+    try {
+      const mp4Path = await convertOrphanRecording(input.path, input.outputDir || null);
+      return json(res, 200, { ok: true, path: mp4Path });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
   }
 
   // POST /api/clips/open  { path, reveal? }  → abre una carpeta, o revela un archivo
@@ -1742,6 +1768,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                      onchange="setRecordingsDirServer(this.value)">
               <button id="browseRecordingsBtn" class="browse-btn" onclick="browseRecordingsFolder()" title="Elegir carpeta">…</button>
             </div>
+          </div>
+          <!-- Grabaciones sin convertir — .ts que quedaron sin remuxear a .mp4 (cierre
+               forzado de la app, crash, o falla del remux automático). Ver
+               listOrphanRecordings()/convertOrphanRecording() en relays.js. Oculto por
+               defecto — solo aparece si hay alguno. -->
+          <div class="field" id="orphanRecordingsBlock" style="display:none">
+            <label>Grabaciones sin convertir</label>
+            <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — convertilas a .mp4 para poder reproducirlas.</div>
+            <div id="orphanRecordingsList"></div>
           </div>
         </div>
         <div class="prefs-panel" id="reportSection" data-panel="support">
@@ -3063,6 +3098,53 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } catch (e) { toast(e.message, true); }
   }
 
+  async function loadOrphanRecordings() {
+    if (!window.msApp) return;
+    try {
+      const outputDir = $('#recordingsDir').value.trim() || null;
+      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
+      const { files } = await api('GET', '/api/recordings/orphans' + q);
+      const box = $('#orphanRecordingsBlock');
+      const list = $('#orphanRecordingsList');
+      if (!files.length) { box.style.display = 'none'; return; }
+      box.style.display = '';
+      list.innerHTML = '';
+      for (const f of files) {
+        const item = document.createElement('div');
+        item.className = 'recent-clip-item';
+        item.style.cursor = 'default';
+        item.innerHTML = CLIP_ICON_SVG +
+          '<div class="recent-clip-info">' +
+          '<div class="recent-clip-name"></div>' +
+          '<div class="recent-clip-meta"></div>' +
+          '</div>' +
+          '<button class="browse-btn orphan-convert-btn" style="width:auto;padding:.35rem .7rem;font-size:.75rem">Convertir a MP4</button>';
+        item.querySelector('.recent-clip-name').textContent = f.name;
+        item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
+        item.querySelector('.orphan-convert-btn').addEventListener('click', (e) => convertOrphan(f.path, e.currentTarget));
+        list.appendChild(item);
+      }
+    } catch {}
+  }
+
+  async function convertOrphan(tsPath, btn) {
+    const outputDir = $('#recordingsDir').value.trim() || null;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Convirtiendo…';
+    try {
+      const r = await api('POST', '/api/recordings/convert', { path: tsPath, outputDir });
+      const name = r.path ? r.path.split(/[\\/]/).pop() : '';
+      toast('✓ Convertido: ' + name);
+      loadOrphanRecordings();
+      loadRecentRecordings();
+    } catch (e) {
+      toast(e.message, true);
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
   // Restaura preferencias guardadas en sesiones anteriores — y las re-sincroniza al
   // servidor ya mismo (fire-and-forget). Necesario para quien ya tenía una carpeta/
   // duración elegida en localStorage de ANTES de que existiera la persistencia
@@ -3187,6 +3269,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#prefsOverlay').classList.add('open');
     $('#themeChk').checked = document.documentElement.dataset.theme !== 'light';
     loadLicenseInfo();
+    loadOrphanRecordings();
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
