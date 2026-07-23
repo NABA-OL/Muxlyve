@@ -613,6 +613,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
      ancho que la barra sola, así que esa regla más específica manda igual. */
   body.platform-darwin header { padding-left: 96px; }
   body.platform-win32 header { padding-right: 150px; }
+  /* Linux: sin traffic lights ni titleBarOverlay nativos — botones propios dibujados
+     acá, ocupan la 3ra columna del grid (antes un div vacío solo para centrar .status). */
+  .win-controls { display: none; justify-self: end; gap: .15rem; -webkit-app-region: no-drag; }
+  body.platform-linux .win-controls { display: flex; }
+  .win-controls button { background: transparent; color: var(--muted); border: none;
+    border-radius: 6px; width: 34px; height: 30px; padding: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .win-controls button:hover { background: rgba(128,128,128,.15); color: var(--text); }
+  .win-controls .win-close-btn:hover { background: #e5484d; color: #fff; }
   /* Barra lateral fija a la derecha (ajustes/conexiones/chat) — el header y el
      contenido principal dejan este ancho libre para que no quede nada debajo. */
   header { padding-right: var(--side-bar-w); }
@@ -1200,7 +1209,17 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <span class="uptime" id="uptime"></span>
     <span class="stream-title-display" id="streamTitleDisplay" style="display:none"></span>
   </div>
-  <div aria-hidden="true"></div>
+  <div class="win-controls">
+    <button onclick="window.msApp && window.msApp.winMinimize()" title="Minimizar">
+      <svg width="12" height="12" viewBox="0 0 12 12"><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+    <button onclick="window.msApp && window.msApp.winToggleMaximize()" title="Maximizar">
+      <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+    <button class="win-close-btn" onclick="window.msApp && window.msApp.winClose()" title="Cerrar">
+      <svg width="12" height="12" viewBox="0 0 12 12"><line x1="1" y1="1" x2="11" y2="11" stroke="currentColor" stroke-width="1.4"/><line x1="11" y1="1" x2="1" y2="11" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+  </div>
 </header>
 <div class="side-actions">
   <div class="side-actions-top">
@@ -1827,6 +1846,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const ua = navigator.userAgent;
     if (ua.includes('Mac')) document.body.classList.add('platform-darwin');
     else if (ua.includes('Windows')) document.body.classList.add('platform-win32');
+    else if (ua.includes('Linux')) document.body.classList.add('platform-linux');
   })();
 
   window.onerror = (msg, src, line, col, err) => {
@@ -3681,6 +3701,15 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
      (titleBarOverlay) — el menú siempre va a la derecha del header, así que solo Windows
      necesita espacio extra para no quedar debajo de esos botones. */
   body.platform-win32 #chatHeader { padding-right: 150px; }
+  /* Linux: mismo caso que el panel principal — sin controles nativos, dibuja los
+     propios al final del header (a la derecha del todo, después del menú). */
+  .chat-win-controls { display: none; gap: .15rem; margin-left: 4px; -webkit-app-region: no-drag; }
+  body.platform-linux .chat-win-controls { display: flex; }
+  .chat-win-controls button { background: transparent; color: var(--muted); border: none;
+    border-radius: 6px; width: 28px; height: 26px; padding: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .chat-win-controls button:hover { background: rgba(128,128,128,.15); color: var(--text); }
+  .chat-win-controls .win-close-btn:hover { background: #e5484d; color: #fff; }
   .chat-menu-wrap { position: relative; }
   .chat-menu-btn { background: transparent; color: var(--muted); border: none;
     border-radius: 6px; width: 26px; height: 26px; padding: 0; cursor: pointer;
@@ -3760,6 +3789,14 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → ícono "Conexiones" → "Información de conexión" → "Conexión del chat" para copiar la URL.</div>
     </div>
   </div>
+  <div class="chat-win-controls">
+    <button onclick="window.msApp && window.msApp.winMinimize()" title="Minimizar">
+      <svg width="11" height="11" viewBox="0 0 12 12"><line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+    <button class="win-close-btn" onclick="window.msApp && window.msApp.winClose()" title="Cerrar">
+      <svg width="11" height="11" viewBox="0 0 12 12"><line x1="1" y1="1" x2="11" y2="11" stroke="currentColor" stroke-width="1.4"/><line x1="11" y1="1" x2="1" y2="11" stroke="currentColor" stroke-width="1.4"/></svg>
+    </button>
+  </div>
 </div>
 <div id="stars"></div>
 <div id="box"><div class="empty">Esperando mensajes…</div></div>
@@ -3779,6 +3816,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   var ua = navigator.userAgent;
   if (ua.includes('Mac')) document.body.classList.add('platform-darwin');
   else if (ua.includes('Windows')) document.body.classList.add('platform-win32');
+  else if (ua.includes('Linux')) document.body.classList.add('platform-linux');
 
   function toggleChatMenu(e) {
     e.stopPropagation();

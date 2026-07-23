@@ -145,7 +145,15 @@ function titleBarConfig(height = TITLEBAR_HEIGHT, isDark = true) {
       },
     };
   }
-  return {}; // Linux u otros: barra nativa normal, sin fundir.
+  if (process.platform === 'linux') {
+    // Linux no tiene equivalente a hiddenInset (mac) ni a titleBarOverlay (Windows) —
+    // sin frame:false quedaba la barra nativa del window manager (con el <title> del
+    // documento) apilada ARRIBA del header propio de la app, duplicado. Frameless acá
+    // + botones propios dibujados en el header (ver .win-controls en panel.js) resuelve
+    // ambos casos (ventana principal y de chat) con los mismos handlers win:*.
+    return { frame: false };
+  }
+  return {}; // otros: barra nativa normal, sin fundir.
 }
 
 function createWindow() {
@@ -378,6 +386,17 @@ ipcMain.handle('app:set-titlebar-theme', (_, isDark) => {
   if (chatWin && !chatWin.isDestroyed()) chatWin.setTitleBarOverlay({ ...overlay, height: CHAT_TITLEBAR_HEIGHT });
 });
 ipcMain.handle('chat:open-window', (_, theme) => { openChatWindow(theme); return true; });
+
+// Controles de ventana propios — solo los usa Linux (frame:false ahí, ver
+// titleBarConfig). fromWebContents(e.sender) en vez de asumir `win` a propósito: estos
+// mismos handlers los usa tanto la ventana principal como el popout de chat.
+ipcMain.handle('win:minimize', (e) => { BrowserWindow.fromWebContents(e.sender)?.minimize(); });
+ipcMain.handle('win:toggle-maximize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return;
+  if (w.isMaximized()) w.unmaximize(); else w.maximize();
+});
+ipcMain.handle('win:close', (e) => { BrowserWindow.fromWebContents(e.sender)?.close(); });
 
 ipcMain.handle('app:get-language', () => APP_LANG);
 ipcMain.handle('app:set-language', (_, lang) => {

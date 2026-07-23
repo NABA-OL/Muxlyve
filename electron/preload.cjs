@@ -40,4 +40,8 @@ contextBridge.exposeInMainWorld('msApp', {
   openUpdateWeb: () => ipcRenderer.invoke('updater:open-web'),
   // Notificación nativa del SO — ver app:notify en electron/main.js.
   notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
+  // Controles de ventana propios (Linux, frameless — ver titleBarConfig en main.js).
+  winMinimize: () => ipcRenderer.invoke('win:minimize'),
+  winToggleMaximize: () => ipcRenderer.invoke('win:toggle-maximize'),
+  winClose: () => ipcRenderer.invoke('win:close'),
 });
