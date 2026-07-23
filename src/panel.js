@@ -769,6 +769,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .prefs-modal {
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
     padding: 1.5rem; width: 420px; max-width: 90vw;
+    max-height: 85vh; overflow-y: auto;
     box-shadow: 0 24px 64px rgba(0,0,0,.5);
     transform: scale(.96);
     opacity: 0;
@@ -1730,7 +1731,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
      propio posible). El contenido se llena en runtime según el evento que llegue de
      electron/updater.js — ver handleUpdaterEvent(). -->
 <div class="prefs-overlay" id="updaterOverlay" onclick="if(event.target===this)closeUpdaterModal()">
-  <div class="prefs-modal" style="width:380px">
+  <div class="prefs-modal" style="width:480px">
     <div class="prefs-head">
       <h2 id="updaterTitle">Actualización</h2>
       <button class="prefs-close" onclick="closeUpdaterModal()">✕</button>
@@ -1745,7 +1746,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         <span class="pb-head-name">Novedades de esta versión</span>
       </div>
       <div class="pb-body"><div class="pb-body-inner">
-        <p id="updaterNotesText" style="margin:0;font-size:.82rem;white-space:pre-wrap;color:var(--muted)"></p>
+        <p id="updaterNotesText" style="margin:0;font-size:.82rem;white-space:pre-wrap;color:var(--muted);max-height:38vh;overflow-y:auto"></p>
       </div></div>
     </div>
     <div id="updaterProgressBox" style="display:none">
