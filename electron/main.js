@@ -231,7 +231,9 @@ function openChatWindow(theme) {
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     autoHideMenuBar: true,
     ...titleBarConfig(CHAT_TITLEBAR_HEIGHT, theme !== 'light'),
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    // Sin preload acá, window.msApp no existía en esta ventana — no hacía falta hasta
+    // los botones de ventana propios de Linux (winMinimize/winClose en panel.js).
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
   });
   chatWin.loadURL(`${PANEL_URL}chat-window?theme=${theme === 'light' ? 'light' : 'dark'}`);
   chatWin.on('closed', () => { chatWin = null; });
