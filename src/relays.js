@@ -276,11 +276,13 @@ export function stopByName(name) {
 // ── Grabador de buffer rodante ────────────────────────────────────────────
 // Escribe segmentos de 10s en un directorio temporal con wrap circular.
 // Cuando el usuario pide "guardar clip", concatenamos los últimos N segmentos en un MP4.
-// OJO al portar a Linux: tmpdir() ahí suele ser /tmp montado como tmpfs (RAM), a
-// diferencia de Mac/Windows donde es disco real. Un buffer largo (ej. 10 min ≈
-// 450-600MB a bitrate típico) en tmpfs consume RAM aunque el código "escriba a disco"
-// — chequear el montaje real antes de subir el máximo de duración en Linux.
-const REC_DIR  = path.join(tmpdir(), 'ms_rec');
+// En Linux, tmpdir() (/tmp) suele estar montado como tmpfs (RAM), a diferencia de
+// Mac/Windows donde es disco real — un buffer largo ahí consumiría RAM en vez de disco.
+// REC_DIR es overrideable (mismo criterio que MS_CONFIG_DIR en destinations.js) para
+// poder apuntarlo a disco real si hace falta; el default en Linux ya evita tmpfs solo.
+const REC_DIR = process.env.REC_DIR || (process.platform === 'linux'
+  ? path.join(homedir(), '.cache', 'muxlyve', 'ms_rec')
+  : path.join(tmpdir(), 'ms_rec'));
 const SEG_SECS = 10;
 
 let recProc     = null;

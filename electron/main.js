@@ -1,7 +1,8 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
 import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import {
@@ -43,6 +44,8 @@ const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
 // macOS: ícono monocromo + setTemplateImage — el sistema lo pinta blanco/negro según el
 // fondo de la barra de menú, igual que WiFi/Bluetooth/batería. Windows no tiene ese
 // convenio (sus íconos de bandeja siempre van a color), así que ahí se usa el logo real.
+// Linux (GNOME/KDE/etc.) tampoco tiene ese convenio — cae a la misma rama que Windows
+// a propósito, no es un caso sin cubrir.
 // OJO: usa src/public, no build/ — build/ es "buildResources" para electron-builder
 // (íconos que se embeben en el .exe/.app al compilar) y NO se empaqueta como recurso
 // en tiempo de ejecución. Leerlo desde ahí con fs funciona en dev (carpeta real en disco)
@@ -293,7 +296,46 @@ ipcMain.handle('oauth:check-live-tokens', () => checkLiveTokens());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 ipcMain.handle('title:set', (_, title, category) => setStreamTitle(title, category));
 
+// app.setLoginItemSettings/getLoginItemSettings son @platform darwin,win32 en Electron
+// (ver electron.d.ts) — en Linux son no-op silencioso, así que el toggle "Iniciar con el
+// sistema" quedaría roto sin avisar. Se implementa a mano con el mecanismo estándar de
+// freedesktop.org: un .desktop en ~/.config/autostart/ que el entorno de escritorio
+// (GNOME/KDE/etc.) lee al iniciar sesión.
+const LINUX_AUTOSTART_DIR  = path.join(homedir(), '.config', 'autostart');
+const LINUX_AUTOSTART_FILE = path.join(LINUX_AUTOSTART_DIR, 'muxlyve.desktop');
+
+// Corriendo como AppImage, process.execPath apunta al mount temporal (/tmp/.mount_XXXX)
+// que desaparece al cerrar la app — APPIMAGE trae la ruta real del archivo .AppImage,
+// que es la que sigue existiendo en el próximo login.
+function linuxExecPath() {
+  return process.env.APPIMAGE || process.execPath;
+}
+
+function linuxLoginItemState() {
+  if (!existsSync(LINUX_AUTOSTART_FILE)) return { openAtLogin: false, startMinimized: false };
+  try {
+    const content = readFileSync(LINUX_AUTOSTART_FILE, 'utf-8');
+    return { openAtLogin: true, startMinimized: content.includes('--hidden') };
+  } catch {
+    return { openAtLogin: false, startMinimized: false };
+  }
+}
+
+function setLinuxLoginItem(openAtLogin, startMinimized) {
+  if (!openAtLogin) {
+    if (existsSync(LINUX_AUTOSTART_FILE)) unlinkSync(LINUX_AUTOSTART_FILE);
+    return;
+  }
+  mkdirSync(LINUX_AUTOSTART_DIR, { recursive: true });
+  const exec = startMinimized ? `"${linuxExecPath()}" --hidden` : `"${linuxExecPath()}"`;
+  writeFileSync(
+    LINUX_AUTOSTART_FILE,
+    `[Desktop Entry]\nType=Application\nName=Muxlyve\nExec=${exec}\nX-GNOME-Autostart-enabled=true\n`,
+  );
+}
+
 function loginItemState() {
+  if (process.platform === 'linux') return linuxLoginItemState();
   // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el
   // login item se registró con args:['--hidden'], esa entrada NO matchea el chequeo por
   // defecto y openAtLogin aparece falso aunque sí esté activo. Hay que consultar ambas
@@ -305,6 +347,10 @@ function loginItemState() {
 }
 ipcMain.handle('app:get-login-item', () => loginItemState());
 ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
+  if (process.platform === 'linux') {
+    setLinuxLoginItem(!!openAtLogin, !!startMinimized);
+    return loginItemState();
+  }
   app.setLoginItemSettings({
     openAtLogin: !!openAtLogin,
     args: (openAtLogin && startMinimized) ? ['--hidden'] : [],
@@ -493,6 +539,11 @@ app.whenReady().then(async () => {
       },
     );
   }
+  // Linux: sin equivalente acá a propósito — a diferencia de Windows Defender, no hay
+  // un firewall único ni un comando universal (ufw en Debian/Ubuntu, firewalld en
+  // Fedora/RHEL, ninguno en muchas distros de escritorio con NetworkManager). Intentar
+  // adivinar cuál usar es más frágil que útil; el usuario abre el puerto a mano si su
+  // firewall lo bloquea (la mayoría de distros de escritorio no filtran la LAN por defecto).
 
   // Arranca el motor (NMS + relays + panel) por efecto de import.
   try {

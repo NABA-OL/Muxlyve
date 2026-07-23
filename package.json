@@ -18,7 +18,8 @@
     "predist:publish": "node scripts/generate-installer-bmps.mjs && node -r dotenv/config scripts/generate-oauth-credentials.mjs && node -r dotenv/config scripts/create-draft-release.mjs",
     "dist:publish": "node -r dotenv/config node_modules/electron-builder/cli.js --publish always",
     "postdist:publish": "node -r dotenv/config scripts/cleanup-orphan-releases.mjs",
-    "dist:mac": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac"
+    "dist:mac": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/download-ffmpeg-mac.mjs && bash scripts/make-icns.sh && electron-builder --mac",
+    "dist:linux": "node -r dotenv/config scripts/generate-oauth-credentials.mjs && node scripts/check-ffmpeg-linux.mjs && electron-builder --linux"
   },
   "keywords": [
     "rtmp",
@@ -112,6 +113,11 @@
     },
     "dmg": {
       "title": "Muxlyve"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icon-muxlyve.png",
+      "category": "AudioVideo"
     },
     "publish": {
       "provider": "github",
