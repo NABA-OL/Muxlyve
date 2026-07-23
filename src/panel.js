@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, armRecording, armFullRecording } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
@@ -289,7 +289,7 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
-    armRecording(true);
+    armRecording(true, dur);
     if (isLive()) startRecording(dur);
     return json(res, 200, buildState());
   }
@@ -302,6 +302,18 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
+  // POST /api/record/duration  { duration } — persiste SOLO la duración elegida (sin
+  // armar ni reiniciar un buffer activo). Se llama apenas cambia la selección en
+  // Preferencias, para que quede lista para el próximo arranque automático sin depender
+  // de un des/re-armado manual — ver setRecDuration() en relays.js.
+  if (req.method === 'POST' && url.pathname === '/api/record/duration') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!REC_DURATIONS.includes(Number(input.duration))) return json(res, 400, { error: 'Duración inválida.' });
+    setRecDuration(Number(input.duration));
+    return json(res, 200, { ok: true });
+  }
+
   // POST /api/record/save  { duration?: 60|300|600|900, outputDir?: string } — sin duration,
   // usa la del buffer activo (recorderInfo().duration), mismo criterio que /api/record/start.
   if (req.method === 'POST' && url.pathname === '/api/record/save') {
@@ -309,10 +321,18 @@ async function handleApi(req, res, url) {
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
     const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
+    // Log SIEMPRE (no gateado por ALLOW_LAN_PANEL como debugLog): a diferencia de
+    // /api/state (poll cada 2s), esto solo dispara con un click explícito de "guardar
+    // clip" — sirve para diagnosticar desde la consola si la request del Stream Deck
+    // realmente llega, con qué body, y qué resultado da, sin depender de tener LAN
+    // habilitada ni de que la ruta esté en DEBUG_LOG_ROUTES.
+    console.log(`[record/save] request desde ${req.socket.remoteAddress} — duration=${input.duration ?? '(no enviado, usa ' + dur + ')'} outputDir=${outputDir ?? '(default)'}`);
     try {
       const filePath = await saveClip(dur, outputDir);
+      console.log(`[record/save] OK — ${filePath}`);
       return json(res, 200, { ok: true, path: filePath });
     } catch (err) {
+      console.error(`[record/save] FALLÓ — ${err.message}`);
       return json(res, 500, { error: err.message });
     }
   }
@@ -374,16 +394,49 @@ async function handleApi(req, res, url) {
     }
   }
 
+  // POST /api/clips/set-dir  { dir } — persiste la carpeta de destino de clips
+  // (settings.json, ver setClipsDir en relays.js). Antes esto solo vivía en localStorage
+  // del panel — el plugin de Stream Deck no tiene acceso a eso, así que sus saves
+  // siempre caían en la carpeta default aunque el usuario hubiera elegido otra acá.
+  if (req.method === 'POST' && url.pathname === '/api/clips/set-dir') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    setClipsDir(typeof input.dir === 'string' ? input.dir : null);
+    return json(res, 200, { ok: true });
+  }
+
   // GET /api/recordings?dir=  → últimas grabaciones completas (.mp4 ya remuxeadas),
   // mismo criterio que /api/clips pero apuntando a resolveRecordingsDir().
   if (req.method === 'GET' && url.pathname === '/api/recordings') {
     const outputDir = url.searchParams.get('dir') || null;
     try {
-      const { dir, files } = listRecentRecordings(outputDir);
-      return json(res, 200, { dir, files });
+      const { dir, files, total } = listRecentRecordings(outputDir);
+      return json(res, 200, { dir, files, total });
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // DELETE /api/recordings  { path, outputDir? } — borra una grabación completa. Mismo
+  // guard de seguridad que DELETE /api/clips (path debe estar dentro del folder).
+  if (req.method === 'DELETE' && url.pathname === '/api/recordings') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
+    try {
+      deleteRecording(input.path, input.outputDir || null);
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // POST /api/recordings/set-dir  { dir } — mismo criterio que /api/clips/set-dir.
+  if (req.method === 'POST' && url.pathname === '/api/recordings/set-dir') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    setRecordingsDir(typeof input.dir === 'string' ? input.dir : null);
+    return json(res, 200, { ok: true });
   }
 
   // POST /api/clips/open  { path, reveal? }  → abre una carpeta, o revela un archivo
@@ -1675,7 +1728,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="copyrow" style="gap:.4rem;margin-top:.35rem">
               <input type="text" id="clipsDir" placeholder="Predeterminada del sistema"
                      style="font-family:ui-monospace,monospace;font-size:.78rem"
-                     oninput="localStorage.setItem('ms_clips_dir', this.value)">
+                     oninput="localStorage.setItem('ms_clips_dir', this.value)"
+                     onchange="setClipsDirServer(this.value)">
               <button id="browseBtn" class="browse-btn" onclick="browseFolder()" title="Elegir carpeta">…</button>
             </div>
           </div>
@@ -1684,7 +1738,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="copyrow" style="gap:.4rem;margin-top:.35rem">
               <input type="text" id="recordingsDir" placeholder="Predeterminada del sistema"
                      style="font-family:ui-monospace,monospace;font-size:.78rem"
-                     oninput="localStorage.setItem('ms_recordings_dir', this.value)">
+                     oninput="localStorage.setItem('ms_recordings_dir', this.value)"
+                     onchange="setRecordingsDirServer(this.value)">
               <button id="browseRecordingsBtn" class="browse-btn" onclick="browseRecordingsFolder()" title="Elegir carpeta">…</button>
             </div>
           </div>
@@ -2733,6 +2788,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     localStorage.setItem('ms_rec_dur', dur);
     document.querySelectorAll('.rec-dur button').forEach(b =>
       b.classList.toggle('sel', Number(b.dataset.dur) === dur));
+    // Persiste server-side ya mismo (no espera a que se arme/desarme el buffer) — así
+    // el próximo arranque automático por onPublish() usa esta duración aunque el buffer
+    // ya estuviera armado desde antes. Fire-and-forget: si falla, sigue siendo válida
+    // la de la sesión anterior, no vale la pena bloquear la UI por esto.
+    api('POST', '/api/record/duration', { duration: dur }).catch(() => {});
   }
 
   // Ajuste persistente server-side (settings.json, ver relays.js armRecording()) — sin
@@ -2771,7 +2831,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   async function browseFolder() {
     try {
       const r = await api('GET', '/api/pick-folder');
-      if (r.path) { $('#clipsDir').value = r.path; localStorage.setItem('ms_clips_dir', r.path); }
+      if (r.path) {
+        $('#clipsDir').value = r.path;
+        localStorage.setItem('ms_clips_dir', r.path);
+        setClipsDirServer(r.path);
+      }
     } catch (e) {
       // No es Electron: oculta el botón y deja que el usuario escriba a mano
       $('#browseBtn').style.display = 'none';
@@ -2781,11 +2845,30 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   async function browseRecordingsFolder() {
     try {
       const r = await api('GET', '/api/pick-folder');
-      if (r.path) { $('#recordingsDir').value = r.path; localStorage.setItem('ms_recordings_dir', r.path); }
+      if (r.path) {
+        $('#recordingsDir').value = r.path;
+        localStorage.setItem('ms_recordings_dir', r.path);
+        setRecordingsDirServer(r.path);
+      }
     } catch (e) {
       $('#browseRecordingsBtn').style.display = 'none';
     }
   }
+
+  // Fire-and-forget, igual que setRecDur() — persisten la carpeta elegida en
+  // settings.json (ver setClipsDir/setRecordingsDir en relays.js) para que el plugin de
+  // Stream Deck (que nunca manda outputDir) guarde en la MISMA carpeta que el panel,
+  // en vez de siempre caer en la carpeta default.
+  function setClipsDirServer(dir) {
+    api('POST', '/api/clips/set-dir', { dir }).catch(() => {});
+  }
+  function setRecordingsDirServer(dir) {
+    api('POST', '/api/recordings/set-dir', { dir }).catch(() => {});
+  }
+
+  // Nombres ya anunciados por ESTE panel (guardado propio) — el poll de loadRecentClips()
+  // los ignora al detectar "nuevos", para no duplicar el toast de este mismo guardado.
+  const announcedClipNames = new Set();
 
   async function doSaveClip() {
     const btn = $('#clipSaveBtn');
@@ -2794,6 +2877,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     try {
       const r = await api('POST', '/api/record/save', { duration: recDurSel, outputDir });
       const name = r.path ? r.path.split(/[\\/]/).pop() : '';
+      if (name) announcedClipNames.add(name);
       toast('✓ Clip guardado' + (name ? ': ' + name : ''));
       loadRecentClips();
     } catch (e) { toast(e.message, true); }
@@ -2833,12 +2917,30 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   const CLIP_DEL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
 
+  // null = todavía no cargó ninguna vez (recién abrió el panel) — no hay que anunciar
+  // como "nuevos" clips que ya existían de antes, solo los que aparecen DESPUÉS del
+  // primer load. Distinto de announcedClipNames: esto es "qué vi la última vez",
+  // aquello es "cuáles ya avisé yo mismo" (para no duplicar el toast del guardado local).
+  let seenClipNames = null;
+
   async function loadRecentClips() {
     if (!window.msApp) return;
     try {
       const outputDir = $('#clipsDir').value.trim() || null;
       const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
       const { files, total } = await api('GET', '/api/clips' + q);
+      // Guardado desde OTRO cliente (ej. Stream Deck) — el panel no tiene forma de
+      // saberlo salvo comparando con la última lista que vio. Sin esto, un clip
+      // guardado por el plugin no daba ninguna señal en la app hasta que el usuario
+      // notaba que apareció solo en la lista (o ni eso, si no la tenía abierta).
+      if (seenClipNames) {
+        for (const f of files) {
+          if (seenClipNames.has(f.name)) continue;
+          if (announcedClipNames.delete(f.name)) continue; // ya avisado por doSaveClip()
+          toast('✓ Clip guardado: ' + f.name);
+        }
+      }
+      seenClipNames = new Set(files.map((f) => f.name));
       const box = $('#recentClips');
       const list = $('#recentClipsList');
       if (!files.length) { box.style.display = 'none'; return; }
@@ -2908,7 +3010,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     try {
       const outputDir = $('#recordingsDir').value.trim() || null;
       const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { files } = await api('GET', '/api/recordings' + q);
+      const { files, total } = await api('GET', '/api/recordings' + q);
       const box = $('#recentRecordings');
       const list = $('#recentRecordingsList');
       if (!files.length) { box.style.display = 'none'; return; }
@@ -2921,11 +3023,29 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           '<div class="recent-clip-info">' +
           '<div class="recent-clip-name"></div>' +
           '<div class="recent-clip-meta"></div>' +
-          '</div>';
+          '</div>' +
+          '<button class="recent-clip-del" title="Borrar">' + CLIP_DEL_ICON_SVG + '</button>';
         item.querySelector('.recent-clip-name').textContent = f.name;
         item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
         item.addEventListener('click', () => revealRecording(f.path));
+        item.querySelector('.recent-clip-del').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteRecording(f.path);
+        });
         list.appendChild(item);
+      }
+      if (total > files.length) {
+        const more = document.createElement('div');
+        more.className = 'recent-clips-more';
+        const moreN = total - files.length;
+        more.textContent = pick({
+          es: 'y ' + moreN + ' más — abrir carpeta',
+          en: 'and ' + moreN + ' more — open folder',
+          fr: 'et ' + moreN + ' de plus — ouvrir le dossier',
+          pt: 'e mais ' + moreN + ' — abrir pasta',
+        });
+        more.addEventListener('click', openRecordingsFolder);
+        list.appendChild(more);
       }
     } catch {}
   }
@@ -2935,11 +3055,24 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     catch (e) { toast(e.message, true); }
   }
 
-  // Restaura preferencias guardadas en sesiones anteriores
+  async function deleteRecording(recordingPath) {
+    try {
+      const outputDir = $('#recordingsDir').value.trim() || null;
+      await api('DELETE', '/api/recordings', { path: recordingPath, outputDir });
+      loadRecentRecordings();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // Restaura preferencias guardadas en sesiones anteriores — y las re-sincroniza al
+  // servidor ya mismo (fire-and-forget). Necesario para quien ya tenía una carpeta/
+  // duración elegida en localStorage de ANTES de que existiera la persistencia
+  // server-side: sin este push, settings.json se queda en null/default para siempre,
+  // porque el onchange/setRecDur() normal solo dispara con una edición NUEVA, no por
+  // tener ya un valor cargado desde localStorage.
   const savedDir = localStorage.getItem('ms_clips_dir');
-  if (savedDir) $('#clipsDir').value = savedDir;
+  if (savedDir) { $('#clipsDir').value = savedDir; setClipsDirServer(savedDir); }
   const savedRecordingsDir = localStorage.getItem('ms_recordings_dir');
-  if (savedRecordingsDir) $('#recordingsDir').value = savedRecordingsDir;
+  if (savedRecordingsDir) { $('#recordingsDir').value = savedRecordingsDir; setRecordingsDirServer(savedRecordingsDir); }
   const savedDur = Number(localStorage.getItem('ms_rec_dur'));
   if ([60, 300, 600, 900].includes(savedDur)) setRecDur(savedDur);
   loadChatKeywords();

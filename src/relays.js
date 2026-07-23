@@ -286,7 +286,9 @@ const REC_DIR = process.env.REC_DIR || (process.platform === 'linux'
 const SEG_SECS = 10;
 
 let recProc     = null;
-let recDuration = 60; // 30 | 60 | 120
+// Arranca sincronizado con lo persistido (settings.recDuration) — antes arrancaba
+// siempre en 60 fijo, así el usuario ya hubiera elegido 5/10/15 min antes.
+let recDuration = loadSettings().recDuration;
 
 export function recorderInfo() {
   return { active: recProc !== null, duration: recDuration, armed: loadSettings().recArmed };
@@ -295,8 +297,28 @@ export function recorderInfo() {
 // Arma/desarma el buffer para que arranque solo en el próximo onPublish() si no hay
 // señal todavía — llamado tanto desde el toggle del panel como desde el plugin de
 // Stream Deck (mismos endpoints /api/record/start|stop, ver panel.js).
-export function armRecording(armed) {
-  saveSettings({ recArmed: !!armed });
+// duration: si se manda al armar (aunque no haya señal todavía), se persiste ya mismo
+// — sin esto, armar SIN transmisión activa nunca guardaba la duración elegida y
+// onPublish() arrancaba con la última que se haya usado EN VIVO (o el default 60s).
+export function armRecording(armed, duration) {
+  const patch = { recArmed: !!armed };
+  if (armed && duration) {
+    recDuration = duration;
+    patch.recDuration = duration;
+  }
+  saveSettings(patch);
+}
+
+// Persiste SOLO la duración elegida, sin tocar recArmed ni reiniciar un buffer que ya
+// esté grabando (a diferencia de armRecording, que si el buffer está activo lo
+// reinicia vía startRecording). Se llama apenas el usuario cambia la selección en
+// Preferencias — así, si el buffer ya estaba armado desde ANTES (ej. quedó armado de
+// una sesión previa y nunca se volvió a tocar el toggle), la próxima vez que arranque
+// solo por onPublish() ya usa la duración correcta, sin depender de un des/re-armado
+// manual primero.
+export function setRecDuration(duration) {
+  recDuration = duration;
+  saveSettings({ recDuration: duration });
 }
 
 export function startRecording(durationSecs) {
@@ -382,15 +404,27 @@ function defaultMediaBase() {
 }
 
 // Mismo folder para guardar y para listar/abrir — un solo lugar donde vive esta cuenta.
+// outputDir explícito > carpeta configurada (settings.json, ver setClipsDir) > env var >
+// default. El paso por settings.json es el que faltaba: sin esto, el plugin de Stream
+// Deck (que nunca manda outputDir, no tiene cómo saber la carpeta elegida en el panel)
+// siempre guardaba en la carpeta default aunque el usuario hubiera configurado otra.
 export function resolveClipsDir(outputDir) {
-  return outputDir || process.env.MS_CLIPS_DIR || path.join(defaultMediaBase(), 'Clips');
+  return outputDir || loadSettings().clipsDir || process.env.MS_CLIPS_DIR || path.join(defaultMediaBase(), 'Clips');
+}
+
+export function setClipsDir(dir) {
+  saveSettings({ clipsDir: dir || null });
 }
 
 // Folder de la grabación completa — configurable aparte de resolveClipsDir(), para que
 // clips (buffer rodante) y grabaciones (archivo único de toda la transmisión) no se
 // mezclen en la misma carpeta ni haya que compartir el mismo ajuste para ambas cosas.
 export function resolveRecordingsDir(outputDir) {
-  return outputDir || process.env.MS_RECORDINGS_DIR || path.join(defaultMediaBase(), 'Grabaciones');
+  return outputDir || loadSettings().recordingsDir || process.env.MS_RECORDINGS_DIR || path.join(defaultMediaBase(), 'Grabaciones');
+}
+
+export function setRecordingsDir(dir) {
+  saveSettings({ recordingsDir: dir || null });
 }
 
 // Últimos clips guardados en el folder configurado, para mostrar en el panel.
@@ -428,21 +462,31 @@ export function deleteClip(clipPath, outputDir) {
 // pero apuntando a resolveRecordingsDir() y al prefijo grabacion_ en vez de clip_). Los
 // .ts que todavía no terminaron de remuxear no aparecen acá a propósito — recién listos
 // cuando ya son .mp4 reproducibles.
-export function listRecentRecordings(outputDir, limit = 6) {
+export function listRecentRecordings(outputDir, limit = 5) {
   const dir = resolveRecordingsDir(outputDir);
-  let files = [];
+  let all = [];
   try {
-    files = readdirSync(dir)
+    all = readdirSync(dir)
       .filter(f => /^grabacion_.*\.mp4$/.test(f))
       .map(f => {
         const p = path.join(dir, f);
         const st = statSync(p);
         return { name: f, path: p, mtime: st.mtimeMs, size: st.size };
       })
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, limit);
-  } catch { files = []; }
-  return { dir, files };
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch { all = []; }
+  return { dir, files: all.slice(0, limit), total: all.length };
+}
+
+// Mismo criterio de seguridad que deleteClip(): exige que la ruta resuelva DENTRO del
+// folder de grabaciones antes de borrar.
+export function deleteRecording(recordingPath, outputDir) {
+  const dir = resolveRecordingsDir(outputDir);
+  const resolved = path.resolve(recordingPath);
+  if (path.dirname(resolved) !== path.resolve(dir)) {
+    throw new Error('Ruta fuera de la carpeta de grabaciones.');
+  }
+  unlinkSync(resolved);
 }
 
 export function saveClip(durationSecs, outputDir) {
