@@ -58,6 +58,10 @@ const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
 const START_HIDDEN = process.argv.includes('--hidden');
 
+// Panel/i18n arranca solo con francés y portugués además de es/en — ver src/i18n.js.
+// Los diálogos nativos de Electron (este archivo, oauth.js, updater.js, license.js) siguen
+// solo en es/en por ahora: con fr/pt caen al inglés (=== 'es' da false), no truena nada.
+const SUPPORTED_APP_LANGS = ['es', 'en', 'fr', 'pt'];
 let APP_LANG = 'en';
 
 // Preferencias simples que persisten entre sesiones, independientes del login item del SO
@@ -331,7 +335,7 @@ ipcMain.handle('chat:open-window', (_, theme) => { openChatWindow(theme); return
 
 ipcMain.handle('app:get-language', () => APP_LANG);
 ipcMain.handle('app:set-language', (_, lang) => {
-  APP_LANG = lang === 'es' ? 'es' : 'en';
+  APP_LANG = SUPPORTED_APP_LANGS.includes(lang) ? lang : 'en';
   process.env.APP_LANG = APP_LANG;
   prefs.language = APP_LANG;
   savePrefs(prefs);
@@ -409,7 +413,11 @@ app.whenReady().then(async () => {
   // El usuario puede elegir idioma a mano (Preferencias / modal de licencia) — eso manda
   // sobre el idioma del sistema. Sin preferencia guardada, se detecta por primera vez.
   const locale = app.getLocale();
-  APP_LANG = prefs.language || (locale.startsWith('es') ? 'es' : 'en');
+  const detected = locale.startsWith('es') ? 'es'
+    : locale.startsWith('fr') ? 'fr'
+    : locale.startsWith('pt') ? 'pt'
+    : 'en';
+  APP_LANG = SUPPORTED_APP_LANGS.includes(prefs.language) ? prefs.language : detected;
   process.env.APP_LANG = APP_LANG;
 
   // Carga .env desde userData sin dependencias externas.

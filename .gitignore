@@ -3,6 +3,7 @@ node_modules/
 electron/oauth-credentials.js
 config/destinations.json
 config/destinations.json.bak
+config/settings.json
 *.log
 media/
 dist-app/

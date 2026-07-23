@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'nod
 import { isPlayable } from './destinations.js';
 import { FFMPEG } from './ffmpeg.js';
 import { startMonitor, stopMonitor } from './monitor.js';
+import { loadSettings, saveSettings } from './settings.js';
 
 // Gestor de procesos FFmpeg con reconexión automática.
 // Cada destino: name -> { proc, status, attempts, timer, stopping, startedAt, metrics }
@@ -225,6 +226,12 @@ export function onPublish(url, destinations) {
   liveSince = Date.now();
   destinations.filter(isPlayable).forEach(startRelay);
   startMonitor(url); // métricas del ingest + niveles de audio
+  // Buffer/grabación completa "armados" (prendidos sin señal, ver arm*() más abajo) —
+  // arrancan solos apenas hay con qué. Server-side a propósito: funciona igual sea el
+  // panel o el plugin de Stream Deck quien lo haya armado.
+  const settings = loadSettings();
+  if (settings.recArmed && !recProc) startRecording(recDuration);
+  if (settings.fullRecArmed && !fullRecProc) startFullRecording();
 }
 
 // OBS dejó de publicar: para todo y olvida el origen.
@@ -280,7 +287,14 @@ let recProc     = null;
 let recDuration = 60; // 30 | 60 | 120
 
 export function recorderInfo() {
-  return { active: recProc !== null, duration: recDuration };
+  return { active: recProc !== null, duration: recDuration, armed: loadSettings().recArmed };
+}
+
+// Arma/desarma el buffer para que arranque solo en el próximo onPublish() si no hay
+// señal todavía — llamado tanto desde el toggle del panel como desde el plugin de
+// Stream Deck (mismos endpoints /api/record/start|stop, ver panel.js).
+export function armRecording(armed) {
+  saveSettings({ recArmed: !!armed });
 }
 
 export function startRecording(durationSecs) {
@@ -323,7 +337,11 @@ let fullRecProc = null;
 let fullRecStartedAt = null;
 
 export function fullRecordingInfo() {
-  return { active: fullRecProc !== null, startedAt: fullRecStartedAt };
+  return { active: fullRecProc !== null, startedAt: fullRecStartedAt, armed: loadSettings().fullRecArmed };
+}
+
+export function armFullRecording(armed) {
+  saveSettings({ fullRecArmed: !!armed });
 }
 
 export function startFullRecording(outputDir) {

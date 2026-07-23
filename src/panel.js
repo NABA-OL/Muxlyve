@@ -5,32 +5,41 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, armRecording, armFullRecording } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
 import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend } from './chatmod.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
+import { loadSettings, saveSettings, isValidStreamKey } from './settings.js';
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
 // matchear y queda mezclada en dos idiomas. Ordenar así lo evita sin depender de mantener
 // tMap en un orden particular a mano — se auto-corrige aunque se agreguen keys nuevas.
 const TMAP_KEYS_BY_LENGTH = Object.keys(tMap).sort((a, b) => b.length - a.length);
+// Cada entrada de tMap trae { en, fr, pt } — agregar un idioma nuevo es sumarlo acá y
+// completar esa columna en todas las entradas de i18n.js, nada más se toca.
+const SUPPORTED_LANGS = ['en', 'fr', 'pt'];
 
 function translateHtml(html) {
-  if (process.env.APP_LANG === 'es' || !process.env.APP_LANG) return html;
+  const lang = process.env.APP_LANG;
+  if (!SUPPORTED_LANGS.includes(lang)) return html; // 'es', sin definir, o algo no soportado -> tal cual
   let translated = html;
   for (const es of TMAP_KEYS_BY_LENGTH) {
-    translated = translated.split(es).join(tMap[es]);
+    const val = tMap[es][lang];
+    if (val) translated = translated.split(es).join(val);
   }
   return translated;
 }
 
 function t(text) {
-  if (process.env.APP_LANG !== 'es') return tMap[text] || text;
-  return text;
+  // Mismo quirk de siempre: sin APP_LANG definido cae a inglés (solo se ve en dev/headless
+  // sin .env — la app empaquetada siempre define APP_LANG antes de llegar acá).
+  if (process.env.APP_LANG === 'es') return text;
+  const lang = SUPPORTED_LANGS.includes(process.env.APP_LANG) ? process.env.APP_LANG : 'en';
+  return (tMap[text] && tMap[text][lang]) || text;
 }
 
 const MAX_NAME = 40;
@@ -273,18 +282,23 @@ async function handleApi(req, res, url) {
   // configurada (recorderInfo().duration): así un cliente que no conoce la preferencia
   // del usuario (ej. el plugin de Stream Deck) prende el buffer con la misma duración
   // que ya está seleccionada en Preferencias, sin tener que replicar ese ajuste aparte.
+  // Sin señal todavía: no rechaza con 409 — "arma" el buffer (queda guardado, server-side,
+  // no en el cliente) para que arranque solo apenas OBS conecte (ver onPublish en
+  // relays.js). Mismo comportamiento sea el panel o el plugin de Stream Deck quien llame.
   if (req.method === 'POST' && url.pathname === '/api/record/start') {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
-    if (!isLive()) return json(res, 409, { error: t('No hay transmisión activa.') });
-    startRecording(dur);
+    armRecording(true);
+    if (isLive()) startRecording(dur);
     return json(res, 200, buildState());
   }
 
-  // POST /api/record/stop
+  // POST /api/record/stop — siempre desarma también (si no, la próxima vez que llegue
+  // señal volvería a arrancar solo, aunque el usuario lo haya apagado a propósito).
   if (req.method === 'POST' && url.pathname === '/api/record/stop') {
     stopRecording();
+    armRecording(false);
     return json(res, 200, buildState());
   }
 
@@ -305,18 +319,20 @@ async function handleApi(req, res, url) {
 
   // POST /api/fullrecord/start  { outputDir? } — grabación completa (archivo único con
   // toda la transmisión), independiente del buffer rodante de arriba. Ver relays.js.
+  // Mismo criterio que /api/record/start: sin señal, queda "armada" en vez de rechazar.
   if (req.method === 'POST' && url.pathname === '/api/fullrecord/start') {
-    if (!isLive()) return json(res, 409, { error: t('No hay transmisión activa.') });
     let input;
     try { input = await readBody(req); } catch { input = {}; }
     const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
-    startFullRecording(outputDir);
+    armFullRecording(true);
+    if (isLive()) startFullRecording(outputDir);
     return json(res, 200, buildState());
   }
 
   // POST /api/fullrecord/stop
   if (req.method === 'POST' && url.pathname === '/api/fullrecord/stop') {
     stopFullRecording();
+    armFullRecording(false);
     return json(res, 200, buildState());
   }
 
@@ -459,18 +475,35 @@ export function startPanel(port, config = {}) {
             : 'ruta en el allowlist público, no se exige token';
         debugLogSmart(dbgKey, false, `AUTH OMITIDO ${dbgId} — ${why}`);
       }
-      // Config del ingest (URL/clave/preview) — estática, el panel la pide una vez.
+      // Config del ingest (URL/clave/preview) — streamKey/flvUrl se recalculan de
+      // settings.json en cada pedido (no vienen del snapshot de arranque) para que un
+      // cambio de clave desde el panel se vea sin reiniciar la app.
       if (req.method === 'GET' && url.pathname === '/api/config') {
+        const streamKey = loadSettings().streamKey;
         return json(res, 200, {
           rtmpUrl: config.rtmpUrl || '',
           lanRtmpUrl: config.lanRtmpUrl || '',
           lanIp: config.lanIp || null,
           rtmpPort: config.rtmpPort || null,
-          streamKey: config.streamKey || '',
-          flvUrl: config.flvUrl || '',
+          streamKey,
+          flvUrl: config.httpPort ? `http://localhost:${config.httpPort}/live/${streamKey}.flv` : '',
           version: config.version || '0.0.0',
           panelToken: process.env.ALLOW_LAN_PANEL === 'true' ? getOrCreatePanelToken() : null,
         });
+      }
+
+      // POST /api/stream-key { streamKey } — cambia la clave de retransmisión. El valor
+      // por defecto (env STREAM_KEY o "mistream") no se toca hasta que el usuario la
+      // edite acá — ver settings.js.
+      if (req.method === 'POST' && url.pathname === '/api/stream-key') {
+        let input;
+        try { input = await readBody(req); } catch (err) { return json(res, 400, { error: err.message }); }
+        const streamKey = typeof input.streamKey === 'string' ? input.streamKey.trim() : '';
+        if (!isValidStreamKey(streamKey)) {
+          return json(res, 400, { error: t('La clave debe tener 3-64 caracteres: letras, números, guion o guion bajo.') });
+        }
+        saveSettings({ streamKey });
+        return json(res, 200, { ok: true, streamKey });
       }
       if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
       if (url.pathname === '/flv.min.js') {
@@ -989,6 +1022,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   svg.spark { flex-shrink: 0; opacity: .9; margin-right: .5rem; }
   .card-head svg.spark { margin-left: auto; }
   .spark-slot { flex-shrink: 0; }
+  /* Mismo lugar que el sparkline (pb-head-name tiene flex:1 y lo empuja a la derecha
+     igual) — aparece en vez del gráfico mientras no hay datos de transmisión todavía. */
+  .sched-time-badge { font-size: .72rem; color: var(--muted); margin-right: .5rem; white-space: nowrap; }
   .metrics { font-size: .72rem; color: var(--muted); margin-left: auto;
     font-variant-numeric: tabular-nums; white-space: nowrap; }
   .retry { background: var(--danger); color: #fff; }
@@ -1062,7 +1098,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .auth-disc:hover { border-color: var(--danger); color: var(--danger); }
 
   /* ── Platform blocks ── */
-  .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; }
+  /* flex-shrink:0 a propósito — .pb-block vive como hijo directo de contenedores flex
+     (#connPanel es flex column). overflow:hidden hace que flexbox trate su min-height
+     automático como 0 en vez de "el que pida el contenido" (así lo define la spec),
+     así que sin esto un pb-block con contenido anidado grande (ej. Información de
+     conexión con sus 3 sub-bloques) se encoge por debajo de su alto real y corta texto
+     sin avisar — ver overflow: hidden más abajo. */
+  .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; flex-shrink: 0; }
   /* Glow por estado del toggle de reenvío (solo bloques con destino RTMP configurado) —
      mismo patrón pulsante que .video-wrap (@property + @keyframes): verde si está
      activada, rojo si está apagada. Sin URL configurada no se aplica pb-on/pb-off — el
@@ -1335,6 +1377,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="field">
                 <label>Clave de retransmisión</label>
                 <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+                <!-- "mistream" sigue siendo el default de siempre — esto solo entra en
+                     juego si el usuario decide cambiarla, ver POST /api/stream-key. -->
+                <details class="bitrate-collapse">
+                  <summary>Cambiar clave</summary>
+                  <div class="copyrow" style="margin-top:.4rem">
+                    <input type="text" id="streamKeyEditInput" placeholder="mistream">
+                    <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
+                  </div>
+                </details>
               </div>
               <div class="field" id="lanField" style="display:none">
                 <label>Desde otra máquina en tu red</label>
@@ -1509,9 +1560,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div>
               <div>Idioma / Language</div>
             </div>
-            <div style="display:flex;gap:.4rem">
+            <div style="display:flex;flex-wrap:wrap;gap:.4rem;max-width:220px;justify-content:flex-end">
               <button type="button" class="lang-opt-btn" id="langEsBtn" onclick="setAppLanguage('es')">Español</button>
               <button type="button" class="lang-opt-btn" id="langEnBtn" onclick="setAppLanguage('en')">English</button>
+              <button type="button" class="lang-opt-btn" id="langFrBtn" onclick="setAppLanguage('fr')">Français</button>
+              <button type="button" class="lang-opt-btn" id="langPtBtn" onclick="setAppLanguage('pt')">Português</button>
             </div>
           </div>
           <div class="pref-row">
@@ -1736,14 +1789,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <h2>Programar inicio</h2>
       <button class="prefs-close" onclick="closeScheduleModal()">✕</button>
     </div>
-    <p class="pref-desc" style="margin:0 0 .75rem">A la hora elegida se activan los destinos marcados — igual que si les dieras al toggle a mano. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
-    <div class="field"><label>Fecha y hora</label><input type="datetime-local" id="scheduleTimeInput"></div>
-    <div id="scheduleDestList" style="display:flex;flex-direction:column;gap:.4rem;margin:.75rem 0"></div>
-    <p class="pref-desc" id="scheduleStatus" style="display:none;margin-bottom:.75rem"></p>
-    <div style="display:flex;gap:.5rem">
-      <button class="browse-btn" style="flex:1" onclick="confirmSchedule()">Programar</button>
-      <button class="lic-manage-btn" id="cancelScheduleBtn" style="display:none;flex:1" onclick="cancelSchedule()">Cancelar</button>
-    </div>
+    <p class="pref-desc" style="margin:0 0 .75rem">Cada destino puede tener su propia hora — marcalo y elegí cuándo se activa solo, igual que si le dieras al toggle a mano. Desmarcalo para cancelar su programación. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
+    <div id="scheduleDestList" style="display:flex;flex-direction:column;gap:.65rem;margin-bottom:.75rem"></div>
+    <button class="browse-btn" style="width:100%" onclick="confirmSchedule()">Programar</button>
   </div>
 </div>
 
@@ -1806,6 +1854,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   const YOUTUBE_OAUTH_PENDING = true;
   let lastState = null;
   let lastAuthStatus = {};
+  // Idioma actual del cliente — el <html lang="es"> del template ya llega traducido por
+  // translateHtml() (mismo tMap del servidor), así que es una señal confiable sin duplicar
+  // el mecanismo de i18n para texto armado en runtime (fmtClipAge, botones del updater).
+  const UI_LANG = document.documentElement.lang || 'es';
+  function pick(dict) { return dict[UI_LANG] || dict.es; }
   // Filtro de palabras del chat — declarado acá arriba porque loadChatKeywords() se llama
   // desde el bloque de "restaura preferencias" más abajo en el archivo; si esta variable
   // se declarara más abajo que esa llamada, revienta con TDZ (cannot access before
@@ -1830,21 +1883,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     sessionChatMsgCount = 0;
     sessionBitrateSum = {};
     sessionBitrateCount = {};
-  }
-
-  // Vuelve a prender el buffer y/o la grabación completa solos si quedaron marcados
-  // como "recuerda esto" (ver toggleRec/toggleFullRec) — así el usuario no tiene que
-  // reactivarlos a mano en cada transmisión nueva, ni tras reiniciar la app entera
-  // (localStorage sobrevive eso). Los .catch() son best-effort: si falla, el usuario
-  // igual ve el toggle apagado en el próximo refresh() y lo prende a mano.
-  function autoResumeRecorders(state) {
-    if (localStorage.getItem('ms_rec_auto') === '1' && !(state.recorder && state.recorder.active)) {
-      api('POST', '/api/record/start', { duration: recDurSel }).catch(() => {});
-    }
-    if (localStorage.getItem('ms_fullrec_auto') === '1' && !(state.fullRecorder && state.fullRecorder.active)) {
-      const outputDir = $('#recordingsDir').value.trim() || undefined;
-      api('POST', '/api/fullrecord/start', { outputDir }).catch(() => {});
-    }
   }
 
   function trackMetricsHistory(state) {
@@ -1976,29 +2014,33 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   function fmtDur(s) { return s < 60 ? s + 's' : (s / 60) + ' min'; }
 
+  // El toggle nunca se deshabilita, aunque no haya señal todavía — activarlo sin señal
+  // solo "arma" la intención (localStorage, ver toggleRec/autoResumeRecorders); en cuanto
+  // llegue la señal, arranca solo. Así no hace falta acordarse de prenderlo justo cuando
+  // conectás el software de streaming.
   function updateRecorder(state) {
     const rec = state.recorder || { active: false, duration: 60 };
     const toggle = $('#recToggle');
     const saveBtn = $('#clipSaveBtn');
     const status = $('#recStatus');
-    if (!state.live && !rec.active) {
-      toggle.disabled = true;
-      toggle.checked = false;
-      saveBtn.style.display = 'none';
-      status.className = 'rec-status';
-      status.textContent = 'Conecta tu software de streaming para usar el buffer.';
-    } else if (rec.active) {
-      toggle.disabled = false;
+    toggle.disabled = false;
+    if (rec.active) {
       toggle.checked = true;
       saveBtn.style.display = '';
       status.className = 'rec-status on';
       status.textContent = '● Grabando — último ' + fmtDur(rec.duration) + ' disponible';
+    } else if (!state.live) {
+      toggle.checked = !!rec.armed;
+      saveBtn.style.display = 'none';
+      status.className = rec.armed ? 'rec-status on' : 'rec-status';
+      status.textContent = rec.armed
+        ? 'Listo — arranca solo apenas conectes tu software de streaming.'
+        : 'Conecta tu software de streaming para usar el buffer.';
     } else {
-      toggle.disabled = false;
       toggle.checked = false;
       saveBtn.style.display = 'none';
       status.className = 'rec-status';
-      status.textContent = state.live ? 'Buffer inactivo.' : 'Se detuvo la emisión.';
+      status.textContent = 'Buffer inactivo.';
     }
   }
 
@@ -2006,22 +2048,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const rec = state.fullRecorder || { active: false, startedAt: null };
     const toggle = $('#fullRecToggle');
     const status = $('#fullRecStatus');
-    if (!state.live && !rec.active) {
-      toggle.disabled = true;
-      toggle.checked = false;
-      status.className = 'rec-status';
-      status.textContent = 'Conecta tu software de streaming para grabar.';
-    } else if (rec.active) {
-      toggle.disabled = false;
+    toggle.disabled = false;
+    if (rec.active) {
       toggle.checked = true;
       status.className = 'rec-status on';
       const secs = rec.startedAt ? Math.floor((Date.now() - rec.startedAt) / 1000) : 0;
       status.textContent = '● Grabando — ' + fmtDur(secs);
+    } else if (!state.live) {
+      toggle.checked = !!rec.armed;
+      status.className = rec.armed ? 'rec-status on' : 'rec-status';
+      status.textContent = rec.armed
+        ? 'Listo — arranca sola apenas conectes tu software de streaming.'
+        : 'Conecta tu software de streaming para grabar.';
     } else {
-      toggle.disabled = false;
       toggle.checked = false;
       status.className = 'rec-status';
-      status.textContent = state.live ? 'Grabación completa inactiva.' : 'Se detuvo la emisión.';
+      status.textContent = 'Grabación completa inactiva.';
     }
   }
 
@@ -2100,7 +2142,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (state.live) sessionLastUptime = state.uptime;
     if (!wasLive && state.live) {
       resetSessionStats();
-      autoResumeRecorders(state);
     }
     if (wasLive && !state.live) showSessionSummary();
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
@@ -2150,6 +2191,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       if (rtmpDest) {
         const headPill = pillFor(rtmpDest);
         headSparkHtml = sparklineSvg(metricsHistory[rtmpDest.name], sparkColor(headPill.cls));
+        // Sin datos de transmisión todavía (no hay sparkline) — si este destino tiene
+        // una hora programada pendiente, mostrarla ahí mismo en vez de dejarlo vacío.
+        if (!headSparkHtml && scheduledEntries[rtmpDest.name]) {
+          headSparkHtml = '<span class="sched-time-badge" title="Programado para activarse solo">&#8987; ' + fmtScheduledTime(scheduledEntries[rtmpDest.name].atMs) + '</span>';
+        }
       }
 
       // RTMP body
@@ -2611,6 +2657,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       flvUrl = c.flvUrl || '';
       $('#rtmpUrl').textContent = c.rtmpUrl || '—';
       $('#streamKey').textContent = c.streamKey || '—';
+      $('#streamKeyEditInput').value = c.streamKey || '';
       if (c.lanRtmpUrl) {
         $('#lanRtmpUrl').textContent = c.lanRtmpUrl;
         $('#lanField').style.display = '';
@@ -2642,14 +2689,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       b.classList.toggle('sel', Number(b.dataset.dur) === dur));
   }
 
-  // Ajuste persistente: si lo dejaste prendido, la próxima vez que llegue señal se
-  // vuelve a activar solo (ver la transición !wasLive && state.live en render()). Se
-  // guarda al tocar el toggle a mano, ON o OFF — apagarlo también apaga el "recuerdo".
+  // Ajuste persistente server-side (settings.json, ver relays.js armRecording()) — sin
+  // señal el backend "arma" en vez de arrancar de una, y lo arranca solo apenas OBS
+  // conecte (onPublish). Mismo endpoint sea el panel o el plugin de Stream Deck quien
+  // lo llame, así que se comportan siempre igual.
   async function toggleRec() {
     const wantActive = $('#recToggle').checked;
     try {
       await api('POST', wantActive ? '/api/record/start' : '/api/record/stop', { duration: recDurSel });
-      localStorage.setItem('ms_rec_auto', wantActive ? '1' : '0');
+      if (wantActive && !lastState?.live) toast('Arrancará solo apenas conectes tu software de streaming');
       refresh();
     } catch (e) { toast(e.message, true); }
   }
@@ -2659,8 +2707,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     try {
       const outputDir = $('#recordingsDir').value.trim() || undefined;
       await api('POST', wantActive ? '/api/fullrecord/start' : '/api/fullrecord/stop', { outputDir });
-      localStorage.setItem('ms_fullrec_auto', wantActive ? '1' : '0');
+      if (wantActive && !lastState?.live) toast('Arrancará sola apenas conectes tu software de streaming');
       refresh();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  async function saveStreamKey() {
+    const val = $('#streamKeyEditInput').value.trim();
+    if (!val) { toast('La clave no puede quedar vacía', true); return; }
+    try {
+      await api('POST', '/api/stream-key', { streamKey: val });
+      toast('Clave actualizada — usá la nueva en tu software de streaming');
+      loadConfig();
     } catch (e) { toast(e.message, true); }
   }
 
@@ -2717,13 +2775,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   // sí queda en 'en'/'es' correcto (ese <html lang="es"> es el primer key de tMap), así
   // que sirve como señal confiable del idioma actual sin duplicar todo el mecanismo de i18n.
   function fmtClipAge(mtime) {
-    const isEn = document.documentElement.lang === 'en';
     const mins = Math.floor((Date.now() - mtime) / 60000);
-    if (mins < 1) return isEn ? 'just now' : 'ahora mismo';
-    if (mins < 60) return (isEn ? mins + ' min ago' : 'hace ' + mins + ' min');
+    if (mins < 1) return pick({ es: 'ahora mismo', en: 'just now', fr: "à l'instant", pt: 'agora mesmo' });
+    if (mins < 60) return pick({ es: 'hace ' + mins + ' min', en: mins + ' min ago', fr: 'il y a ' + mins + ' min', pt: 'há ' + mins + ' min' });
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return (isEn ? hrs + 'h ago' : 'hace ' + hrs + 'h');
-    return (isEn ? Math.floor(hrs / 24) + 'd ago' : 'hace ' + Math.floor(hrs / 24) + 'd');
+    if (hrs < 24) return pick({ es: 'hace ' + hrs + 'h', en: hrs + 'h ago', fr: 'il y a ' + hrs + 'h', pt: 'há ' + hrs + 'h' });
+    const days = Math.floor(hrs / 24);
+    return pick({ es: 'hace ' + days + 'd', en: days + 'd ago', fr: 'il y a ' + days + 'j', pt: 'há ' + days + 'd' });
   }
   const CLIP_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>';
 
@@ -2949,6 +3007,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   function markActiveLanguageBtn(lang) {
     $('#langEsBtn')?.classList.toggle('sel', lang === 'es');
     $('#langEnBtn')?.classList.toggle('sel', lang === 'en');
+    $('#langFrBtn')?.classList.toggle('sel', lang === 'fr');
+    $('#langPtBtn')?.classList.toggle('sel', lang === 'pt');
   }
   async function setAppLanguage(lang) {
     if (!window.msApp?.setLanguage) return;
@@ -3198,11 +3258,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
 
   // ── Programar inicio ──
-  // Solo vive en esta sesión del panel (setTimeout en el navegador) — no persiste si
-  // cerrás la app entera antes de que llegue la hora, ver aviso al usuario si hace falta
-  // ampliar esto más adelante (requeriría guardar el pendiente y recrearlo al reabrir).
-  let scheduledTimer = null;
-  let scheduledInfo = null; // { atMs, names }
+  // Cada destino tiene su propia hora, independiente de los demás (ej. Kick a las 12:08,
+  // Twitch a otra hora) — name -> { atMs, timerId }. Solo vive en esta sesión del panel
+  // (setTimeout en el navegador) — no persiste si cerrás la app entera antes de que
+  // llegue la hora.
+  const scheduledEntries = {};
+
+  function toLocalInputValue(ms) {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function fmtScheduledTime(ms) {
+    const d = new Date(ms);
+    const pad = (n) => String(n).padStart(2, '0');
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
 
   function closeScheduleModal() { $('#scheduleOverlay').classList.remove('open'); }
 
@@ -3215,67 +3286,64 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       list.appendChild(preflightRow(null, 'No hay destinos con URL configurada todavía.'));
     } else {
       for (const d of dests) {
-        const row = document.createElement('label');
-        row.style.cssText = 'display:flex;align-items:center;gap:.5rem;font-size:.85rem;cursor:pointer';
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;flex-direction:column;gap:.3rem';
+        const head = document.createElement('label');
+        head.style.cssText = 'display:flex;align-items:center;gap:.5rem;font-size:.85rem;cursor:pointer';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.dataset.name = d.name;
-        cb.checked = !d.enabled; // por defecto marca los que hoy están apagados
-        row.appendChild(cb);
-        row.appendChild(document.createTextNode(d.name));
+        cb.checked = !!scheduledEntries[d.name] || !d.enabled; // por defecto marca los que hoy están apagados
+        head.appendChild(cb);
+        head.appendChild(document.createTextNode(d.name));
+        row.appendChild(head);
+        const timeInput = document.createElement('input');
+        timeInput.type = 'datetime-local';
+        timeInput.dataset.name = d.name;
+        if (scheduledEntries[d.name]) timeInput.value = toLocalInputValue(scheduledEntries[d.name].atMs);
+        row.appendChild(timeInput);
         list.appendChild(row);
       }
-    }
-    const statusEl = $('#scheduleStatus');
-    const cancelBtn = $('#cancelScheduleBtn');
-    if (scheduledInfo) {
-      statusEl.style.display = '';
-      statusEl.textContent = 'Programado para ' + new Date(scheduledInfo.atMs).toLocaleString('es') + ' — ' + scheduledInfo.names.join(', ');
-      cancelBtn.style.display = '';
-    } else {
-      statusEl.style.display = 'none';
-      cancelBtn.style.display = 'none';
     }
     $('#scheduleOverlay').classList.add('open');
   }
 
-  function cancelSchedule() {
-    if (scheduledTimer) clearTimeout(scheduledTimer);
-    scheduledTimer = null;
-    scheduledInfo = null;
-    toast('Programación cancelada');
-    closeScheduleModal();
+  function scheduleFor(name, atMs) {
+    if (scheduledEntries[name]) clearTimeout(scheduledEntries[name].timerId);
+    const timerId = setTimeout(() => runScheduledStart(name), atMs - Date.now());
+    scheduledEntries[name] = { atMs, timerId };
+  }
+  function cancelScheduleFor(name) {
+    if (!scheduledEntries[name]) return;
+    clearTimeout(scheduledEntries[name].timerId);
+    delete scheduledEntries[name];
   }
 
-  async function runScheduledStart(names) {
+  async function runScheduledStart(name) {
+    delete scheduledEntries[name];
     const state = lastState;
-    for (const name of names) {
-      const d = state?.destinations.find((x) => x.name === name);
-      if (!d) continue;
-      try { await api('POST', '/api/destinations', { name: d.name, url: d.url, enabled: true }); } catch {}
-    }
-    scheduledTimer = null;
-    scheduledInfo = null;
-    toast('Destinos programados activados');
+    const d = state?.destinations.find((x) => x.name === name);
+    if (!d) return;
+    try { await api('POST', '/api/destinations', { name: d.name, url: d.url, enabled: true, maxBitrate: d.maxBitrate }); } catch {}
+    toast(name + ' activado (programado)');
     refresh();
   }
 
   function confirmSchedule() {
-    const input = $('#scheduleTimeInput');
-    const atMs = new Date(input.value).getTime();
-    if (!input.value || Number.isNaN(atMs) || atMs <= Date.now()) {
-      toast('Elegí una fecha y hora futura', true);
-      return;
+    const names = [...document.querySelectorAll('#scheduleDestList [data-name]')].map((el) => el.dataset.name);
+    const uniqueNames = [...new Set(names)];
+    let changed = 0;
+    for (const name of uniqueNames) {
+      const cb = document.querySelector('#scheduleDestList input[type=checkbox][data-name="' + name.replace(/"/g, '') + '"]');
+      const timeInput = document.querySelector('#scheduleDestList input[type=datetime-local][data-name="' + name.replace(/"/g, '') + '"]');
+      if (!cb || !timeInput) continue;
+      if (!cb.checked) { cancelScheduleFor(name); continue; }
+      const atMs = new Date(timeInput.value).getTime();
+      if (!timeInput.value || Number.isNaN(atMs) || atMs <= Date.now()) continue; // sin hora válida, no lo toca
+      scheduleFor(name, atMs);
+      changed++;
     }
-    const names = [...document.querySelectorAll('#scheduleDestList input[type=checkbox]:checked')].map((cb) => cb.dataset.name);
-    if (!names.length) {
-      toast('Marcá al menos un destino', true);
-      return;
-    }
-    if (scheduledTimer) clearTimeout(scheduledTimer);
-    scheduledInfo = { atMs, names };
-    scheduledTimer = setTimeout(() => runScheduledStart(names), atMs - Date.now());
-    toast('Programado para ' + new Date(atMs).toLocaleString('es'));
+    toast(changed ? 'Programación guardada' : 'Sin cambios — revisá que las horas marcadas sean futuras');
     closeScheduleModal();
   }
 
@@ -3292,7 +3360,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   function handleUpdaterEvent(payload) {
     const { type, title, message, detail, percent, bytesPerSecond, releaseNotes } = payload || {};
-    const isEn = document.documentElement.lang === 'en';
     if (type === 'progress') {
       // Solo actualiza la barra — no toca título/mensaje ya mostrados por el evento 'available'.
       showUpdaterProgress(percent, fmtMBs(bytesPerSecond));
@@ -3321,26 +3388,26 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       // el dmg manual. Ver electron/updater.js.
       const isMac = document.body.classList.contains('platform-darwin');
       if (!isMac) {
-        box.appendChild(updaterBtn(isEn ? 'Download' : 'Descargar', true, () => {
+        box.appendChild(updaterBtn(pick({ es: 'Descargar', en: 'Download', fr: 'Télécharger', pt: 'Baixar' }), true, () => {
           pendingUpdatePayload = null; // ya en curso — que no vuelva el ícono al cerrar
-          showUpdaterProgress(0, isEn ? 'Starting…' : 'Iniciando…');
+          showUpdaterProgress(0, pick({ es: 'Iniciando…', en: 'Starting…', fr: 'Démarrage…', pt: 'Iniciando…' }));
           window.msApp.downloadUpdate();
         }));
       }
-      box.appendChild(updaterBtn(isEn ? 'Download from the web' : 'Descargar desde la web', isMac, async () => {
+      box.appendChild(updaterBtn(pick({ es: 'Descargar desde la web', en: 'Download from the web', fr: 'Télécharger depuis le web', pt: 'Baixar da web' }), isMac, async () => {
         await window.msApp.openUpdateWeb();
         closeUpdaterModal();
       }));
-      box.appendChild(updaterBtn(isEn ? 'Not now' : 'Ahora no', false, closeUpdaterModal));
+      box.appendChild(updaterBtn(pick({ es: 'Ahora no', en: 'Not now', fr: 'Pas maintenant', pt: 'Agora não' }), false, closeUpdaterModal));
     } else if (type === 'downloaded') {
-      box.appendChild(updaterBtn(isEn ? 'Restart now' : 'Reiniciar ahora', true, () => window.msApp.installUpdate()));
-      box.appendChild(updaterBtn(isEn ? 'Later' : 'Después', false, closeUpdaterModal));
+      box.appendChild(updaterBtn(pick({ es: 'Reiniciar ahora', en: 'Restart now', fr: 'Redémarrer maintenant', pt: 'Reiniciar agora' }), true, () => window.msApp.installUpdate()));
+      box.appendChild(updaterBtn(pick({ es: 'Después', en: 'Later', fr: 'Plus tard', pt: 'Depois' }), false, closeUpdaterModal));
     } else if (type === 'error') {
-      box.appendChild(updaterBtn(isEn ? 'Download from the web' : 'Descargar desde la web', true, async () => {
+      box.appendChild(updaterBtn(pick({ es: 'Descargar desde la web', en: 'Download from the web', fr: 'Télécharger depuis le web', pt: 'Baixar da web' }), true, async () => {
         await window.msApp.openUpdateWeb();
         closeUpdaterModal();
       }));
-      box.appendChild(updaterBtn(isEn ? 'Close' : 'Cerrar', false, closeUpdaterModal));
+      box.appendChild(updaterBtn(pick({ es: 'Cerrar', en: 'Close', fr: 'Fermer', pt: 'Fechar' }), false, closeUpdaterModal));
     } else {
       box.appendChild(updaterBtn('OK', true, closeUpdaterModal));
     }

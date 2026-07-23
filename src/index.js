@@ -5,6 +5,7 @@ import { networkInterfaces } from 'node:os';
 import { loadAll, isPlayable } from './destinations.js';
 import { onPublish, onUnpublish } from './relays.js';
 import { startPanel } from './panel.js';
+import { loadSettings } from './settings.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -23,7 +24,10 @@ const LAN_IP = getLanIp();
 const RTMP_PORT = Number(process.env.RTMP_PORT || 19350);
 const HTTP_PORT = Number(process.env.HTTP_PORT || 19000);
 const PANEL_PORT = Number(process.env.PANEL_PORT || 19080);
-const STREAM_KEY = process.env.STREAM_KEY || 'mistream';
+// Snapshot solo para el log de arranque y como valor inicial del panel — la
+// validación real en prePublish llama loadSettings() de nuevo en cada intento, así el
+// usuario puede cambiar la clave desde el panel sin reiniciar la app (ver settings.js).
+const STREAM_KEY = loadSettings().streamKey;
 
 const config = {
   // ping cada 10s, timeout en 15s: OBS que se cierra sin avisar se detecta ~15s después.
@@ -35,7 +39,7 @@ const nms = new NodeMediaServer(config);
 
 nms.on('prePublish', (id, StreamPath) => {
   const key = StreamPath.split('/').pop();
-  if (key !== STREAM_KEY) {
+  if (key !== loadSettings().streamKey) {
     console.warn(`[ingest] Clave invalida (${key}). Rechazando.`);
     nms.getSession(id).reject();
     return;
@@ -65,8 +69,7 @@ startPanel(PANEL_PORT, {
   lanIp: LAN_IP,
   rtmpPort: RTMP_PORT,
   streamKey: STREAM_KEY,
-  // node-media-server expone el ingest como HTTP-FLV en su puerto HTTP.
-  flvUrl: `http://localhost:${HTTP_PORT}/live/${STREAM_KEY}.flv`,
+  httpPort: HTTP_PORT, // panel.js arma flvUrl con la clave ACTUAL (puede cambiar sin reiniciar)
   version,
 });
 
