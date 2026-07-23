@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, armRecording, armFullRecording } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, armRecording, armFullRecording } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
@@ -353,8 +353,22 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/clips') {
     const outputDir = url.searchParams.get('dir') || null;
     try {
-      const { dir, files } = listRecentClips(outputDir);
-      return json(res, 200, { dir, files });
+      const { dir, files, total } = listRecentClips(outputDir);
+      return json(res, 200, { dir, files, total });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // DELETE /api/clips  { path, outputDir? } — borra un clip guardado. deleteClip()
+  // valida que el path esté DENTRO de la carpeta de clips antes de borrar.
+  if (req.method === 'DELETE' && url.pathname === '/api/clips') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
+    try {
+      deleteClip(input.path, input.outputDir || null);
+      return json(res, 200, { ok: true });
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
@@ -907,6 +921,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .recent-clip-name { font-size: .8rem; color: var(--text); overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .recent-clip-meta { font-size: .7rem; color: var(--muted); }
+  .recent-clip-del { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
+    width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; }
+  .recent-clip-del:hover { background: rgba(229,72,77,.15); color: #e5484d; }
+  .recent-clips-more { font-size: .72rem; color: var(--muted); text-align: center;
+    padding: .4rem .5rem 0; cursor: pointer; }
+  .recent-clips-more:hover { color: var(--text); }
 
   /* ── Preview ── */
   .preview { margin-bottom: 1rem; }
@@ -2033,7 +2054,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     return parts.join(' · ');
   }
 
-  function fmtDur(s) { return s < 60 ? s + 's' : (s / 60) + ' min'; }
+  function fmtDur(s) {
+    if (s < 60) return s + 's';
+    const min = s / 60;
+    return (Number.isInteger(min) ? min : min.toFixed(1)) + ' min';
+  }
 
   // El toggle nunca se deshabilita, aunque no haya señal todavía — activarlo sin señal
   // solo "arma" la intención (localStorage, ver toggleRec/autoResumeRecorders); en cuanto
@@ -2806,12 +2831,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   const CLIP_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>';
 
+  const CLIP_DEL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+
   async function loadRecentClips() {
     if (!window.msApp) return;
     try {
       const outputDir = $('#clipsDir').value.trim() || null;
       const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { files } = await api('GET', '/api/clips' + q);
+      const { files, total } = await api('GET', '/api/clips' + q);
       const box = $('#recentClips');
       const list = $('#recentClipsList');
       if (!files.length) { box.style.display = 'none'; return; }
@@ -2824,11 +2851,29 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           '<div class="recent-clip-info">' +
           '<div class="recent-clip-name"></div>' +
           '<div class="recent-clip-meta"></div>' +
-          '</div>';
+          '</div>' +
+          '<button class="recent-clip-del" title="Borrar">' + CLIP_DEL_ICON_SVG + '</button>';
         item.querySelector('.recent-clip-name').textContent = f.name;
         item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
         item.addEventListener('click', () => revealClip(f.path));
+        item.querySelector('.recent-clip-del').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteClip(f.path);
+        });
         list.appendChild(item);
+      }
+      if (total > files.length) {
+        const more = document.createElement('div');
+        more.className = 'recent-clips-more';
+        const moreN = total - files.length;
+        more.textContent = pick({
+          es: 'y ' + moreN + ' más — abrir carpeta',
+          en: 'and ' + moreN + ' more — open folder',
+          fr: 'et ' + moreN + ' de plus — ouvrir le dossier',
+          pt: 'e mais ' + moreN + ' — abrir pasta',
+        });
+        more.addEventListener('click', openClipsFolder);
+        list.appendChild(more);
       }
     } catch {}
   }
@@ -2836,6 +2881,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   async function revealClip(clipPath) {
     try { await api('POST', '/api/clips/open', { path: clipPath, reveal: true }); }
     catch (e) { toast(e.message, true); }
+  }
+
+  async function deleteClip(clipPath) {
+    try {
+      const outputDir = $('#clipsDir').value.trim() || null;
+      await api('DELETE', '/api/clips', { path: clipPath, outputDir });
+      loadRecentClips();
+    } catch (e) { toast(e.message, true); }
   }
 
   async function openRecordingsFolder() {

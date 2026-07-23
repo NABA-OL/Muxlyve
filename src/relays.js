@@ -394,21 +394,34 @@ export function resolveRecordingsDir(outputDir) {
 }
 
 // Últimos clips guardados en el folder configurado, para mostrar en el panel.
-export function listRecentClips(outputDir, limit = 6) {
+// total = cuántos hay en total en la carpeta (antes de recortar a `limit`), para que el
+// panel pueda mostrar "y N más — abrir carpeta" en vez de listarlos todos.
+export function listRecentClips(outputDir, limit = 5) {
   const dir = resolveClipsDir(outputDir);
-  let files = [];
+  let all = [];
   try {
-    files = readdirSync(dir)
+    all = readdirSync(dir)
       .filter(f => /^clip_.*\.mp4$/.test(f))
       .map(f => {
         const p = path.join(dir, f);
         const st = statSync(p);
         return { name: f, path: p, mtime: st.mtimeMs, size: st.size };
       })
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, limit);
-  } catch { files = []; }
-  return { dir, files };
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch { all = []; }
+  return { dir, files: all.slice(0, limit), total: all.length };
+}
+
+// Borra un clip guardado — exige que la ruta resuelva DENTRO del folder de clips
+// (resolveClipsDir), para que el endpoint no se pueda usar para borrar un archivo
+// arbitrario del sistema con solo mandar otro path.
+export function deleteClip(clipPath, outputDir) {
+  const dir = resolveClipsDir(outputDir);
+  const resolved = path.resolve(clipPath);
+  if (path.dirname(resolved) !== path.resolve(dir)) {
+    throw new Error('Ruta fuera de la carpeta de clips.');
+  }
+  unlinkSync(resolved);
 }
 
 // Últimas grabaciones completas ya remuxeadas a .mp4 (mismo criterio que listRecentClips,

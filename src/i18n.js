@@ -97,6 +97,7 @@ export const tMap = {
   'Falta el id del mensaje.': { en: 'Missing message id.', fr: 'id du message manquant.', pt: 'Falta o id da mensagem.' },
   'Destino no encontrado.': { en: 'Destination not found.', fr: 'Destination introuvable.', pt: 'Destino não encontrado.' },
   'Falta el parámetro name.': { en: 'Missing name parameter.', fr: 'Paramètre name manquant.', pt: 'Falta o parâmetro name.' },
+  'Falta el parámetro path.': { en: 'Missing path parameter.', fr: 'Paramètre path manquant.', pt: 'Falta o parâmetro path.' },
   'No hay transmisión activa.': { en: 'No active stream.', fr: 'Aucun stream actif.', pt: 'Nenhuma transmissão ativa.' },
   'Selector solo disponible en la app de escritorio.': { en: 'Selector only available in the desktop app.', fr: 'Sélecteur disponible uniquement dans l\'appli de bureau.', pt: 'Seletor disponível somente no app de desktop.' },
   // fr sin apóstrofe a propósito — se sirve dentro de toast('...', true) en panel.js.
