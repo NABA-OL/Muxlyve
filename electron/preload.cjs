@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('msOAuth', {
   status:     ()         => ipcRenderer.invoke('oauth:status'),
   disconnect: (platform) => ipcRenderer.invoke('oauth:disconnect', platform),
   setTitle:   (title, category) => ipcRenderer.invoke('title:set', title, category),
+  // Chequeo previo a salir en vivo — ver checkLiveTokens() en electron/oauth.js.
+  checkLiveTokens: () => ipcRenderer.invoke('oauth:check-live-tokens'),
 });
 contextBridge.exposeInMainWorld('msApp', {
   getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),
@@ -36,4 +38,6 @@ contextBridge.exposeInMainWorld('msApp', {
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   openUpdateWeb: () => ipcRenderer.invoke('updater:open-web'),
+  // Notificación nativa del SO — ver app:notify en electron/main.js.
+  notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
 });

@@ -1,5 +1,5 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
-import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
-import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle } from './oauth.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle, checkLiveTokens } from './oauth.js';
 import { initUpdater, checkForUpdatesManually } from './updater.js';
 import { initLogBuffer, getRecentLog } from './logbuffer.js';
 
@@ -285,6 +285,7 @@ ipcMain.handle('license:status', () => refreshLicenseStatus());
 
 ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
 ipcMain.handle('oauth:status', () => oauthStatus());
+ipcMain.handle('oauth:check-live-tokens', () => checkLiveTokens());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
 ipcMain.handle('title:set', (_, title, category) => setStreamTitle(title, category));
 
@@ -362,6 +363,16 @@ ipcMain.handle('app:set-allow-lan-panel', (_, val) => {
 ipcMain.handle('app:relaunch', () => {
   app.relaunch();
   app.exit(0);
+});
+
+// Notificación nativa del SO — usada cuando un destino se cae mientras el usuario tiene
+// otra ventana/juego en foco y no está mirando el panel (ver handleUpdaterEvent-style
+// detección de transición en panel.js). Notification.isSupported() es false en algunos
+// Linux sin daemon de notificaciones — silencioso ahí, no truena la app.
+ipcMain.handle('app:notify', (_, { title, body }) => {
+  if (!Notification.isSupported()) return false;
+  new Notification({ title: title || 'Muxlyve', body: body || '' }).show();
+  return true;
 });
 
 ipcMain.handle('report:send', async (_, description) => {

@@ -18,6 +18,23 @@ function es() {
   return process.env.APP_LANG === 'es';
 }
 
+// info.releaseNotes de electron-updater puede venir como string (release actual), array
+// { version, note } (varias versiones saltadas de golpe) o null (release sin body en
+// GitHub). Lo aplanamos a un solo string plano — el panel lo muestra con textContent
+// (nunca innerHTML), así que ni falta sanitizar HTML: no se interpreta ninguno.
+function normalizeReleaseNotes(notes) {
+  if (!notes) return '';
+  if (typeof notes === 'string') return notes.replace(/<[^>]+>/g, '').trim();
+  if (Array.isArray(notes)) {
+    return notes
+      .map((n) => (n?.note ? `${n.version}:\n${n.note.replace(/<[^>]+>/g, '')}` : ''))
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+  }
+  return '';
+}
+
 // dialog.showMessageBox es un diálogo NATIVO del SO (NSAlert en Mac, el genérico de
 // Windows) — Electron no permite darle estilo propio. En vez de eso, este módulo manda
 // un evento por IPC y panel.js dibuja un modal propio (mismo .prefs-modal que el resto
@@ -72,6 +89,7 @@ export function initUpdater(win) {
       title: es() ? 'Actualización disponible' : 'Update available',
       message: es() ? `Muxlyve ${info.version} está disponible.` : `Muxlyve ${info.version} is available.`,
       detail: es() ? 'Se descargará en segundo plano mientras transmites.' : 'It will download in the background while you stream.',
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
     });
   });
 

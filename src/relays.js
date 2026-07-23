@@ -1,8 +1,8 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { mkdirSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { isPlayable } from './destinations.js';
 import { FFMPEG } from './ffmpeg.js';
 import { startMonitor, stopMonitor } from './monitor.js';
@@ -36,13 +36,13 @@ export function uptimeSeconds() {
 // Info por destino para el panel (estado, intentos, métricas, rezago).
 export function relayInfo(name) {
   const r = relays.get(name);
-  if (!r) return { status: 'stopped', attempts: 0, metrics: null, lagging: false };
+  if (!r) return { status: 'stopped', attempts: 0, metrics: null, lagging: false, transcoding: false };
   const lagging =
     r.status === 'live' &&
     r.metrics != null &&
     ((typeof r.metrics.speed === 'number' && r.metrics.speed < LAG_SPEED) ||
       Date.now() - r.metrics.lastUpdate > STALE_MS);
-  return { status: r.status, attempts: r.attempts, metrics: r.metrics, lagging };
+  return { status: r.status, attempts: r.attempts, metrics: r.metrics, lagging, transcoding: !!r.transcoding };
 }
 
 // Extrae fps/bitrate/speed de las líneas de progreso de FFmpeg y marca el relay como 'live'.
@@ -63,6 +63,53 @@ function parseProgress(name, line) {
   };
   // Reset de intentos tras estabilidad: una caída puntual no agota el presupuesto.
   if (r.attempts > 0 && Date.now() - r.startedAt > STABLE_MS) r.attempts = 0;
+}
+
+// ── Bitrate máximo por destino (opcional) ───────────────────────────────────
+// Por defecto TODO sigue en -c copy (sin cambios) — esto solo entra en juego si el
+// destino tiene maxBitrate configurado. Ver plan: margen + sostenido + decisión única
+// al arrancar (no anda alternando copy/transcode en caliente mid-stream).
+const BITRATE_CHECK_SAMPLES = 6; // ~sostenido unos segundos antes de decidir, no un pico
+const bitrateSamples = new Map(); // name -> number[] ventana corta para el chequeo
+const transcodingDecided = new Set(); // nombres que ya decidieron recodificar esta sesión
+
+function checkBitrateCap(dest) {
+  if (!dest.maxBitrate || transcodingDecided.has(dest.name)) return;
+  const r = relays.get(dest.name);
+  if (!r?.metrics?.bitrate) return;
+  const samples = bitrateSamples.get(dest.name) || [];
+  samples.push(r.metrics.bitrate);
+  if (samples.length > BITRATE_CHECK_SAMPLES) samples.shift();
+  bitrateSamples.set(dest.name, samples);
+  if (samples.length < BITRATE_CHECK_SAMPLES) return; // no hay suficiente historial todavía
+
+  // Margen: el bitrate real de OBS fluctúa un poco alrededor del configurado (compresión
+  // variable, jitter) — sin esto, un pico normal dispararía transcode innecesariamente.
+  const margin = Math.max(dest.maxBitrate * 0.1, 500);
+  const threshold = dest.maxBitrate + margin;
+  if (samples.every((b) => b > threshold)) {
+    bitrateSamples.delete(dest.name);
+    switchToTranscode(dest);
+  }
+}
+
+// Pasa ESTE destino puntual de -c copy a recodificar con el cap — implica reiniciar su
+// proceso FFmpeg (corte breve de ese destino solo, los demás no se tocan). Se marca en
+// transcodingDecided ANTES de reiniciar para que sobreviva reconexiones dentro de la
+// misma sesión (no vuelve a copy solo hasta el próximo onUnpublish/onPublish).
+function switchToTranscode(dest) {
+  if (transcodingDecided.has(dest.name)) return;
+  transcodingDecided.add(dest.name);
+  console.log(`[relay:${dest.name}] bitrate sostenido por encima del cap (${dest.maxBitrate}k) — recodificando de ahora en más`);
+  const r = relays.get(dest.name);
+  if (r?.proc) {
+    const proc = r.proc;
+    proc.kill('SIGINT');
+    setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1500);
+  }
+  if (r) { r.stopping = true; if (r.timer) clearTimeout(r.timer); }
+  relays.delete(dest.name);
+  setTimeout(() => startRelay(dest), 400); // startRelay() consulta transcodingDecided para elegir los args
 }
 
 // Kick espera la stream key bajo la ruta /app (rtmps://host/app/<key>). El dashboard
@@ -87,10 +134,18 @@ function startRelay(dest) {
   const prev = relays.get(dest.name);
   if (prev && (prev.status === 'connecting' || prev.status === 'live')) return; // ya corre
 
-  // -c copy = reenvío sin recodificar (carga mínima de CPU)
+  // -c copy = reenvío sin recodificar (carga mínima de CPU) — el caso normal, para
+  // TODOS los destinos salvo que tengan maxBitrate Y ya se haya decidido recodificar
+  // (ver checkBitrateCap/switchToTranscode). Sin cap configurado, nunca cambia.
   const fmt = dest.url.startsWith('srt://') ? 'mpegts' : 'flv';
   const targetUrl = normalizeKickUrl(dest.url);
-  const args = ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', fmt, targetUrl];
+  const useTranscode = !!dest.maxBitrate && transcodingDecided.has(dest.name);
+  const args = useTranscode
+    ? ['-rw_timeout', '5000000', '-i', sourceUrl,
+       '-c:v', 'libx264', '-preset', 'veryfast',
+       '-b:v', `${dest.maxBitrate}k`, '-maxrate', `${dest.maxBitrate}k`, '-bufsize', `${dest.maxBitrate * 2}k`,
+       '-c:a', 'copy', '-f', fmt, targetUrl]
+    : ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', fmt, targetUrl];
   const proc = spawn(FFMPEG, args);
 
   const entry = {
@@ -101,6 +156,7 @@ function startRelay(dest) {
     stopping: false,
     startedAt: Date.now(),
     metrics: null,
+    transcoding: useTranscode,
   };
   relays.set(dest.name, entry);
 
@@ -111,6 +167,7 @@ function startRelay(dest) {
     for (const line of d.toString().split(/[\r\n]+/)) {
       if (!line.trim()) continue;
       parseProgress(dest.name, line);
+      if (dest.maxBitrate && !useTranscode) checkBitrateCap(dest);
       if (/error|failed|unable|refused|denied/i.test(line)) {
         console.log(`[ffmpeg:${dest.name}] ${line}`);
       }
@@ -118,7 +175,7 @@ function startRelay(dest) {
   });
   proc.on('close', (code) => onRelayClose(dest, code));
 
-  console.log(`[relay:${dest.name}] iniciado -> ${maskUrl(dest.url)}`);
+  console.log(`[relay:${dest.name}] iniciado${useTranscode ? ` (recodificando a ${dest.maxBitrate}kbps)` : ''} -> ${maskUrl(dest.url)}`);
 }
 
 // Un relay murió: decide si fue parada manual, fin de emisión, o caída a reintentar.
@@ -174,9 +231,13 @@ export function onPublish(url, destinations) {
 export function onUnpublish() {
   for (const name of [...relays.keys()]) stopRelay(name);
   stopRecording();
+  stopFullRecording();
   stopMonitor();
   sourceUrl = null;
   liveSince = null;
+  // Nueva sesión = nueva evaluación de bitrate desde cero (el bitrate de OBS pudo cambiar).
+  transcodingDecided.clear();
+  bitrateSamples.clear();
 }
 
 // Aplica un cambio de un destino en caliente. Sin emisión activa no hace nada.
@@ -208,6 +269,10 @@ export function stopByName(name) {
 // ── Grabador de buffer rodante ────────────────────────────────────────────
 // Escribe segmentos de 10s en un directorio temporal con wrap circular.
 // Cuando el usuario pide "guardar clip", concatenamos los últimos N segmentos en un MP4.
+// OJO al portar a Linux: tmpdir() ahí suele ser /tmp montado como tmpfs (RAM), a
+// diferencia de Mac/Windows donde es disco real. Un buffer largo (ej. 10 min ≈
+// 450-600MB a bitrate típico) en tmpfs consume RAM aunque el código "escriba a disco"
+// — chequear el montaje real antes de subir el máximo de duración en Linux.
 const REC_DIR  = path.join(tmpdir(), 'ms_rec');
 const SEG_SECS = 10;
 
@@ -246,10 +311,66 @@ export function stopRecording() {
   console.log('[recorder] buffer detenido');
 }
 
+// ── Grabación completa local ──────────────────────────────────────────────
+// Distinta del buffer rodante de arriba: un solo archivo con TODA la transmisión,
+// mientras dure. Graba a .ts (no .mp4 directo) a propósito — MPEG-TS no depende de
+// un índice final (moov atom) como MP4, así que un cierre abrupto (crash, forzar
+// cierre de la app, kill -9) deja igual un archivo completo y reproducible. Al
+// terminar el proceso (parada normal o no) se remuxea a .mp4 en segundo plano
+// (-c copy, sin recodificar); si el remux falla, el .ts queda intacto — la
+// grabación nunca se pierde en ningún escenario.
+let fullRecProc = null;
+let fullRecStartedAt = null;
+
+export function fullRecordingInfo() {
+  return { active: fullRecProc !== null, startedAt: fullRecStartedAt };
+}
+
+export function startFullRecording(outputDir) {
+  if (!sourceUrl || fullRecProc) return;
+  const dir = resolveRecordingsDir(outputDir);
+  mkdirSync(dir, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const tsFile = path.join(dir, `grabacion_${ts}.ts`);
+  const proc = spawn(FFMPEG, ['-i', sourceUrl, '-c', 'copy', tsFile]);
+  fullRecProc = proc;
+  fullRecStartedAt = Date.now();
+  proc.stderr.on('data', () => {}); // drain, igual que el buffer rodante
+  proc.on('exit', () => {
+    if (fullRecProc === proc) { fullRecProc = null; fullRecStartedAt = null; }
+    const mp4File = tsFile.replace(/\.ts$/, '.mp4');
+    execFile(FFMPEG, ['-y', '-i', tsFile, '-c', 'copy', mp4File], (err) => {
+      if (!err) { try { unlinkSync(tsFile); } catch {} }
+      else console.error('[fullrec] no se pudo remuxear a mp4 (el .ts queda intacto):', err.message);
+    });
+  });
+  console.log('[fullrec] grabación completa iniciada');
+}
+
+export function stopFullRecording() {
+  if (!fullRecProc) return;
+  fullRecProc.kill('SIGKILL'); // el remux a mp4 corre en el handler 'exit' de arriba
+  console.log('[fullrec] grabación completa detenida');
+}
+
+// Carpeta base por defecto (auto-creada en el primer uso): ~/Movies/Muxlyve (Mac) o
+// ~/Videos/Muxlyve (Windows). Clips y grabaciones completas quedan en subcarpetas
+// separadas — mismo folder base, pero se distinguen a simple vista en el Finder/Explorer.
+function defaultMediaBase() {
+  const videosFolder = process.platform === 'darwin' ? 'Movies' : 'Videos';
+  return path.join(homedir(), videosFolder, 'Muxlyve');
+}
+
 // Mismo folder para guardar y para listar/abrir — un solo lugar donde vive esta cuenta.
 export function resolveClipsDir(outputDir) {
-  const videosFolder = process.platform === 'darwin' ? 'Movies' : 'Videos';
-  return outputDir || process.env.MS_CLIPS_DIR || path.join(homedir(), videosFolder, 'MultiStream');
+  return outputDir || process.env.MS_CLIPS_DIR || path.join(defaultMediaBase(), 'Clips');
+}
+
+// Folder de la grabación completa — configurable aparte de resolveClipsDir(), para que
+// clips (buffer rodante) y grabaciones (archivo único de toda la transmisión) no se
+// mezclen en la misma carpeta ni haya que compartir el mismo ajuste para ambas cosas.
+export function resolveRecordingsDir(outputDir) {
+  return outputDir || process.env.MS_RECORDINGS_DIR || path.join(defaultMediaBase(), 'Grabaciones');
 }
 
 // Últimos clips guardados en el folder configurado, para mostrar en el panel.
@@ -259,6 +380,27 @@ export function listRecentClips(outputDir, limit = 6) {
   try {
     files = readdirSync(dir)
       .filter(f => /^clip_.*\.mp4$/.test(f))
+      .map(f => {
+        const p = path.join(dir, f);
+        const st = statSync(p);
+        return { name: f, path: p, mtime: st.mtimeMs, size: st.size };
+      })
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, limit);
+  } catch { files = []; }
+  return { dir, files };
+}
+
+// Últimas grabaciones completas ya remuxeadas a .mp4 (mismo criterio que listRecentClips,
+// pero apuntando a resolveRecordingsDir() y al prefijo grabacion_ en vez de clip_). Los
+// .ts que todavía no terminaron de remuxear no aparecen acá a propósito — recién listos
+// cuando ya son .mp4 reproducibles.
+export function listRecentRecordings(outputDir, limit = 6) {
+  const dir = resolveRecordingsDir(outputDir);
+  let files = [];
+  try {
+    files = readdirSync(dir)
+      .filter(f => /^grabacion_.*\.mp4$/.test(f))
       .map(f => {
         const p = path.join(dir, f);
         const st = statSync(p);

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
@@ -68,9 +68,11 @@ function buildState() {
       attempts: info.attempts,
       metrics: info.metrics,
       lagging: info.lagging,
+      maxBitrate: d.maxBitrate || null,
+      transcoding: info.transcoding,
     };
   });
-  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), ingest: ingestInfo() };
+  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), fullRecorder: fullRecordingInfo(), ingest: ingestInfo() };
 }
 
 function readBody(req) {
@@ -102,7 +104,12 @@ function validateDestination(input) {
   if (enabled && !isValidUrl(url)) {
     return { error: t('Para activar, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.') };
   }
-  return { dest: { name, url, enabled } };
+  // Bitrate máximo opcional — vacío/0/inválido = sin cap, el destino sigue en -c copy
+  // (ver relays.js). No se valida un rango: si el usuario pone algo absurdo, el propio
+  // FFmpeg lo va a rechazar o el resultado se va a ver mal, no rompe nada de la app.
+  const maxBitrateRaw = Number(input.maxBitrate);
+  const maxBitrate = Number.isFinite(maxBitrateRaw) && maxBitrateRaw > 0 ? Math.round(maxBitrateRaw) : null;
+  return { dest: { name, url, enabled, maxBitrate } };
 }
 
 let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
@@ -232,7 +239,7 @@ async function handleApi(req, res, url) {
     const list = loadAll();
     const idx = list.findIndex((d) => d.name === dest.name);
     const next = idx >= 0
-      ? list.map((d, i) => (i === idx ? { ...d, url: dest.url, enabled: dest.enabled } : d))
+      ? list.map((d, i) => (i === idx ? { ...d, url: dest.url, enabled: dest.enabled, maxBitrate: dest.maxBitrate } : d))
       : [...list, dest];
     saveAll(next);
     applyChange(dest); // arranca/para el relay en caliente si hay emisión
@@ -258,14 +265,18 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
-  // POST /api/record/start  { duration?: 30|60|120 } — sin duration, usa la última
+  // Duraciones del buffer rodante: 1/5/10/15 min. Ver src/relays.js — la nota sobre
+  // tmpdir()/tmpfs en Linux (RAM en vez de disco) aplica sobre todo al tope de 15 min.
+  const REC_DURATIONS = [60, 300, 600, 900];
+
+  // POST /api/record/start  { duration?: 60|300|600|900 } — sin duration, usa la última
   // configurada (recorderInfo().duration): así un cliente que no conoce la preferencia
   // del usuario (ej. el plugin de Stream Deck) prende el buffer con la misma duración
   // que ya está seleccionada en Preferencias, sin tener que replicar ese ajuste aparte.
   if (req.method === 'POST' && url.pathname === '/api/record/start') {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
+    const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
     if (!isLive()) return json(res, 409, { error: t('No hay transmisión activa.') });
     startRecording(dur);
     return json(res, 200, buildState());
@@ -277,12 +288,12 @@ async function handleApi(req, res, url) {
     return json(res, 200, buildState());
   }
 
-  // POST /api/record/save  { duration?: 30|60|120, outputDir?: string } — sin duration,
+  // POST /api/record/save  { duration?: 60|300|600|900, outputDir?: string } — sin duration,
   // usa la del buffer activo (recorderInfo().duration), mismo criterio que /api/record/start.
   if (req.method === 'POST' && url.pathname === '/api/record/save') {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = [30, 60, 120].includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
+    const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
     const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
     try {
       const filePath = await saveClip(dur, outputDir);
@@ -290,6 +301,23 @@ async function handleApi(req, res, url) {
     } catch (err) {
       return json(res, 500, { error: err.message });
     }
+  }
+
+  // POST /api/fullrecord/start  { outputDir? } — grabación completa (archivo único con
+  // toda la transmisión), independiente del buffer rodante de arriba. Ver relays.js.
+  if (req.method === 'POST' && url.pathname === '/api/fullrecord/start') {
+    if (!isLive()) return json(res, 409, { error: t('No hay transmisión activa.') });
+    let input;
+    try { input = await readBody(req); } catch { input = {}; }
+    const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
+    startFullRecording(outputDir);
+    return json(res, 200, buildState());
+  }
+
+  // POST /api/fullrecord/stop
+  if (req.method === 'POST' && url.pathname === '/api/fullrecord/stop') {
+    stopFullRecording();
+    return json(res, 200, buildState());
   }
 
   // GET /api/pick-folder  → abre el selector nativo de carpetas (solo Electron)
@@ -310,6 +338,18 @@ async function handleApi(req, res, url) {
     const outputDir = url.searchParams.get('dir') || null;
     try {
       const { dir, files } = listRecentClips(outputDir);
+      return json(res, 200, { dir, files });
+    } catch (err) {
+      return json(res, 500, { error: err.message });
+    }
+  }
+
+  // GET /api/recordings?dir=  → últimas grabaciones completas (.mp4 ya remuxeadas),
+  // mismo criterio que /api/clips pero apuntando a resolveRecordingsDir().
+  if (req.method === 'GET' && url.pathname === '/api/recordings') {
+    const outputDir = url.searchParams.get('dir') || null;
+    try {
+      const { dir, files } = listRecentRecordings(outputDir);
       return json(res, 200, { dir, files });
     } catch (err) {
       return json(res, 500, { error: err.message });
@@ -628,6 +668,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .sidebar-col.collapsed { flex-basis: 0; width: 0; }
   .sidebar-inner { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 360px;
     display: flex; flex-direction: column; gap: 1rem; }
+  /* Más aire que el gap base — acá cada hijo directo es un bloque grande y distinto
+     (acciones / plataformas / información de conexión), no como el chat que comparte
+     esta misma clase con elementos chicos que sí quedan bien con gap:1rem. */
+  #connPanel { gap: 1.75rem; }
   .sidebar-toggle-btn {
     background: transparent; border: 1px solid var(--border); border-radius: 8px;
     color: var(--muted); cursor: pointer; padding: .35rem .5rem;
@@ -949,10 +993,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     font-variant-numeric: tabular-nums; white-space: nowrap; }
   .retry { background: var(--danger); color: #fff; }
   label { display: block; font-size: .75rem; color: var(--muted); margin: 0 0 .25rem; }
-  input[type=text], input[type=password], input[type=number] { width: 100%; background: var(--bg); border: 1px solid var(--border);
+  input[type=text], input[type=password], input[type=number], input[type=datetime-local] { width: 100%; background: var(--bg); border: 1px solid var(--border);
     color: var(--text); border-radius: 8px; padding: .5rem .65rem; font-size: .88rem;
     font-family: ui-monospace, monospace; }
-  input[type=text]:focus, input[type=password]:focus, input[type=number]:focus { outline: none; border-color: var(--accent); }
+  input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, input[type=datetime-local]:focus { outline: none; border-color: var(--accent); }
+  /* El selector de calendario/reloj nativo de datetime-local no hereda color de texto —
+     el ícono queda negro sobre fondo oscuro si no se invierte a mano (solo en tema oscuro). */
+  input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
+  [data-theme="light"] input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: none; }
   /* Los navegadores agregan un ícono nativo de mostrar/ocultar en type=password — ya
      tenemos nuestro propio .eye-btn al lado, el nativo duplica y no matchea el tema. */
   input[type=password]::-ms-reveal, input[type=password]::-ms-clear { display: none; }
@@ -971,12 +1019,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .note { font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 
   /* ── Add form ── */
-  .add { margin-top: .25rem; }
-  .add summary { cursor: pointer; color: var(--accent); font-weight: 600;
-    padding: .75rem 0; list-style: none; }
+  .add summary { list-style: none; cursor: pointer; }
   .add summary::-webkit-details-marker { display: none; }
   .add-card { background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; padding: 1rem 1.2rem; margin-top: .5rem; }
+  /* Ajuste avanzado, no una acción principal — colapsado y discreto a propósito, para
+     que solo haga ruido si el usuario lo abre a buscarlo. */
+  .bitrate-collapse { margin-top: .75rem; }
+  .bitrate-collapse summary { list-style: none; cursor: pointer; font-size: .78rem;
+    color: var(--muted); }
+  .bitrate-collapse summary::-webkit-details-marker { display: none; }
+  .bitrate-collapse summary:hover { color: var(--text); }
+  .bitrate-collapse summary::before { content: '▸ '; }
+  .bitrate-collapse[open] summary::before { content: '▾ '; }
+  .bitrate-collapse input[type=number] { margin-top: .4rem; }
 
   /* ── Toast ── */
   #msg { position: fixed; bottom: 1rem; left: 50%;
@@ -1073,13 +1129,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
   .pb-add-rtmp-form { margin-top: .45rem; }
   .stream-info-btn { display: flex; align-items: center; justify-content: center; gap: .45rem;
-    width: 100%; margin-bottom: .75rem; padding: .6rem; border-radius: 10px;
+    width: 100%; margin-bottom: .5rem; padding: .6rem; border-radius: 10px;
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
     color: var(--accent); font-size: .85rem; font-weight: 600;
     transition: background .15s var(--ease-out), border-color .15s var(--ease-out); }
   .stream-info-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent);
     border-color: var(--accent); }
+  .custom-add-card { display: flex; align-items: center; justify-content: center; gap: .5rem;
+    width: 100%; padding: .68rem .9rem; border-radius: 12px; margin-bottom: .5rem;
+    background: transparent; border: 1px dashed var(--border); color: var(--muted);
+    font-size: .88rem; font-weight: 600;
+    transition: border-color .15s var(--ease-out), color .15s var(--ease-out); }
+  .custom-add-card:hover { border-color: var(--accent); color: var(--accent); }
   .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }
 </style>
 </head>
@@ -1141,90 +1203,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
           </div>
         </div>
-        <div class="pb-block open" id="connInfoBlock" style="margin-top:.75rem">
-          <div class="pb-head" onclick="toggleConnInfo()">
-            <i class="pb-chevron">&#9654;</i>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
-              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-              <line x1="6" y1="6" x2="6.01" y2="6"/>
-              <line x1="6" y1="18" x2="6.01" y2="18"/>
-            </svg>
-            <span class="pb-head-name">Información de conexión</span>
-          </div>
-          <div class="pb-body"><div class="pb-body-inner">
-            <div class="conn pb-block pb-subblock" id="connServerBlock">
-              <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
-                <i class="pb-chevron">&#9654;</i>
-                <span class="pb-head-name">Conexión servidor de streaming</span>
-              </div>
-              <div class="pb-body"><div class="pb-body-inner">
-                <div class="field">
-                  <label>Servidor RTMP (en tu software de streaming)</label>
-                  <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                </div>
-                <div class="field">
-                  <label>Clave de retransmisión</label>
-                  <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                </div>
-                <div class="field" id="lanField" style="display:none">
-                  <label>Desde otra máquina en tu red</label>
-                  <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                </div>
-                <div class="field" id="pubField" style="display:none">
-                  <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-                  <div class="copyrow">
-                    <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
-                    <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                    <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                  </div>
-                </div>
-              </div></div>
-            </div>
-            <div class="conn pb-block pb-subblock" id="connChatBlock">
-              <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
-                <i class="pb-chevron">&#9654;</i>
-                <span class="pb-head-name">Conexión del chat</span>
-              </div>
-              <div class="pb-body"><div class="pb-body-inner">
-                <div class="field">
-                  <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
-                  <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                </div>
-                <div class="field" id="chatLanField" style="display:none">
-                  <label>Desde otra máquina en tu red</label>
-                  <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                </div>
-                <div class="field" id="chatPubField" style="display:none">
-                  <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-                  <div class="copyrow">
-                    <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
-                    <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                    <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                  </div>
-                </div>
-              </div></div>
-            </div>
-            <div class="conn pb-block pb-subblock" id="connStreamDeckBlock">
-              <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
-                <i class="pb-chevron">&#9654;</i>
-                <span class="pb-head-name">Conexión plugin Stream Deck</span>
-              </div>
-              <div class="pb-body"><div class="pb-body-inner">
-                <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
-                <div class="field" id="panelTokenField" style="display:none">
-                  <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
-                  <div class="copyrow">
-                    <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
-                    <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                    <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                  </div>
-                </div>
-                <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
-              </div></div>
-            </div>
-          </div></div>
-        </div>
         <!-- Grabador de clips -->
         <div class="rec-section">
           <div class="rec-toggle-row">
@@ -1249,32 +1227,173 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="recent-clips-head">Clips recientes</div>
             <div id="recentClipsList"></div>
           </div>
+          <!-- Grabación completa — archivo único con toda la transmisión, independiente
+               del buffer rodante de arriba. Ver startFullRecording() en src/relays.js. -->
+          <div class="rec-toggle-row" style="margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border)">
+            <div>
+              <div class="rec-toggle-label">Grabación completa</div>
+              <div class="rec-status" id="fullRecStatus">Conecta tu software de streaming para grabar.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:.5rem">
+              <button class="eye-btn" id="openRecordingsFolderBtn" onclick="openRecordingsFolder()" title="Abrir carpeta de grabaciones">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 4h4.7l2 2H20a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>
+                </svg>
+              </button>
+              <label class="sys-toggle">
+                <input type="checkbox" id="fullRecToggle" disabled onchange="toggleFullRec()">
+                <span class="sys-toggle-track"></span>
+              </label>
+            </div>
+          </div>
+          <div class="recent-clips" id="recentRecordings" style="display:none">
+            <div class="recent-clips-head">Grabaciones recientes</div>
+            <div id="recentRecordingsList"></div>
+          </div>
         </div>
       </section>
   </div>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
     <div class="sidebar-inner" id="connPanel" style="display:none">
-      <button class="stream-info-btn" onclick="openStreamInfo()">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>
-        </svg>
-        Modificar información del stream
-      </button>
-      <div id="platformList"></div>
-      <div id="customList"></div>
+      <!-- Envueltos en su propio div a propósito: .sidebar-inner es flex con gap:1rem
+           entre CADA hijo directo — sin este wrapper, ese gap se sumaba al margin de
+           cada botón y quedaban mucho más separados entre sí de lo que se ve entre
+           tarjetas de plataforma. Adentro del wrapper, el espaciado es el margin-bottom
+           normal de .stream-info-btn — el gap del flex solo separa este grupo del resto. -->
+      <div class="stream-actions-group">
+        <button class="stream-info-btn" onclick="openStreamInfo()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>
+          </svg>
+          Modificar información del stream
+        </button>
+        <button class="stream-info-btn" onclick="openPreflightCheck()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          Comprobar antes de salir en vivo
+        </button>
+        <button class="stream-info-btn" style="margin-bottom:0" onclick="openScheduleModal()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          Programar inicio
+        </button>
+      </div>
 
-      <details class="add" id="addDestDetails">
-        <summary>+ Añadir destino personalizado</summary>
-        <div class="add-card">
-          <div class="field"><label>Nombre</label><input type="text" id="newName" placeholder="MiPlataforma"></div>
-          <div class="row">
-            <div class="field"><label>URL (rtmp:// · rtmps:// · srt://)</label><input type="text" id="newUrl" placeholder="rtmp://servidor/app/CLAVE"></div>
-            <button class="save" onclick="addDest()">Añadir</button>
+      <!-- Mismo criterio: agrupa plataformas + destinos personalizados + "Añadir" en un
+           solo hijo directo del flex, para que TikTok y "Añadir destino personalizado"
+           quedeen tan pegados como las tarjetas entre sí. -->
+      <div class="dest-group">
+        <div id="platformList"></div>
+        <div id="customList"></div>
+
+        <details class="add" id="addDestDetails">
+          <summary class="custom-add-card" style="margin-bottom:0">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Añadir destino personalizado
+          </summary>
+          <div class="add-card">
+            <div class="field"><label>Nombre</label><input type="text" id="newName" placeholder="MiPlataforma"></div>
+            <div class="row">
+              <div class="field"><label>URL (rtmp:// · rtmps:// · srt://)</label><input type="text" id="newUrl" placeholder="rtmp://servidor/app/CLAVE"></div>
+              <button class="save" onclick="addDest()">Añadir</button>
+            </div>
           </div>
+        </details>
+      </div>
+
+      <!-- Movido acá desde debajo del preview (antes vivía en .main-col) — es
+           información de referencia, no hace falta que esté siempre a la vista. -->
+      <div class="pb-block open" id="connInfoBlock">
+        <div class="pb-head" onclick="toggleConnInfo()">
+          <i class="pb-chevron">&#9654;</i>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+            <line x1="6" y1="6" x2="6.01" y2="6"/>
+            <line x1="6" y1="18" x2="6.01" y2="18"/>
+          </svg>
+          <span class="pb-head-name">Información de conexión</span>
         </div>
-      </details>
+        <div class="pb-body"><div class="pb-body-inner">
+          <div class="conn pb-block pb-subblock" id="connServerBlock">
+            <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
+              <i class="pb-chevron">&#9654;</i>
+              <span class="pb-head-name">Conexión servidor de streaming</span>
+            </div>
+            <div class="pb-body"><div class="pb-body-inner">
+              <div class="field">
+                <label>Servidor RTMP (en tu software de streaming)</label>
+                <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+              </div>
+              <div class="field">
+                <label>Clave de retransmisión</label>
+                <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+              </div>
+              <div class="field" id="lanField" style="display:none">
+                <label>Desde otra máquina en tu red</label>
+                <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+              </div>
+              <div class="field" id="pubField" style="display:none">
+                <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+                <div class="copyrow">
+                  <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+                  <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                  <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                </div>
+              </div>
+            </div></div>
+          </div>
+          <div class="conn pb-block pb-subblock" id="connChatBlock">
+            <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
+              <i class="pb-chevron">&#9654;</i>
+              <span class="pb-head-name">Conexión del chat</span>
+            </div>
+            <div class="pb-body"><div class="pb-body-inner">
+              <div class="field">
+                <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
+                <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+              </div>
+              <div class="field" id="chatLanField" style="display:none">
+                <label>Desde otra máquina en tu red</label>
+                <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+              </div>
+              <div class="field" id="chatPubField" style="display:none">
+                <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+                <div class="copyrow">
+                  <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
+                  <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                  <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                </div>
+              </div>
+            </div></div>
+          </div>
+          <div class="conn pb-block pb-subblock" id="connStreamDeckBlock">
+            <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
+              <i class="pb-chevron">&#9654;</i>
+              <span class="pb-head-name">Conexión plugin Stream Deck</span>
+            </div>
+            <div class="pb-body"><div class="pb-body-inner">
+              <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
+              <div class="field" id="panelTokenField" style="display:none">
+                <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
+                <div class="copyrow">
+                  <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
+                  <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+                  <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                </div>
+              </div>
+              <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
+            </div></div>
+          </div>
+        </div></div>
+      </div>
     </div>
 
     <div class="sidebar-inner chat-panel" id="chatPanel" style="display:none">
@@ -1298,6 +1417,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="cmd-row"><span class="cmd-label">Segundos</span>
                 <input type="number" id="slowSecondsInput" value="30" min="1" max="1800"></div>
               <button class="browse-btn" style="width:100%;margin-top:.4rem" onclick="applyChatMode(this)">Aplicar</button>
+              <div class="cmd-note" style="margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border)">Filtro de palabras — oculta mensajes que las contengan (Twitch y Kick, corre en tu navegador, no depende de su API)</div>
+              <input type="text" id="chatKeywordFilterInput" placeholder="separadas por coma" style="width:100%;margin:.3rem 0">
+              <button class="browse-btn" style="width:100%" onclick="applyChatKeywordFilter()">Guardar filtro</button>
             </div>
           </div>
           <div class="chat-menu-wrap">
@@ -1448,9 +1570,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div style="margin-bottom:.85rem">
             <label style="display:block;font-size:.75rem;color:var(--muted);margin-bottom:.4rem">Duración del buffer</label>
             <div class="rec-dur">
-              <button class="sel" data-dur="30" onclick="setRecDur(30)">30 s</button>
-              <button data-dur="60" onclick="setRecDur(60)">1 min</button>
-              <button data-dur="120" onclick="setRecDur(120)">2 min</button>
+              <button class="sel" data-dur="60" onclick="setRecDur(60)">1 min</button>
+              <button data-dur="300" onclick="setRecDur(300)">5 min</button>
+              <button data-dur="600" onclick="setRecDur(600)">10 min</button>
+              <button data-dur="900" onclick="setRecDur(900)">15 min</button>
             </div>
           </div>
           <div class="field">
@@ -1460,6 +1583,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                      style="font-family:ui-monospace,monospace;font-size:.78rem"
                      oninput="localStorage.setItem('ms_clips_dir', this.value)">
               <button id="browseBtn" class="browse-btn" onclick="browseFolder()" title="Elegir carpeta">…</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Carpeta de grabaciones completas</label>
+            <div class="copyrow" style="gap:.4rem;margin-top:.35rem">
+              <input type="text" id="recordingsDir" placeholder="Predeterminada del sistema"
+                     style="font-family:ui-monospace,monospace;font-size:.78rem"
+                     oninput="localStorage.setItem('ms_recordings_dir', this.value)">
+              <button id="browseRecordingsBtn" class="browse-btn" onclick="browseRecordingsFolder()" title="Elegir carpeta">…</button>
             </div>
           </div>
         </div>
@@ -1552,11 +1684,66 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     </div>
     <p id="updaterMessage" style="margin:0 0 .5rem;font-size:.9rem"></p>
     <p id="updaterDetail" class="pref-desc" style="margin:0 0 1rem"></p>
+    <!-- Novedades — releaseNotes del release de GitHub (ver electron/updater.js). Oculto
+         si el release no trae texto. Colapsado por defecto, no invasivo. -->
+    <div class="pb-block" id="updaterNotesBlock" style="display:none;margin-bottom:1rem">
+      <div class="pb-head" onclick="toggleUpdaterNotes()">
+        <i class="pb-chevron">&#9654;</i>
+        <span class="pb-head-name">Novedades de esta versión</span>
+      </div>
+      <div class="pb-body"><div class="pb-body-inner">
+        <p id="updaterNotesText" style="margin:0;font-size:.82rem;white-space:pre-wrap;color:var(--muted)"></p>
+      </div></div>
+    </div>
     <div id="updaterProgressBox" style="display:none">
       <div class="upd-progress-track"><div class="upd-progress-fill" id="updaterProgressFill"></div></div>
       <p class="upd-progress-text" id="updaterProgressText"></p>
     </div>
     <div id="updaterButtons" style="display:flex;flex-direction:column;gap:.5rem"></div>
+  </div>
+</div>
+
+<!-- Resumen post-stream — se llena en runtime con los acumuladores de sesión, ver
+     showSessionSummary()/resetSessionStats() en el script del panel. -->
+<div class="prefs-overlay" id="summaryOverlay" onclick="if(event.target===this)closeSessionSummary()">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2>Resumen del stream</h2>
+      <button class="prefs-close" onclick="closeSessionSummary()">✕</button>
+    </div>
+    <div id="summaryBody" style="display:flex;flex-direction:column;gap:.5rem;font-size:.9rem;margin-bottom:1rem"></div>
+    <button class="browse-btn" style="width:100%" onclick="closeSessionSummary()">Cerrar</button>
+  </div>
+</div>
+
+<!-- Comprobación previa a salir en vivo — se llena en runtime, ver openPreflightCheck()
+     en el script del panel. -->
+<div class="prefs-overlay" id="preflightOverlay" onclick="if(event.target===this)closePreflight()">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2>Comprobación previa</h2>
+      <button class="prefs-close" onclick="closePreflight()">✕</button>
+    </div>
+    <div id="preflightBody" style="display:flex;flex-direction:column;gap:.6rem;font-size:.88rem"></div>
+  </div>
+</div>
+
+<!-- Programar inicio — activa destinos elegidos a una hora futura, ver
+     confirmSchedule()/runScheduledStart() en el script del panel. -->
+<div class="prefs-overlay" id="scheduleOverlay" onclick="if(event.target===this)closeScheduleModal()">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2>Programar inicio</h2>
+      <button class="prefs-close" onclick="closeScheduleModal()">✕</button>
+    </div>
+    <p class="pref-desc" style="margin:0 0 .75rem">A la hora elegida se activan los destinos marcados — igual que si les dieras al toggle a mano. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
+    <div class="field"><label>Fecha y hora</label><input type="datetime-local" id="scheduleTimeInput"></div>
+    <div id="scheduleDestList" style="display:flex;flex-direction:column;gap:.4rem;margin:.75rem 0"></div>
+    <p class="pref-desc" id="scheduleStatus" style="display:none;margin-bottom:.75rem"></p>
+    <div style="display:flex;gap:.5rem">
+      <button class="browse-btn" style="flex:1" onclick="confirmSchedule()">Programar</button>
+      <button class="lic-manage-btn" id="cancelScheduleBtn" style="display:none;flex:1" onclick="cancelSchedule()">Cancelar</button>
+    </div>
   </div>
 </div>
 
@@ -1619,17 +1806,55 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   const YOUTUBE_OAUTH_PENDING = true;
   let lastState = null;
   let lastAuthStatus = {};
+  // Filtro de palabras del chat — declarado acá arriba porque loadChatKeywords() se llama
+  // desde el bloque de "restaura preferencias" más abajo en el archivo; si esta variable
+  // se declarara más abajo que esa llamada, revienta con TDZ (cannot access before
+  // initialization) al cargar la página.
+  let chatKeywords = [];
   // Gráfico de salud de red por destino — solo en memoria del cliente (sin backend/DB):
   // ventana corta de bitrate reciente, se borra en cuanto el destino deja de estar 'live'
   // para no mezclar sesiones de transmisión distintas en la misma línea.
   const metricsHistory = {};
   const METRICS_HISTORY_MAX = 30; // ~1 min a ~2s por poll
+
+  // ── Resumen post-stream — acumuladores de sesión, todo en memoria del cliente ──
+  // (mismo criterio que metricsHistory: sin backend/DB nuevos). Se resetean al
+  // arrancar una sesión en vivo, se leen al terminarla (ver render()).
+  let sessionPeakViewers = { twitch: 0, kick: 0, youtube: 0 };
+  let sessionChatMsgCount = 0;
+  let sessionLastUptime = 0;
+  let sessionBitrateSum = {};
+  let sessionBitrateCount = {};
+  function resetSessionStats() {
+    sessionPeakViewers = { twitch: 0, kick: 0, youtube: 0 };
+    sessionChatMsgCount = 0;
+    sessionBitrateSum = {};
+    sessionBitrateCount = {};
+  }
+
+  // Vuelve a prender el buffer y/o la grabación completa solos si quedaron marcados
+  // como "recuerda esto" (ver toggleRec/toggleFullRec) — así el usuario no tiene que
+  // reactivarlos a mano en cada transmisión nueva, ni tras reiniciar la app entera
+  // (localStorage sobrevive eso). Los .catch() son best-effort: si falla, el usuario
+  // igual ve el toggle apagado en el próximo refresh() y lo prende a mano.
+  function autoResumeRecorders(state) {
+    if (localStorage.getItem('ms_rec_auto') === '1' && !(state.recorder && state.recorder.active)) {
+      api('POST', '/api/record/start', { duration: recDurSel }).catch(() => {});
+    }
+    if (localStorage.getItem('ms_fullrec_auto') === '1' && !(state.fullRecorder && state.fullRecorder.active)) {
+      const outputDir = $('#recordingsDir').value.trim() || undefined;
+      api('POST', '/api/fullrecord/start', { outputDir }).catch(() => {});
+    }
+  }
+
   function trackMetricsHistory(state) {
     for (const d of state.destinations) {
       if (d.status === 'live' && d.metrics && typeof d.metrics.bitrate === 'number') {
         const hist = metricsHistory[d.name] || (metricsHistory[d.name] = []);
         hist.push(d.metrics.bitrate);
         if (hist.length > METRICS_HISTORY_MAX) hist.shift();
+        sessionBitrateSum[d.name] = (sessionBitrateSum[d.name] || 0) + d.metrics.bitrate;
+        sessionBitrateCount[d.name] = (sessionBitrateCount[d.name] || 0) + 1;
       } else {
         delete metricsHistory[d.name];
       }
@@ -1777,6 +2002,29 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     }
   }
 
+  function updateFullRecorder(state) {
+    const rec = state.fullRecorder || { active: false, startedAt: null };
+    const toggle = $('#fullRecToggle');
+    const status = $('#fullRecStatus');
+    if (!state.live && !rec.active) {
+      toggle.disabled = true;
+      toggle.checked = false;
+      status.className = 'rec-status';
+      status.textContent = 'Conecta tu software de streaming para grabar.';
+    } else if (rec.active) {
+      toggle.disabled = false;
+      toggle.checked = true;
+      status.className = 'rec-status on';
+      const secs = rec.startedAt ? Math.floor((Date.now() - rec.startedAt) / 1000) : 0;
+      status.textContent = '● Grabando — ' + fmtDur(secs);
+    } else {
+      toggle.disabled = false;
+      toggle.checked = false;
+      status.className = 'rec-status';
+      status.textContent = state.live ? 'Grabación completa inactiva.' : 'Se detuvo la emisión.';
+    }
+  }
+
   // ── Ingest: stats de video + VU meter de audio ──
   // SSE setea los objetivos; un loop de suavizado (ataque rápido / caída lenta) anima las barras.
   const vu = { tL: 0, tR: 0, dL: 0, dR: 0, live: false };
@@ -1830,15 +2078,38 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#ingestVideo').textContent = 'Entrada: ' + (parts.join(' · ') || '—');
   }
 
+  // Alerta fuera del panel cuando un destino se cae — solo dispara en la TRANSICIÓN a
+  // 'failed' (no en cada poll de 2s mientras se queda ahí), para no repetir la misma
+  // notificación 30 veces. Silenciosa si no hay msApp.notify (navegador sin Electron).
+  const lastDestStatus = {};
+  function notifyDestinationFailures(state) {
+    for (const d of state.destinations) {
+      const prev = lastDestStatus[d.name];
+      if (d.status === 'failed' && prev !== 'failed') {
+        window.msApp?.notify?.('Muxlyve', d.name + ': se cayó la conexión.');
+      }
+      lastDestStatus[d.name] = d.status;
+    }
+  }
+
   function render(state) {
+    const wasLive = lastState?.live;
     lastState = state;
     trackMetricsHistory(state);
+    notifyDestinationFailures(state);
+    if (state.live) sessionLastUptime = state.uptime;
+    if (!wasLive && state.live) {
+      resetSessionStats();
+      autoResumeRecorders(state);
+    }
+    if (wasLive && !state.live) showSessionSummary();
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
     $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     $('#videoWrap').classList.toggle('live', state.live);
     updatePreview(state.live);
     updateRecorder(state);
+    updateFullRecorder(state);
     updateIngest(state);
     renderPlatforms();
     renderCustom(state);
@@ -1890,11 +2161,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         const metrics = metricsFor(d);
         bodyHtml += '<div class="pb-rtmp">';
         bodyHtml += '<div class="card-head"><span class="pill ' + pill.cls + '">' + pill.text + '</span>';
+        if (d.transcoding) bodyHtml += '<span class="pill" style="color:var(--warn);background:rgba(240,162,58,.15)" title="Bitrate máximo activo — este destino se está recodificando">&#9889; recodificando</span>';
         if (metrics) bodyHtml += '<span class="metrics">' + metrics + '</span>';
         bodyHtml += '</div>';
         bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal' : '') + '</label>';
         bodyHtml += '<div class="eyerow"><input type="password" class="pb-url" value="" autocomplete="off">';
         bodyHtml += '<button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">' + eyeSvg(false) + '</button></div></div>';
+        bodyHtml += '<details class="bitrate-collapse">';
+        bodyHtml += '<summary>Bitrate máximo (kbps) — opcional</summary>';
+        bodyHtml += '<input type="number" class="pb-maxbitrate" min="500" step="500" placeholder="Vacio = Mismo Bitrate origen" value="' + (d.maxBitrate || '') + '"></details>';
         bodyHtml += '<div class="row"><label class="switch">';
         bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + d.name + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
         bodyHtml += '<span class="thumb"></span></label>';
@@ -1974,6 +2249,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           \${icon}
           <span class="name"></span>
           <span class="pill \${pill.cls}"></span>
+          \${d.transcoding ? '<span class="pill" style="color:var(--warn);background:rgba(240,162,58,.15)" title="Bitrate máximo activo — este destino se está recodificando">&#9889; recodificando</span>' : ''}
           <span class="metrics"></span>
           <span class="spark-slot"></span>
         </div>
@@ -1984,6 +2260,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">\${eyeSvg(false)}</button>
           </div>
         </div>
+        <details class="bitrate-collapse">
+          <summary>Bitrate máximo (kbps) — opcional</summary>
+          <input type="number" class="max-bitrate" min="500" step="500" placeholder="Vacio = Mismo Bitrate origen">
+        </details>
         <div class="row">
           <label class="switch" title="\${d.enabled ? 'Desactivar' : 'Activar'}">
             <input type="checkbox" class="toggle-cb"\${d.enabled ? ' checked' : ''}>
@@ -2002,9 +2282,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       card.querySelector('.spark-slot').innerHTML = sparklineSvg(metricsHistory[d.name], sparkColor(pill.cls));
       const urlInput = card.querySelector('.url');
       urlInput.value = d.url;
+      const bitrateInput = card.querySelector('.max-bitrate');
+      bitrateInput.value = d.maxBitrate || '';
       if (d.note) card.querySelector('.note').textContent = '&#9651; ' + d.note;
-      card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked);
-      card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled);
+      card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked, bitrateInput.value);
+      card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled, bitrateInput.value);
       card.querySelector('.del').onclick = () => del(d.name);
       const retryBtn = card.querySelector('.retry');
       if (retryBtn) retryBtn.onclick = () => doRetry(d.name);
@@ -2073,7 +2355,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   function savePbRtmp(btn) {
     const name = btn.dataset.name;
     const card = btn.closest('.pb-rtmp');
-    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked);
+    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked, card.querySelector('.pb-maxbitrate').value);
   }
 
   function delPbRtmp(btn) { del(btn.dataset.name); }
@@ -2081,7 +2363,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 
   function togglePbRtmp(cb) {
     const card = cb.closest('.pb-rtmp');
-    save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked);
+    save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked, card.querySelector('.pb-maxbitrate').value);
   }
 
   async function doRetry(name) {
@@ -2091,9 +2373,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } catch (e) { toast(e.message, true); }
   }
 
-  async function save(name, url, enabled) {
+  async function save(name, url, enabled, maxBitrate) {
     try {
-      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled })); });
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled, maxBitrate })); });
       toast(enabled ? name + ' activado' : name + ' guardado');
     } catch (e) { toast(e.message, true); refresh(); }
   }
@@ -2151,6 +2433,9 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   }
   function openChatConnInfo() {
     $('#overlayInfoDd').classList.remove('open');
+    // "Información de conexión" vive en el sidebar de Conexiones, no en este tab de
+    // chat — hay que cambiar de pestaña antes de abrir/scrollear o quedaría oculto.
+    if (activeSidebarTab !== 'conn') showSidebarTab('conn');
     openSubBlock('connInfoBlock');
     openSubBlock('connChatBlock');
     $('#connChatBlock').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2349,7 +2634,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } catch {}
   }
 
-  let recDurSel = 30;
+  let recDurSel = 60;
   function setRecDur(dur) {
     recDurSel = dur;
     localStorage.setItem('ms_rec_dur', dur);
@@ -2357,10 +2642,24 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       b.classList.toggle('sel', Number(b.dataset.dur) === dur));
   }
 
+  // Ajuste persistente: si lo dejaste prendido, la próxima vez que llegue señal se
+  // vuelve a activar solo (ver la transición !wasLive && state.live en render()). Se
+  // guarda al tocar el toggle a mano, ON o OFF — apagarlo también apaga el "recuerdo".
   async function toggleRec() {
     const wantActive = $('#recToggle').checked;
     try {
       await api('POST', wantActive ? '/api/record/start' : '/api/record/stop', { duration: recDurSel });
+      localStorage.setItem('ms_rec_auto', wantActive ? '1' : '0');
+      refresh();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  async function toggleFullRec() {
+    const wantActive = $('#fullRecToggle').checked;
+    try {
+      const outputDir = $('#recordingsDir').value.trim() || undefined;
+      await api('POST', wantActive ? '/api/fullrecord/start' : '/api/fullrecord/stop', { outputDir });
+      localStorage.setItem('ms_fullrec_auto', wantActive ? '1' : '0');
       refresh();
     } catch (e) { toast(e.message, true); }
   }
@@ -2372,6 +2671,15 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     } catch (e) {
       // No es Electron: oculta el botón y deja que el usuario escriba a mano
       $('#browseBtn').style.display = 'none';
+    }
+  }
+
+  async function browseRecordingsFolder() {
+    try {
+      const r = await api('GET', '/api/pick-folder');
+      if (r.path) { $('#recordingsDir').value = r.path; localStorage.setItem('ms_recordings_dir', r.path); }
+    } catch (e) {
+      $('#browseRecordingsBtn').style.display = 'none';
     }
   }
 
@@ -2451,17 +2759,67 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     catch (e) { toast(e.message, true); }
   }
 
+  async function openRecordingsFolder() {
+    if (!window.msApp) return;
+    try {
+      const outputDir = $('#recordingsDir').value.trim() || null;
+      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
+      const { dir } = await api('GET', '/api/recordings' + q);
+      await api('POST', '/api/clips/open', { path: dir }); // ruta genérica, sirve para cualquier carpeta
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  async function loadRecentRecordings() {
+    if (!window.msApp) return;
+    try {
+      const outputDir = $('#recordingsDir').value.trim() || null;
+      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
+      const { files } = await api('GET', '/api/recordings' + q);
+      const box = $('#recentRecordings');
+      const list = $('#recentRecordingsList');
+      if (!files.length) { box.style.display = 'none'; return; }
+      box.style.display = '';
+      list.innerHTML = '';
+      for (const f of files) {
+        const item = document.createElement('div');
+        item.className = 'recent-clip-item';
+        item.innerHTML = CLIP_ICON_SVG +
+          '<div class="recent-clip-info">' +
+          '<div class="recent-clip-name"></div>' +
+          '<div class="recent-clip-meta"></div>' +
+          '</div>';
+        item.querySelector('.recent-clip-name').textContent = f.name;
+        item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
+        item.addEventListener('click', () => revealRecording(f.path));
+        list.appendChild(item);
+      }
+    } catch {}
+  }
+
+  async function revealRecording(recordingPath) {
+    try { await api('POST', '/api/clips/open', { path: recordingPath, reveal: true }); }
+    catch (e) { toast(e.message, true); }
+  }
+
   // Restaura preferencias guardadas en sesiones anteriores
   const savedDir = localStorage.getItem('ms_clips_dir');
   if (savedDir) $('#clipsDir').value = savedDir;
+  const savedRecordingsDir = localStorage.getItem('ms_recordings_dir');
+  if (savedRecordingsDir) $('#recordingsDir').value = savedRecordingsDir;
   const savedDur = Number(localStorage.getItem('ms_rec_dur'));
-  if ([30, 60, 120].includes(savedDur)) setRecDur(savedDur);
+  if ([60, 300, 600, 900].includes(savedDur)) setRecDur(savedDur);
+  loadChatKeywords();
 
   if (window.msApp) {
     loadRecentClips();
+    loadRecentRecordings();
     setInterval(loadRecentClips, 20000);
+    setInterval(loadRecentRecordings, 20000);
   } else {
     $('#openClipsFolderBtn').style.display = 'none';
+    $('#openRecordingsFolderBtn').style.display = 'none';
   }
 
   // ── Canvas fondo: nodos conectados ──
@@ -2735,6 +3093,192 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   function fmtMBs(bytesPerSecond) {
     return (bytesPerSecond / (1024 * 1024)).toFixed(1) + ' MB/s';
   }
+
+  const VIEWER_PLATFORM_LABELS = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
+  function summaryRow(label, value) {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.justifyContent = 'space-between';
+    row.style.gap = '1rem';
+    const l = document.createElement('span');
+    l.style.color = 'var(--muted)';
+    l.textContent = label;
+    const v = document.createElement('strong');
+    v.textContent = value;
+    row.appendChild(l);
+    row.appendChild(v);
+    return row;
+  }
+  function closeSessionSummary() { $('#summaryOverlay').classList.remove('open'); }
+  function showSessionSummary() {
+    const body = $('#summaryBody');
+    body.innerHTML = '';
+    body.appendChild(summaryRow('Duración', fmtUptime(sessionLastUptime)));
+    for (const p of ['twitch', 'kick', 'youtube']) {
+      if (sessionPeakViewers[p] > 0) {
+        body.appendChild(summaryRow('Pico ' + VIEWER_PLATFORM_LABELS[p], sessionPeakViewers[p].toLocaleString('es')));
+      }
+    }
+    body.appendChild(summaryRow('Mensajes de chat', String(sessionChatMsgCount)));
+    for (const name of Object.keys(sessionBitrateSum)) {
+      const avg = Math.round(sessionBitrateSum[name] / sessionBitrateCount[name]);
+      body.appendChild(summaryRow('Bitrate prom. ' + name, avg + ' kbps'));
+    }
+    $('#summaryOverlay').classList.add('open');
+  }
+
+  // ── Comprobación previa a salir en vivo ──
+  // Valores de referencia ampliamente citados para cada plataforma — no se leen en vivo
+  // de su documentación (no existe un endpoint para eso). Si alguna cambia su límite
+  // recomendado, actualizar acá a mano.
+  const PLATFORM_BITRATE_MAX = { twitch: 6000, kick: 8000, tiktok: 6000, youtube: 51000 };
+  function preflightRow(status, label) {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.gap = '.5rem';
+    const dot = document.createElement('span');
+    dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex-shrink:0';
+    dot.style.background = status === true ? 'var(--live)' : status === false ? 'var(--warn)' : 'var(--muted)';
+    const text = document.createElement('span');
+    text.textContent = label;
+    row.appendChild(dot);
+    row.appendChild(text);
+    return row;
+  }
+  function closePreflight() { $('#preflightOverlay').classList.remove('open'); }
+  async function openPreflightCheck() {
+    const body = $('#preflightBody');
+    body.innerHTML = '';
+    const state = lastState;
+    if (!state || !state.live) {
+      body.appendChild(preflightRow(null, 'Conecta tu software de streaming para revisar audio y bitrate.'));
+    } else {
+      const hasAudio = vu.tL > 1 || vu.tR > 1;
+      body.appendChild(preflightRow(hasAudio, hasAudio
+        ? 'Señal de audio detectada.'
+        : 'Sin señal de audio — revisa el mic en tu software de streaming.'));
+
+      const liveDest = state.destinations.find((d) => d.status === 'live' && d.metrics && d.metrics.bitrate);
+      if (liveDest) {
+        const bitrate = liveDest.metrics.bitrate;
+        const enabledIds = state.destinations.filter((d) => d.enabled && d.url).map((d) => d.name.toLowerCase());
+        const caps = enabledIds.map((id) => PLATFORM_BITRATE_MAX[id]).filter(Boolean);
+        const tightestCap = caps.length ? Math.min(...caps) : null;
+        if (tightestCap) {
+          const withinCap = bitrate <= tightestCap;
+          body.appendChild(preflightRow(withinCap, withinCap
+            ? ('Bitrate ' + bitrate + ' kbps dentro de lo recomendado.')
+            : ('Bitrate ' + bitrate + ' kbps supera lo recomendado (~' + tightestCap + ' kbps) para alguno de tus destinos.')));
+        }
+      } else {
+        body.appendChild(preflightRow(null, 'Bitrate: esperando datos de algún destino activo.'));
+      }
+    }
+
+    if (window.msOAuth?.checkLiveTokens) {
+      try {
+        const tokens = await window.msOAuth.checkLiveTokens();
+        const entries = Object.entries(tokens);
+        if (!entries.length) {
+          body.appendChild(preflightRow(null, 'No hay cuentas conectadas por OAuth.'));
+        } else {
+          for (const [platform, ok] of entries) {
+            body.appendChild(preflightRow(ok, ok
+              ? ('Sesión de ' + platform + ' activa.')
+              : ('Sesión de ' + platform + ' vencida — reconéctala en el panel.')));
+          }
+        }
+      } catch {
+        body.appendChild(preflightRow(null, 'No se pudo comprobar el estado de las cuentas conectadas.'));
+      }
+    }
+
+    $('#preflightOverlay').classList.add('open');
+  }
+
+  // ── Programar inicio ──
+  // Solo vive en esta sesión del panel (setTimeout en el navegador) — no persiste si
+  // cerrás la app entera antes de que llegue la hora, ver aviso al usuario si hace falta
+  // ampliar esto más adelante (requeriría guardar el pendiente y recrearlo al reabrir).
+  let scheduledTimer = null;
+  let scheduledInfo = null; // { atMs, names }
+
+  function closeScheduleModal() { $('#scheduleOverlay').classList.remove('open'); }
+
+  function openScheduleModal() {
+    const list = $('#scheduleDestList');
+    list.innerHTML = '';
+    const state = lastState;
+    const dests = (state?.destinations || []).filter((d) => d.url);
+    if (!dests.length) {
+      list.appendChild(preflightRow(null, 'No hay destinos con URL configurada todavía.'));
+    } else {
+      for (const d of dests) {
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex;align-items:center;gap:.5rem;font-size:.85rem;cursor:pointer';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.name = d.name;
+        cb.checked = !d.enabled; // por defecto marca los que hoy están apagados
+        row.appendChild(cb);
+        row.appendChild(document.createTextNode(d.name));
+        list.appendChild(row);
+      }
+    }
+    const statusEl = $('#scheduleStatus');
+    const cancelBtn = $('#cancelScheduleBtn');
+    if (scheduledInfo) {
+      statusEl.style.display = '';
+      statusEl.textContent = 'Programado para ' + new Date(scheduledInfo.atMs).toLocaleString('es') + ' — ' + scheduledInfo.names.join(', ');
+      cancelBtn.style.display = '';
+    } else {
+      statusEl.style.display = 'none';
+      cancelBtn.style.display = 'none';
+    }
+    $('#scheduleOverlay').classList.add('open');
+  }
+
+  function cancelSchedule() {
+    if (scheduledTimer) clearTimeout(scheduledTimer);
+    scheduledTimer = null;
+    scheduledInfo = null;
+    toast('Programación cancelada');
+    closeScheduleModal();
+  }
+
+  async function runScheduledStart(names) {
+    const state = lastState;
+    for (const name of names) {
+      const d = state?.destinations.find((x) => x.name === name);
+      if (!d) continue;
+      try { await api('POST', '/api/destinations', { name: d.name, url: d.url, enabled: true }); } catch {}
+    }
+    scheduledTimer = null;
+    scheduledInfo = null;
+    toast('Destinos programados activados');
+    refresh();
+  }
+
+  function confirmSchedule() {
+    const input = $('#scheduleTimeInput');
+    const atMs = new Date(input.value).getTime();
+    if (!input.value || Number.isNaN(atMs) || atMs <= Date.now()) {
+      toast('Elegí una fecha y hora futura', true);
+      return;
+    }
+    const names = [...document.querySelectorAll('#scheduleDestList input[type=checkbox]:checked')].map((cb) => cb.dataset.name);
+    if (!names.length) {
+      toast('Marcá al menos un destino', true);
+      return;
+    }
+    if (scheduledTimer) clearTimeout(scheduledTimer);
+    scheduledInfo = { atMs, names };
+    scheduledTimer = setTimeout(() => runScheduledStart(names), atMs - Date.now());
+    toast('Programado para ' + new Date(atMs).toLocaleString('es'));
+    closeScheduleModal();
+  }
+
   function showUpdaterProgress(percent, speedText) {
     $('#updaterButtons').style.display = 'none';
     const progBox = $('#updaterProgressBox');
@@ -2742,8 +3286,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#updaterProgressFill').style.width = Math.max(0, Math.min(100, percent)) + '%';
     $('#updaterProgressText').textContent = Math.round(percent) + '%' + (speedText ? ' · ' + speedText : '');
   }
+  function toggleUpdaterNotes() {
+    $('#updaterNotesBlock').classList.toggle('open');
+  }
+
   function handleUpdaterEvent(payload) {
-    const { type, title, message, detail, percent, bytesPerSecond } = payload || {};
+    const { type, title, message, detail, percent, bytesPerSecond, releaseNotes } = payload || {};
     const isEn = document.documentElement.lang === 'en';
     if (type === 'progress') {
       // Solo actualiza la barra — no toca título/mensaje ya mostrados por el evento 'available'.
@@ -2755,6 +3303,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     $('#updaterMessage').textContent = message || '';
     $('#updaterDetail').textContent = detail || '';
     $('#updaterDetail').style.display = detail ? '' : 'none';
+    const notesBlock = $('#updaterNotesBlock');
+    if (type === 'available' && releaseNotes) {
+      $('#updaterNotesText').textContent = releaseNotes;
+      notesBlock.classList.remove('open'); // colapsado por defecto, no invasivo
+      notesBlock.style.display = '';
+    } else {
+      notesBlock.style.display = 'none';
+    }
     $('#updaterProgressBox').style.display = 'none';
     const box = $('#updaterButtons');
     box.style.display = 'flex';
@@ -2901,7 +3457,28 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
   }
 
+  // Filtro de palabras — mini auto-mod client-side: oculta mensajes por keyword sin
+  // depender de la API de cada plataforma (Kick no expone modo lento/solo-emotes por API,
+  // esto sí funciona igual en Twitch y Kick porque corre acá, no allá).
+  function loadChatKeywords() {
+    try { chatKeywords = JSON.parse(localStorage.getItem('ms_chat_keywords') || '[]'); } catch { chatKeywords = []; }
+    const input = $('#chatKeywordFilterInput');
+    if (input) input.value = chatKeywords.join(', ');
+  }
+  function applyChatKeywordFilter() {
+    const raw = $('#chatKeywordFilterInput').value;
+    chatKeywords = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    localStorage.setItem('ms_chat_keywords', JSON.stringify(chatKeywords));
+    toast('Filtro de palabras actualizado');
+  }
+  function isChatMessageBlocked(text) {
+    if (!chatKeywords.length || !text) return false;
+    const low = text.toLowerCase();
+    return chatKeywords.some((k) => low.includes(k));
+  }
+
   function appendChatMessage(msg) {
+    if (isChatMessageBlocked(msg.message)) return;
     const box = $('#chatMessages');
     if (!box) return;
     const empty = box.querySelector('.chat-empty');
@@ -2963,7 +3540,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (box) box.innerHTML = '<div class="chat-empty">Esperando mensajes…</div>';
     const es = new EventSource('/api/chat');
     es.onmessage = (e) => {
-      try { appendChatMessage(JSON.parse(e.data)); } catch {}
+      try {
+        sessionChatMsgCount++; // cuenta todo lo recibido, filtrado o no (ver isChatMessageBlocked)
+        appendChatMessage(JSON.parse(e.data));
+      } catch {}
     };
   }
 
@@ -2976,6 +3556,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       const v = counts[p];
       if (!v || !v.live) continue;
       any = true;
+      if (v.count > (sessionPeakViewers[p] || 0)) sessionPeakViewers[p] = v.count;
       const item = document.createElement('span');
       item.className = 'vb-item';
       item.innerHTML = platformIconSvg(p, 12);
@@ -3108,7 +3689,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       </svg>
     </button>
     <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → "Información de conexión" → "Conexión del chat" para copiar la URL.</div>
+      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → ícono "Conexiones" → "Información de conexión" → "Conexión del chat" para copiar la URL.</div>
     </div>
   </div>
 </div>

@@ -434,6 +434,21 @@ export async function getValidToken(platform) {
   return nearExpiry ? refreshAccessToken(platform) : tok.access_token;
 }
 
+// Chequeo previo a salir en vivo — para cada plataforma conectada, confirma que el
+// access_token siga siendo válido (refrescándolo si estaba por vencer, mismo criterio
+// que getValidToken() ya usa para el polling de chat de YouTube). true = token vivo,
+// false = se cayó la sesión y hay que reconectar desde el panel antes de confiar en esa
+// plataforma para el stream.
+export async function checkLiveTokens() {
+  const all = readTokens();
+  const result = {};
+  for (const p of ['twitch', 'youtube', 'kick']) {
+    if (!all[p]) continue; // no conectado, no aplica
+    result[p] = !!(await getValidToken(p));
+  }
+  return result;
+}
+
 export function getStatus() {
   const all = readTokens();
   const result = {};
