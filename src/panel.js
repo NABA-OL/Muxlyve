@@ -2760,12 +2760,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     box.style.display = 'flex';
     box.innerHTML = '';
     if (type === 'available') {
-      box.appendChild(updaterBtn(isEn ? 'Download' : 'Descargar', true, () => {
-        pendingUpdatePayload = null; // ya en curso — que no vuelva el ícono al cerrar
-        showUpdaterProgress(0, isEn ? 'Starting…' : 'Iniciando…');
-        window.msApp.downloadUpdate();
-      }));
-      box.appendChild(updaterBtn(isEn ? 'Download from the web' : 'Descargar desde la web', false, async () => {
+      // En Mac el auto-update no aplica sin firma Developer ID real (Squirrel.Mac
+      // rechaza el paquete en silencio) — mientras no haya certificado, solo se ofrece
+      // el dmg manual. Ver electron/updater.js.
+      const isMac = document.body.classList.contains('platform-darwin');
+      if (!isMac) {
+        box.appendChild(updaterBtn(isEn ? 'Download' : 'Descargar', true, () => {
+          pendingUpdatePayload = null; // ya en curso — que no vuelva el ícono al cerrar
+          showUpdaterProgress(0, isEn ? 'Starting…' : 'Iniciando…');
+          window.msApp.downloadUpdate();
+        }));
+      }
+      box.appendChild(updaterBtn(isEn ? 'Download from the web' : 'Descargar desde la web', isMac, async () => {
         await window.msApp.openUpdateWeb();
         closeUpdaterModal();
       }));
