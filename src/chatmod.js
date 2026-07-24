@@ -41,3 +41,29 @@ export async function pinChatMessage(messageId) {
   if (!pinHandler) return { ok: false, error: 'No disponible — requiere la app de escritorio.' };
   return pinHandler(messageId);
 }
+
+// Desfijar — mismo criterio, ver electron/oauth.js unpinTwitchMessage.
+let unpinHandler = null;
+
+export function setChatUnpinHandler(fn) {
+  unpinHandler = fn;
+}
+
+export async function unpinChatMessage(messageId) {
+  if (!unpinHandler) return { ok: false, error: 'No disponible — requiere la app de escritorio.' };
+  return unpinHandler(messageId);
+}
+
+// Consultar qué mensaje está fijado ahora mismo — para que el botón de la UI arranque
+// sincronizado con el estado real de Twitch (ej. tras reiniciar la app, o si se fijó/
+// desfijó algo desde el dashboard de Twitch en vez de desde acá).
+let getPinnedHandler = null;
+
+export function setChatGetPinnedHandler(fn) {
+  getPinnedHandler = fn;
+}
+
+export async function getChatPinned() {
+  if (!getPinnedHandler) return { ok: false, error: 'No disponible — requiere la app de escritorio.' };
+  return getPinnedHandler();
+}

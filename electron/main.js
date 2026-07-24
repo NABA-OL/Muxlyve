@@ -125,6 +125,17 @@ function waitForPanel(timeoutMs = 15000) {
   });
 }
 
+// CN-007: setWindowOpenHandler mandaba CUALQUIER url a shell.openExternal() sin filtrar —
+// en Windows eso puede invocar cualquier scheme handler registrado (file://, search-ms:,
+// custom de otro programa) con argumentos elegidos por quien controle esa url. Hoy no hay
+// forma de inyectar una url ahí (el chat renderiza con createTextNode, no innerHTML), pero
+// es el patrón correcto igual — solo https: sale al navegador real.
+function openExternalSafe(url) {
+  try {
+    if (new URL(url).protocol === 'https:') shell.openExternal(url);
+  } catch {}
+}
+
 // ── Main window ───────────────────────────────────────────────────────────────
 // Funde la barra de título nativa con la UI: en Mac mantiene los 3 botones (hiddenInset),
 // en Windows los reemplaza por un overlay cuyo color se puede igualar al tema de la app
@@ -168,7 +179,7 @@ function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalSafe(url);
     return { action: 'deny' };
   });
   win.once('ready-to-show', () => { if (!START_HIDDEN) win.show(); });
@@ -261,7 +272,7 @@ function showActivationWindow() {
       },
     });
     activationWin.webContents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url);
+      openExternalSafe(url);
       return { action: 'deny' };
     });
     activationWin.loadFile(ACTIVATE_HTML, { query: { lang: APP_LANG } });

@@ -4,12 +4,13 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir, listOrphanRecordings, convertOrphanRecording } from './relays.js';
+import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir, listOrphanRecordings, convertOrphanRecording, resolveClipsDir, resolveRecordingsDir } from './relays.js';
 import { ingestInfo, audioBus } from './monitor.js';
 import { chatBus, getHistory as getChatHistory } from './chat.js';
 import { getViewerCounts } from './viewers.js';
-import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend } from './chatmod.js';
+import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend, unpinChatMessage as unpinChatMessageBackend, getChatPinned as getChatPinnedBackend } from './chatmod.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
 import { loadSettings, saveSettings, isValidStreamKey } from './settings.js';
@@ -86,6 +87,17 @@ function buildState() {
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
+    // CN-001 (parte 2/2): rechaza Content-Type que no sea application/json. Los ataques
+    // CSRF de "simple request" (los que no disparan preflight de CORS) dependen justo de
+    // usar text/plain o application/x-www-form-urlencoded — un <form> normal o un fetch()
+    // cross-origin sin headers custom NUNCA manda application/json. Sin Content-Type (no
+    // lo manda ningún cliente HTTP no-browser, ni el propio panel en un POST sin body)
+    // pasa igual — solo se rechaza un Content-Type explícito que no sea JSON.
+    const contentType = (req.headers['content-type'] || '').split(';')[0].trim();
+    if (contentType && contentType !== 'application/json') {
+      reject(new Error('Content-Type debe ser application/json'));
+      return;
+    }
     let data = '';
     let size = 0;
     req.on('data', (c) => {
@@ -227,6 +239,22 @@ async function handleApi(req, res, url) {
     const messageId = String(body.messageId || '').trim();
     if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
     const result = await pinChatMessageBackend(messageId);
+    return json(res, 200, result);
+  }
+
+  // POST /api/chat-unpin -> desfija (solo Twitch, ver src/chatmod.js).
+  if (req.method === 'POST' && url.pathname === '/api/chat-unpin') {
+    const body = await readBody(req);
+    const messageId = String(body.messageId || '').trim();
+    if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
+    const result = await unpinChatMessageBackend(messageId);
+    return json(res, 200, result);
+  }
+
+  // GET /api/chat-pinned -> id del mensaje fijado ahora mismo en Twitch (o null si no hay
+  // ninguno) — para que el botón arranque sincronizado con el estado real, no a ciegas.
+  if (req.method === 'GET' && url.pathname === '/api/chat-pinned') {
+    const result = await getChatPinnedBackend();
     return json(res, 200, result);
   }
 
@@ -467,16 +495,29 @@ async function handleApi(req, res, url) {
 
   // POST /api/clips/open  { path, reveal? }  → abre una carpeta, o revela un archivo
   // puntual en el explorador nativo (solo Electron).
+  // CN-003: a diferencia de deleteClip/deleteRecording/convertOrphanRecording, este era
+  // el único endpoint de archivos sin containment check — shell.openPath() en un path
+  // arbitrario ABRE (y para un ejecutable, corre) lo que sea. Acepta: la carpeta de clips
+  // o grabaciones exacta (para "abrir carpeta"), o un archivo DENTRO de alguna de las dos
+  // (para "revelar clip puntual") — nada fuera de esas dos carpetas.
   if (req.method === 'POST' && url.pathname === '/api/clips/open') {
     let input;
     try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
     if (!input.path) return json(res, 400, { error: 'Falta path.' });
+    const resolved = path.resolve(input.path);
+    const clipsDir = path.resolve(resolveClipsDir(input.outputDir));
+    const recordingsDir = path.resolve(resolveRecordingsDir(input.outputDir));
+    const isAllowedDir = resolved === clipsDir || resolved === recordingsDir;
+    const isAllowedFile = path.dirname(resolved) === clipsDir || path.dirname(resolved) === recordingsDir;
+    if (!isAllowedDir && !isAllowedFile) {
+      return json(res, 400, { error: t('Ruta fuera de la carpeta de clips.') });
+    }
     try {
       const { shell } = await import('electron');
       if (input.reveal) {
-        shell.showItemInFolder(input.path);
+        shell.showItemInFolder(resolved);
       } else {
-        const err = await shell.openPath(input.path);
+        const err = await shell.openPath(resolved);
         if (err) return json(res, 500, { error: err });
       }
       return json(res, 200, { ok: true });
@@ -535,10 +576,38 @@ function debugLogSmart(key, isError, line) {
   else if (dueHeartbeat) debugLog('log', line);
 }
 
+// CN-001 (parte 1/2): el gate de token de abajo solo exige auth para requests NO-loopback
+// — pero el browser de la propia víctima, con una pestaña abierta en cualquier página
+// mientras Muxlyve corre, SÍ pega desde loopback (127.0.0.1). Sin esto, esa pestaña puede
+// blind-POSTear cualquier endpoint que cambia estado (agregar un destino RTMP, mandar
+// mensajes de chat como el streamer, etc.) sin ninguna autenticación. Un fetch() cross-
+// origin SIEMPRE manda el header Origin — clientes no-browser (curl, el plugin de Stream
+// Deck) normalmente no lo mandan, así que no se ven afectados.
+const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+function originAllowed(req, port) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // sin Origin: cliente no-browser, o navegación same-origin
+  return origin === `http://localhost:${port}` || origin === `http://127.0.0.1:${port}`;
+}
+
+// CN-019: comparación en tiempo constante — un !== normal corta apenas encuentra el primer
+// byte distinto, filtrando por timing cuánto del token adivinó un atacante. Hashea ambos
+// lados primero porque timingSafeEqual exige buffers del MISMO largo, y `got` es lo que
+// mande el cliente (largo arbitrario).
+function safeTokenEqual(got, expected) {
+  if (!got) return false;
+  const a = createHash('sha256').update(got).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 export function startPanel(port, config = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     try {
+      if (STATE_CHANGING_METHODS.has(req.method) && !originAllowed(req, port)) {
+        return json(res, 403, { error: t('Origen no permitido.') });
+      }
       // debugLog() ya se auto-silencia si ALLOW_LAN_PANEL está apagado — acá solo se
       // acota a las 2 rutas que hace falta depurar (ver DEBUG_LOG_ROUTES). Éxitos van
       // por debugLogSmart (throttled, ver arriba) — errores siempre se loguean de una.
@@ -554,7 +623,7 @@ export function startPanel(port, config = {}) {
       if (process.env.ALLOW_LAN_PANEL === 'true' && !isLoopback(req) && !PUBLIC_LAN_PATHS.has(url.pathname)) {
         const expected = `Bearer ${getOrCreatePanelToken()}`;
         const got = req.headers.authorization;
-        if (got !== expected) {
+        if (!safeTokenEqual(got, expected)) {
           const reason = !got ? 'token ausente (sin header Authorization)' : 'token presente pero no coincide con el esperado';
           if (dbg) debugLogSmart(dbgKey, true, `AUTH RECHAZADO ${dbgId} — ${reason}`);
           return json(res, 401, { error: t('No autorizado — falta o es inválido el token del panel.') });
@@ -660,6 +729,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<!-- CN-024: defensa en profundidad — no hay ningún XSS reflejado conocido hoy (el chat
+     renderiza con createTextNode, no innerHTML), pero si alguna vez aparece uno, esto
+     limita el daño. 'unsafe-inline' en script/style es necesario porque TODO el JS/CSS
+     de este panel vive inline en este mismo archivo (sin bundler, sin nonces) — sigue
+     bloqueando cualquier script/estilo cargado desde un host externo. connect-src incluye
+     localhost:* porque el preview HTTP-FLV (flv.js) pega a un puerto distinto del panel
+     (HTTP_PORT, no PANEL_PORT) en el mismo host. media-src incluye blob: porque flv.js NO
+     pone la url del stream directo en <video>.src — arma un MediaSource, lo vuelca a un
+     blob: vía createObjectURL(), y ESO es lo que carga el <video>. Sin blob: acá, el CSP
+     lo bloqueaba en silencio y la previsualización quedaba en negro (aunque el audio/video
+     grabado en disco, que no pasa por este <video>, seguía bien). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:*; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Muxlyve — Panel</title>
 <link rel="icon" href="/icon-muxlyve.svg">
@@ -1070,6 +1151,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .chat-row:hover .chat-pin-btn { opacity: 1; }
   .chat-pin-btn:hover { color: var(--accent); }
   .chat-pin-btn:disabled { opacity: .4; cursor: default; }
+  .chat-pin-btn.pinned { opacity: 1; color: var(--accent); }
   .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
   .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
@@ -3870,8 +3952,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (msg.platform === 'twitch' && msg.id) {
       const pinBtn = document.createElement('button');
       pinBtn.className = 'chat-pin-btn';
-      pinBtn.title = 'Fijar este mensaje en Twitch';
-      pinBtn.innerHTML = PIN_ICON_SVG;
+      pinBtn.dataset.messageId = msg.id;
+      updatePinBtnState(pinBtn, msg.id === pinnedMessageId);
       pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
       row.appendChild(pinBtn);
     }
@@ -3879,22 +3961,57 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     while (box.children.length > 200) box.removeChild(box.firstChild);
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
+  // pinChatMessageUi() es un TOGGLE: si el botón que tocaron es el del mensaje YA fijado,
+  // desfija; si no, fija ese (Twitch reemplaza el anterior solo). Antes siempre llamaba a
+  // fijar sin importar el estado — por eso tocar de nuevo el mismo mensaje daba 409 "ya
+  // está fijado" en vez de desfijarlo.
+  let pinnedMessageId = null;
+  function updatePinBtnState(btn, isPinned) {
+    btn.classList.toggle('pinned', isPinned);
+    btn.title = isPinned ? 'Desfijar este mensaje' : 'Fijar este mensaje en Twitch';
+    btn.innerHTML = PIN_ICON_SVG;
+  }
   async function pinChatMessageUi(btn, messageId) {
+    const wasPinned = messageId === pinnedMessageId;
     btn.disabled = true;
     try {
-      const r = await api('POST', '/api/chat-pin', { messageId });
-      if (r.ok) toast('Mensaje fijado en Twitch');
-      else toast(r.error || 'No se pudo fijar', true);
+      const r = wasPinned
+        ? await api('POST', '/api/chat-unpin', { messageId })
+        : await api('POST', '/api/chat-pin', { messageId });
+      if (r.ok) {
+        // Solo puede haber UN mensaje fijado a la vez en Twitch — si se fijó uno nuevo,
+        // el botón del que estaba fijado antes (si sigue visible en la lista) deja de
+        // marcarse como tal.
+        if (!wasPinned && pinnedMessageId) {
+          const prevBtn = $(\`.chat-pin-btn[data-message-id="\${pinnedMessageId}"]\`);
+          if (prevBtn) updatePinBtnState(prevBtn, false);
+        }
+        pinnedMessageId = wasPinned ? null : messageId;
+        updatePinBtnState(btn, !wasPinned);
+        toast(wasPinned ? 'Mensaje desfijado' : 'Mensaje fijado en Twitch');
+      } else {
+        toast(r.error || (wasPinned ? 'No se pudo desfijar' : 'No se pudo fijar'), true);
+      }
     } catch (e) {
       toast(e.message, true);
     } finally {
       btn.disabled = false;
     }
   }
+  // Sincroniza con el estado real de Twitch al conectar — si algo quedó fijado de antes
+  // (ej. la app se reinició, o se fijó/desfijó desde el dashboard de Twitch en vez de
+  // acá), el próximo botón que se dibuje ya sabe si es el mensaje fijado o no.
+  async function syncPinnedMessage() {
+    try {
+      const r = await api('GET', '/api/chat-pinned');
+      if (r.ok) pinnedMessageId = r.messageId || null;
+    } catch {}
+  }
   function connectChatStream() {
     if (!window.EventSource) return;
     const box = $('#chatMessages');
     if (box) box.innerHTML = '<div class="chat-empty">Esperando mensajes…</div>';
+    syncPinnedMessage();
     const es = new EventSource('/api/chat');
     es.onmessage = (e) => {
       try {
@@ -3946,6 +4063,9 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<!-- CN-024 — ver el comentario equivalente en PANEL_HTML. Sin flv.js acá, connect-src
+     no necesita el localhost:* extra. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <title>Muxlyve — Chat</title>
 <style>
   :root { --bg: #0d1117; --text: #e6edf3; --muted: #8b949e; }
@@ -4018,6 +4138,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   .row:hover .chat-pin-btn { opacity: 1; }
   .chat-pin-btn:hover { color: #7c5cff; }
   .chat-pin-btn:disabled { opacity: .4; cursor: default; }
+  .chat-pin-btn.pinned { opacity: 1; color: #7c5cff; }
   #chatFooter { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; background: var(--bg); }
   #chatSendRow { display: flex; gap: .4rem; padding: .4rem .75rem; border-top: 1px solid rgba(128,128,128,.2); }
   #chatSendRow input { flex: 1; min-width: 0; background: rgba(128,128,128,.12);
@@ -4202,15 +4323,38 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   var BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
   var PIN_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
 
+  // TOGGLE: si el botón es del mensaje YA fijado, desfija en vez de re-fijar (Twitch
+  // devuelve 409 si se intenta fijar el mismo mensaje dos veces — ver src/panel.js
+  // pinChatMessageUi en PANEL_HTML, mismo patrón).
+  var pinnedMessageId = null;
+  function updatePinBtnState(btn, isPinned) {
+    btn.classList.toggle('pinned', isPinned);
+    btn.title = isPinned ? 'Desfijar este mensaje' : 'Fijar este mensaje en Twitch';
+  }
   function pinChatMessageUi(btn, messageId) {
+    var wasPinned = messageId === pinnedMessageId;
+    var url = wasPinned ? '/api/chat-unpin' : '/api/chat-pin';
     btn.disabled = true;
-    fetch('/api/chat-pin', {
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId: messageId }),
-    }).then(function (r) { return r.json(); }).then(function () {
+    }).then(function (r) { return r.json(); }).then(function (r) {
+      if (r.ok) {
+        if (!wasPinned && pinnedMessageId) {
+          var prevBtn = document.querySelector('.chat-pin-btn[data-message-id="' + pinnedMessageId + '"]');
+          if (prevBtn) updatePinBtnState(prevBtn, false);
+        }
+        pinnedMessageId = wasPinned ? null : messageId;
+        updatePinBtnState(btn, !wasPinned);
+      }
       btn.disabled = false;
     }).catch(function () { btn.disabled = false; });
+  }
+  function syncPinnedMessage() {
+    fetch('/api/chat-pinned').then(function (r) { return r.json(); }).then(function (r) {
+      if (r.ok) pinnedMessageId = r.messageId || null;
+    }).catch(function () {});
   }
 
   // Mismo shape normalizado {start, end, url} que arma chat.js sea Twitch o Kick.
@@ -4261,8 +4405,9 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     if (msg.platform === 'twitch' && msg.id) {
       var pinBtn = document.createElement('button');
       pinBtn.className = 'chat-pin-btn';
-      pinBtn.title = 'Fijar este mensaje en Twitch';
+      pinBtn.dataset.messageId = msg.id;
       pinBtn.innerHTML = PIN_ICON_SVG;
+      updatePinBtnState(pinBtn, msg.id === pinnedMessageId);
       pinBtn.onclick = (function (id) { return function () { pinChatMessageUi(pinBtn, id); }; })(msg.id);
       row.appendChild(pinBtn);
     }
@@ -4270,6 +4415,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
     while (box.children.length > 300) box.removeChild(box.firstChild);
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
+  syncPinnedMessage();
   var es = new EventSource('/api/chat');
   es.onmessage = function (e) {
     try { append(JSON.parse(e.data)); } catch (err) {}
@@ -4309,6 +4455,10 @@ const CHAT_OVERLAY_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<!-- CN-024 — ver el comentario equivalente en PANEL_HTML. Esta página es la que carga
+     OBS como fuente de Navegador (embebido, no un browser normal), pero el mismo criterio
+     de defensa en profundidad aplica igual. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <title>Muxlyve — Chat overlay</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }

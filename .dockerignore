@@ -1,0 +1,23 @@
+# CN-002 — sin esto, "COPY . ." mete secretos reales en las capas de la imagen.
+.env
+.env.*
+.git
+config/destinations.json
+config/destinations.json.bak
+config/panel-token.json
+config/settings.json
+node_modules
+dist-app
+build/mac/
+build/icon.icns
+*.log
+media/
+.DS_Store
+.claude/
+docs/
+plans/
+CLAUDE.md
+CONTEXT.md
+agents.md
+AI.md
+PLAN_MultiStream.md

@@ -12,13 +12,42 @@ const CONFIG_PATH = path.join(CONFIG_DIR, 'destinations.json');
 const EXAMPLE_PATH = path.join(__dirname, '..', 'config', 'destinations.example.json');
 
 const PLACEHOLDERS = ['TU_CLAVE', 'CLAVE_TEMPORAL', 'SERVIDOR_TIKTOK'];
+const SALT_PATH = path.join(CONFIG_DIR, 'crypto-salt.json');
+// Salt fijo que usaban TODAS las instalaciones antes de este fix (CN-020) — hay que
+// seguir generando la misma clave con él para quien ya tenga destinations.json cifrado
+// de una versión anterior, si no esos datos quedan indescifrables para siempre.
+const LEGACY_SALT = 'multistream-salt-v1';
+
+// CN-020: salt por instalación en vez de uno fijo compartido por TODAS las instalaciones
+// — un MASTER_KEY débil/corto ya no es atacable con una tabla precomputada válida para
+// cualquier usuario, hay que calcularla de nuevo por instalación. No necesita ser secreto
+// (la entropía real la sigue aportando MASTER_KEY), solo distinto por instalación y
+// estable entre reinicios — mismo patrón que getOrCreatePanelToken().
+// Migración: si destinations.json YA existe (pudo haberse cifrado con LEGACY_SALT en una
+// versión anterior), el salt persistido arranca en LEGACY_SALT — solo una instalación
+// genuinamente nueva (sin destinations.json todavía) arranca con un salt random real.
+function getOrCreateSalt() {
+  try {
+    if (existsSync(SALT_PATH)) {
+      const { salt } = JSON.parse(readFileSync(SALT_PATH, 'utf8'));
+      if (salt) return salt;
+    }
+  } catch {}
+  const salt = existsSync(CONFIG_PATH) ? LEGACY_SALT : randomBytes(16).toString('base64url');
+  try {
+    writeFileSync(SALT_PATH, JSON.stringify({ salt }, null, 2));
+  } catch (err) {
+    console.error('[crypto] No se pudo guardar el salt en disco:', err.message);
+  }
+  return salt;
+}
 
 // --- Cifrado en reposo (AES-256-GCM) ---
 // Clave maestra desde .env. Si no está, se guarda en texto plano (con aviso) para
 // no romper el uso actual; en cuanto se define MASTER_KEY, el próximo guardado cifra.
 const MASTER_KEY = process.env.MASTER_KEY || '';
-// scrypt deriva 32 bytes. Salt fijo: la entropía la aporta MASTER_KEY, que ya es secreta.
-const cryptoKey = MASTER_KEY ? scryptSync(MASTER_KEY, 'multistream-salt-v1', 32) : null;
+// scrypt deriva 32 bytes.
+const cryptoKey = MASTER_KEY ? scryptSync(MASTER_KEY, getOrCreateSalt(), 32) : null;
 let warnedPlain = false;
 
 function encrypt(plain) {

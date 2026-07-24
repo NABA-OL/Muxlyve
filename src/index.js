@@ -77,7 +77,11 @@ console.log('============================================');
 console.log(' Muxlyve — motor de retransmision');
 console.log('============================================');
 console.log(` Ingest RTMP:  rtmp://localhost:${RTMP_PORT}/live`);
-console.log(` Clave:    ${STREAM_KEY}`);
+// CN-027: antes imprimía STREAM_KEY completa — en el Docker/headless que este proyecto
+// soporta, "docker logs" suele capturarse/reenviarse a un agregador remoto, y esta clave
+// es la única protección del ingest RTMP (ver hallazgo CN-004 del reporte de seguridad).
+// Enmascarada acá igual que ya hace la UI del panel del lado del cliente.
+console.log(` Clave:    ${STREAM_KEY.slice(0, 3)}${'•'.repeat(Math.max(STREAM_KEY.length - 3, 4))}`);
 console.log(` API HTTP:     http://localhost:${HTTP_PORT}`);
 console.log(' Edita destinos en el panel web.');
 console.log('============================================');

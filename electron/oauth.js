@@ -5,7 +5,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
 import { setViewerCounts } from '../src/viewers.js';
-import { setChatModeHandler, setChatSendHandler, setChatPinHandler } from '../src/chatmod.js';
+import { setChatModeHandler, setChatSendHandler, setChatPinHandler, setChatUnpinHandler, setChatGetPinnedHandler } from '../src/chatmod.js';
 import { tMap } from '../src/i18n.js';
 
 // Los resultados de este módulo llegan al renderer directo (IPC) o vía el puente HTTP de
@@ -719,25 +719,34 @@ export async function sendChatMessage(text) {
 setChatSendHandler(sendChatMessage);
 
 // ── Fijar mensaje ────────────────────────────────────────────────────────────────────
-// Solo Twitch tiene esto como API pública real (POST /helix/chat/messages/pin, scope
-// moderator:manage:chat_messages). Kick sí lo tiene en su web, pero es un endpoint interno
-// (api/internal/v1/...) no expuesto a apps de terceros — mismo caso que el modo lento/solo-
-// emotes de Kick, ver AskUserQuestion anterior. YouTube no tiene nada de esto en su API
-// pública (liveChatMessages solo trae list/insert/delete/transition, ningún pin).
+// Solo Twitch tiene esto como API pública real (scope moderator:manage:chat_messages).
+// Kick sí lo tiene en su web, pero es un endpoint interno (api/internal/v1/...) no
+// expuesto a apps de terceros — mismo caso que el modo lento/solo-emotes de Kick, ver
+// AskUserQuestion anterior. YouTube no tiene nada de esto en su API pública
+// (liveChatMessages solo trae list/insert/delete/transition, ningún pin).
+// OJO: endpoint real es PUT /helix/chat/pins (no /chat/messages/pin, no POST) y los
+// parámetros van por QUERY STRING, no en el body — la versión anterior de este código
+// usaba una URL/método/transporte que Twitch nunca tuvo, por eso daba 404 en vez de
+// funcionar. moderator_id es obligatorio y falta acá: mismo criterio que
+// updateChatSettings() más arriba en este archivo — el streamer se modera a sí mismo,
+// moderator_id = broadcasterId.
 export async function pinTwitchMessage(messageId) {
   if (!messageId) return { ok: false, error: t('Mensaje sin id — no se puede fijar.') };
   const tok = readTokens().twitch;
   if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
   const token = await getValidToken('twitch');
   if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
-  const res = await fetch('https://api.twitch.tv/helix/chat/messages/pin', {
-    method: 'POST',
+  const params = new URLSearchParams({
+    broadcaster_id: tok.broadcasterId,
+    moderator_id: tok.broadcasterId,
+    message_id: messageId,
+  });
+  const res = await fetch(`https://api.twitch.tv/helix/chat/pins?${params}`, {
+    method: 'PUT',
     headers: {
       Authorization: `Bearer ${token}`,
       'Client-Id': clientId(PLATFORMS.twitch),
-      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ broadcaster_id: tok.broadcasterId, message_id: messageId }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -746,3 +755,55 @@ export async function pinTwitchMessage(messageId) {
   return { ok: true };
 }
 setChatPinHandler(pinTwitchMessage);
+
+// DELETE /helix/chat/pins — mismos query params que pinTwitchMessage, message_id incluido
+// (a diferencia de get, acá SÍ hace falta: identifica cuál desfijar).
+export async function unpinTwitchMessage(messageId) {
+  if (!messageId) return { ok: false, error: t('Mensaje sin id — no se puede desfijar.') };
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  const params = new URLSearchParams({
+    broadcaster_id: tok.broadcasterId,
+    moderator_id: tok.broadcasterId,
+    message_id: messageId,
+  });
+  const res = await fetch(`https://api.twitch.tv/helix/chat/pins?${params}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Client-Id': clientId(PLATFORMS.twitch),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+setChatUnpinHandler(unpinTwitchMessage);
+
+// GET /helix/chat/pins sin message_id — trae el mensaje fijado ACTUAL (o data:[] si no hay
+// nada). Se usa al conectar el chat para que el botón arranque en el estado real de
+// Twitch, no en "nada fijado" a ciegas (ej. tras reiniciar la app con algo ya fijado).
+export async function getTwitchPinnedMessage() {
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  const params = new URLSearchParams({ broadcaster_id: tok.broadcasterId, moderator_id: tok.broadcasterId });
+  const res = await fetch(`https://api.twitch.tv/helix/chat/pins?${params}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Client-Id': clientId(PLATFORMS.twitch),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${text.slice(0, 200)}` };
+  }
+  const data = await res.json();
+  return { ok: true, messageId: data.data?.[0]?.message_id || null };
+}
+setChatGetPinnedHandler(getTwitchPinnedMessage);
