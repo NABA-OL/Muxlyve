@@ -1,0 +1,7 @@
+{
+  "files": ["src/panel.js"],
+  "insertBefore": "</style>",
+  "commentSyntax": "js",
+  "cspChecked": true,
+  "note": "Panel HTML is a runtime template string inside PANEL_HTML (src/panel.js). No static CSP; live injector patches the closing </style> of the main panel template."
+}

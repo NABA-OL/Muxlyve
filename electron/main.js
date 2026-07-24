@@ -1,7 +1,8 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
-import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import {
@@ -11,12 +12,30 @@ import {
   getLicenseInfo,
   refreshLicenseStatus,
 } from './license.js';
-import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle } from './oauth.js';
+import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle, checkLiveTokens } from './oauth.js';
 import { initUpdater, checkForUpdatesManually } from './updater.js';
 import { initLogBuffer, getRecentLog } from './logbuffer.js';
 
 // Antes que nada — captura logs desde el arranque (la app empaquetada no muestra consola).
 initLogBuffer();
+
+// Instancia única: si ya hay una Muxlyve corriendo, este segundo lanzamiento no debe
+// levantar su propio motor/panel/ventana (chocaría por el puerto y por el ingest RTMP) —
+// se rinde de una y le avisa a la instancia ya abierta que la traiga al frente. Patrón
+// oficial de Electron (funciona igual en Mac y Windows). process.exit(0) además de
+// app.quit() porque quit() no corta la ejecución de este archivo — sin eso, el resto del
+// módulo (ipcMain handlers, app.whenReady) seguiría corriendo en esta segunda instancia
+// mientras se cierra de fondo.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  win.focus();
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_PORT  = Number(process.env.PANEL_PORT || 19080);
@@ -25,6 +44,8 @@ const ICON_PATH   = path.join(__dirname, '../build/icon-muxlyve.ico');
 // macOS: ícono monocromo + setTemplateImage — el sistema lo pinta blanco/negro según el
 // fondo de la barra de menú, igual que WiFi/Bluetooth/batería. Windows no tiene ese
 // convenio (sus íconos de bandeja siempre van a color), así que ahí se usa el logo real.
+// Linux (GNOME/KDE/etc.) tampoco tiene ese convenio — cae a la misma rama que Windows
+// a propósito, no es un caso sin cubrir.
 // OJO: usa src/public, no build/ — build/ es "buildResources" para electron-builder
 // (íconos que se embeben en el .exe/.app al compilar) y NO se empaqueta como recurso
 // en tiempo de ejecución. Leerlo desde ahí con fs funciona en dev (carpeta real en disco)
@@ -39,6 +60,12 @@ const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // Flag propio (no depende del SO) para saber si el login item nos arrancó en modo oculto —
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
 const START_HIDDEN = process.argv.includes('--hidden');
+
+// Panel/i18n arranca solo con francés y portugués además de es/en — ver src/i18n.js.
+// Los diálogos nativos de Electron (este archivo, oauth.js, updater.js, license.js) siguen
+// solo en es/en por ahora: con fr/pt caen al inglés (=== 'es' da false), no truena nada.
+const SUPPORTED_APP_LANGS = ['es', 'en', 'fr', 'pt'];
+let APP_LANG = 'en';
 
 // Preferencias simples que persisten entre sesiones, independientes del login item del SO
 // (ej. "minimizar a bandeja al cerrar" — a diferencia de "iniciar minimizado", no depende
@@ -69,7 +96,7 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splash.loadFile(SPLASH_HTML);
+  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG } });
 }
 
 function closeSplash() {
@@ -118,12 +145,20 @@ function titleBarConfig(height = TITLEBAR_HEIGHT, isDark = true) {
       },
     };
   }
-  return {}; // Linux u otros: barra nativa normal, sin fundir.
+  if (process.platform === 'linux') {
+    // Linux no tiene equivalente a hiddenInset (mac) ni a titleBarOverlay (Windows) —
+    // sin frame:false quedaba la barra nativa del window manager (con el <title> del
+    // documento) apilada ARRIBA del header propio de la app, duplicado. Frameless acá
+    // + botones propios dibujados en el header (ver .win-controls en panel.js) resuelve
+    // ambos casos (ventana principal y de chat) con los mismos handlers win:*.
+    return { frame: false };
+  }
+  return {}; // otros: barra nativa normal, sin fundir.
 }
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1100, height: 760, minWidth: 900, minHeight: 600,
+    width: 1200, height: 860, minWidth: 900, minHeight: 600,
     show: false,
     backgroundColor: '#0d1117',
     title: 'Muxlyve',
@@ -151,6 +186,15 @@ function createWindow() {
 }
 
 // ── Bandeja del sistema ──────────────────────────────────────────────────────
+// Aparte de createTray() para poder reconstruir el menú al cambiar de idioma en caliente
+// (setContextMenu de nuevo) sin tener que recrear el ícono de la bandeja entero.
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
+    { label: APP_LANG === 'es' ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
+    { type: 'separator' },
+    { label: APP_LANG === 'es' ? 'Salir' : 'Quit', click: () => { app.exit(0); } },
+  ]);
+}
 function createTray() {
   if (tray) return;
   // createFromPath() a veces falla en silencio leyendo rutas dentro del .asar en Windows
@@ -167,11 +211,7 @@ function createTray() {
   if (process.platform === 'darwin' && !icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Muxlyve');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Mostrar Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
-    { type: 'separator' },
-    { label: 'Salir', click: () => { app.exit(0); } },
-  ]));
+  tray.setContextMenu(buildTrayMenu());
   tray.on('click', () => {
     if (!win) return;
     if (win.isVisible()) win.hide(); else { win.show(); win.focus(); }
@@ -191,7 +231,9 @@ function openChatWindow(theme) {
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     autoHideMenuBar: true,
     ...titleBarConfig(CHAT_TITLEBAR_HEIGHT, theme !== 'light'),
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    // Sin preload acá, window.msApp no existía en esta ventana — no hacía falta hasta
+    // los botones de ventana propios de Linux (winMinimize/winClose en panel.js).
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
   });
   chatWin.loadURL(`${PANEL_URL}chat-window?theme=${theme === 'light' ? 'light' : 'dark'}`);
   chatWin.on('closed', () => { chatWin = null; });
@@ -209,7 +251,7 @@ function showActivationWindow() {
       resizable: false,
       center: true,
       backgroundColor: '#0d1117',
-      title: 'Muxlyve — Activar licencia',
+      title: APP_LANG === 'es' ? 'Muxlyve — Activar licencia' : 'Muxlyve — Activate license',
       icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
       autoHideMenuBar: true,
       webPreferences: {
@@ -222,7 +264,7 @@ function showActivationWindow() {
       shell.openExternal(url);
       return { action: 'deny' };
     });
-    activationWin.loadFile(ACTIVATE_HTML);
+    activationWin.loadFile(ACTIVATE_HTML, { query: { lang: APP_LANG } });
     activationWin.on('closed', () => {
       activationWin = null;
       // Cerrado sin activar → salir de la app.
@@ -260,10 +302,50 @@ ipcMain.handle('license:status', () => refreshLicenseStatus());
 
 ipcMain.handle('oauth:connect', (_, platform) => oauthConnect(platform, PANEL_PORT));
 ipcMain.handle('oauth:status', () => oauthStatus());
+ipcMain.handle('oauth:check-live-tokens', () => checkLiveTokens());
 ipcMain.handle('oauth:disconnect', (_, platform) => oauthDisconnect(platform));
-ipcMain.handle('title:set', (_, title) => setStreamTitle(title));
+ipcMain.handle('title:set', (_, title, category) => setStreamTitle(title, category));
+
+// app.setLoginItemSettings/getLoginItemSettings son @platform darwin,win32 en Electron
+// (ver electron.d.ts) — en Linux son no-op silencioso, así que el toggle "Iniciar con el
+// sistema" quedaría roto sin avisar. Se implementa a mano con el mecanismo estándar de
+// freedesktop.org: un .desktop en ~/.config/autostart/ que el entorno de escritorio
+// (GNOME/KDE/etc.) lee al iniciar sesión.
+const LINUX_AUTOSTART_DIR  = path.join(homedir(), '.config', 'autostart');
+const LINUX_AUTOSTART_FILE = path.join(LINUX_AUTOSTART_DIR, 'muxlyve.desktop');
+
+// Corriendo como AppImage, process.execPath apunta al mount temporal (/tmp/.mount_XXXX)
+// que desaparece al cerrar la app — APPIMAGE trae la ruta real del archivo .AppImage,
+// que es la que sigue existiendo en el próximo login.
+function linuxExecPath() {
+  return process.env.APPIMAGE || process.execPath;
+}
+
+function linuxLoginItemState() {
+  if (!existsSync(LINUX_AUTOSTART_FILE)) return { openAtLogin: false, startMinimized: false };
+  try {
+    const content = readFileSync(LINUX_AUTOSTART_FILE, 'utf-8');
+    return { openAtLogin: true, startMinimized: content.includes('--hidden') };
+  } catch {
+    return { openAtLogin: false, startMinimized: false };
+  }
+}
+
+function setLinuxLoginItem(openAtLogin, startMinimized) {
+  if (!openAtLogin) {
+    if (existsSync(LINUX_AUTOSTART_FILE)) unlinkSync(LINUX_AUTOSTART_FILE);
+    return;
+  }
+  mkdirSync(LINUX_AUTOSTART_DIR, { recursive: true });
+  const exec = startMinimized ? `"${linuxExecPath()}" --hidden` : `"${linuxExecPath()}"`;
+  writeFileSync(
+    LINUX_AUTOSTART_FILE,
+    `[Desktop Entry]\nType=Application\nName=Muxlyve\nExec=${exec}\nX-GNOME-Autostart-enabled=true\n`,
+  );
+}
 
 function loginItemState() {
+  if (process.platform === 'linux') return linuxLoginItemState();
   // getLoginItemSettings() sin argumentos compara contra args=[] por defecto — si el
   // login item se registró con args:['--hidden'], esa entrada NO matchea el chequeo por
   // defecto y openAtLogin aparece falso aunque sí esté activo. Hay que consultar ambas
@@ -275,6 +357,10 @@ function loginItemState() {
 }
 ipcMain.handle('app:get-login-item', () => loginItemState());
 ipcMain.handle('app:set-login-item', (_, openAtLogin, startMinimized) => {
+  if (process.platform === 'linux') {
+    setLinuxLoginItem(!!openAtLogin, !!startMinimized);
+    return loginItemState();
+  }
   app.setLoginItemSettings({
     openAtLogin: !!openAtLogin,
     args: (openAtLogin && startMinimized) ? ['--hidden'] : [],
@@ -303,11 +389,61 @@ ipcMain.handle('app:set-titlebar-theme', (_, isDark) => {
 });
 ipcMain.handle('chat:open-window', (_, theme) => { openChatWindow(theme); return true; });
 
+// Controles de ventana propios — solo los usa Linux (frame:false ahí, ver
+// titleBarConfig). fromWebContents(e.sender) en vez de asumir `win` a propósito: estos
+// mismos handlers los usa tanto la ventana principal como el popout de chat.
+ipcMain.handle('win:minimize', (e) => { BrowserWindow.fromWebContents(e.sender)?.minimize(); });
+ipcMain.handle('win:toggle-maximize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return;
+  if (w.isMaximized()) w.unmaximize(); else w.maximize();
+});
+ipcMain.handle('win:close', (e) => { BrowserWindow.fromWebContents(e.sender)?.close(); });
+
+ipcMain.handle('app:get-language', () => APP_LANG);
+ipcMain.handle('app:set-language', (_, lang) => {
+  APP_LANG = SUPPORTED_APP_LANGS.includes(lang) ? lang : 'en';
+  process.env.APP_LANG = APP_LANG;
+  prefs.language = APP_LANG;
+  savePrefs(prefs);
+  // El panel se traduce server-side por request — recargar basta, no hace falta reiniciar
+  // toda la app. El menú de bandeja sí hay que repintarlo a mano (no vive en un webContents).
+  if (tray) tray.setContextMenu(buildTrayMenu());
+  if (win) win.reload();
+  if (chatWin && !chatWin.isDestroyed()) chatWin.reload();
+  return APP_LANG;
+});
+
 ipcMain.handle('app:get-close-to-tray', () => !!prefs.closeToTray);
 ipcMain.handle('app:set-close-to-tray', (_, val) => {
   prefs.closeToTray = !!val;
   savePrefs(prefs);
   return prefs.closeToTray;
+});
+
+// Permitir Stream Deck / chat overlay desde otra máquina — expone el panel a la LAN.
+// Solo guarda la preferencia; el bind real pasa en src/panel.js leyendo ALLOW_LAN_PANEL
+// de process.env AL ARRANCAR, así que el cambio no aplica hasta reiniciar la app entera
+// (ver app:relaunch) — nunca en caliente, para no cortar una transmisión en curso.
+ipcMain.handle('app:get-allow-lan-panel', () => !!prefs.allowLanPanel);
+ipcMain.handle('app:set-allow-lan-panel', (_, val) => {
+  prefs.allowLanPanel = !!val;
+  savePrefs(prefs);
+  return prefs.allowLanPanel;
+});
+ipcMain.handle('app:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
+});
+
+// Notificación nativa del SO — usada cuando un destino se cae mientras el usuario tiene
+// otra ventana/juego en foco y no está mirando el panel (ver handleUpdaterEvent-style
+// detección de transición en panel.js). Notification.isSupported() es false en algunos
+// Linux sin daemon de notificaciones — silencioso ahí, no truena la app.
+ipcMain.handle('app:notify', (_, { title, body }) => {
+  if (!Notification.isSupported()) return false;
+  new Notification({ title: title || 'Muxlyve', body: body || '' }).show();
+  return true;
 });
 
 ipcMain.handle('report:send', async (_, description) => {
@@ -341,6 +477,16 @@ ipcMain.handle('report:send', async (_, description) => {
 app.setAsDefaultProtocolClient('muxlyve');
 
 app.whenReady().then(async () => {
+  // El usuario puede elegir idioma a mano (Preferencias / modal de licencia) — eso manda
+  // sobre el idioma del sistema. Sin preferencia guardada, se detecta por primera vez.
+  const locale = app.getLocale();
+  const detected = locale.startsWith('es') ? 'es'
+    : locale.startsWith('fr') ? 'fr'
+    : locale.startsWith('pt') ? 'pt'
+    : 'en';
+  APP_LANG = SUPPORTED_APP_LANGS.includes(prefs.language) ? prefs.language : detected;
+  process.env.APP_LANG = APP_LANG;
+
   // Carga .env desde userData sin dependencias externas.
   const userEnv = path.join(app.getPath('userData'), '.env');
   if (existsSync(userEnv)) {
@@ -349,6 +495,12 @@ app.whenReady().then(async () => {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)=(.*)$/);
       if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
     }
+  }
+
+  // Toggle de Preferencias → LAN. Un ALLOW_LAN_PANEL puesto a mano en el .env (arriba)
+  // manda igual — esto solo cubre el caso normal, sin editar archivos.
+  if (prefs.allowLanPanel && !process.env.ALLOW_LAN_PANEL) {
+    process.env.ALLOW_LAN_PANEL = 'true';
   }
 
   const license = await checkLicense({ isPackaged: app.isPackaged });
@@ -392,12 +544,37 @@ app.whenReady().then(async () => {
   // Si arrancó oculto (login item con --hidden), sáltate el splash — no debe verse nada.
   if (!START_HIDDEN) showSplash();
 
+  // Windows: si el panel va a escuchar en la LAN, intenta agregar la regla de entrada
+  // de una vez — sin esto, Windows Defender muestra su propio diálogo nativo en la
+  // primera conexión entrante (no bloqueante, pero confunde). Best-effort a propósito:
+  // sin privilegios de admin este comando falla en silencio y el usuario ve el diálogo
+  // nativo de todos modos, así que no hay nada que romper.
+  if (process.platform === 'win32' && process.env.ALLOW_LAN_PANEL === 'true') {
+    const panelPort = process.env.PANEL_PORT || '19080';
+    const { exec } = await import('node:child_process');
+    exec(
+      `netsh advfirewall firewall add rule name="Muxlyve Panel" dir=in action=allow protocol=TCP localport=${panelPort}`,
+      (err) => {
+        if (err) console.warn('[electron] No se pudo agregar la regla de firewall (requiere admin) — Windows pedirá permiso manual:', err.message);
+        else console.log(`[electron] Regla de firewall agregada para el puerto ${panelPort}.`);
+      },
+    );
+  }
+  // Linux: sin equivalente acá a propósito — a diferencia de Windows Defender, no hay
+  // un firewall único ni un comando universal (ufw en Debian/Ubuntu, firewalld en
+  // Fedora/RHEL, ninguno en muchas distros de escritorio con NetworkManager). Intentar
+  // adivinar cuál usar es más frágil que útil; el usuario abre el puerto a mano si su
+  // firewall lo bloquea (la mayoría de distros de escritorio no filtran la LAN por defecto).
+
   // Arranca el motor (NMS + relays + panel) por efecto de import.
   try {
     await import('../src/index.js');
   } catch (err) {
     console.error('[electron] ERROR al arrancar el motor:', err.message, err.stack);
-    dialog.showErrorBox('Error al iniciar Muxlyve', `No se pudo arrancar el motor:\n${err.message}`);
+    dialog.showErrorBox(
+      APP_LANG === 'es' ? 'Error al iniciar Muxlyve' : 'Error starting Muxlyve',
+      APP_LANG === 'es' ? `No se pudo arrancar el motor:\n${err.message}` : `Could not start the engine:\n${err.message}`
+    );
     app.quit();
     return;
   }
@@ -428,11 +605,11 @@ app.whenReady().then(async () => {
         console.log('[license] revalidación: BLOQUEADA —', r.reason);
         await dialog.showMessageBox({
           type: 'warning',
-          title: 'Suscripción inactiva',
+          title: APP_LANG === 'es' ? 'Suscripción inactiva' : 'Inactive subscription',
           message: r.reason === 'subscription-cancelled'
-            ? 'Tu suscripción fue cancelada. La app se cerrará.'
-            : 'Tu licencia ya no es válida. La app se cerrará.',
-          buttons: ['Cerrar'],
+            ? (APP_LANG === 'es' ? 'Tu suscripción fue cancelada. La app se cerrará.' : 'Your subscription was cancelled. The app will close.')
+            : (APP_LANG === 'es' ? 'Tu licencia ya no es válida. La app se cerrará.' : 'Your license is no longer valid. The app will close.'),
+          buttons: [APP_LANG === 'es' ? 'Cerrar' : 'Close'],
         });
         app.relaunch();
         app.quit();

@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-19T22:40:00-05:00",
+  "title": "Design System: Muxlyve",
+  "extensions": {
+    "colorMeta": {
+      "bg": { "role": "neutral", "displayName": "Abyss", "canonical": "#0d1117", "tonalRamp": ["#0d1117", "#11161d", "#161b22", "#1c2230", "#222a39", "#2a3140", "#3a4250", "#484f58"] },
+      "surface": { "role": "neutral", "displayName": "Deck", "canonical": "#161b22", "tonalRamp": ["#0d1117", "#12161d", "#161b22", "#1c2230", "#232a39", "#2c3445", "#5a6270", "#8b949e"] },
+      "surface-2": { "role": "neutral", "displayName": "Deck Raised", "canonical": "#1c2230", "tonalRamp": ["#12161d", "#171c28", "#1c2230", "#232b3c", "#2c3547", "#3a4250", "#6b7280", "#8b949e"] },
+      "border": { "role": "neutral", "displayName": "Hairline", "canonical": "#2a3140", "tonalRamp": ["#1c2230", "#222a39", "#2a3140", "#333c4e", "#41546a", "#5a6270", "#8b949e", "#c9d1d9"] },
+      "text": { "role": "neutral", "displayName": "Ink", "canonical": "#e6edf3", "tonalRamp": ["#484f58", "#6b7280", "#8b949e", "#aeb8c4", "#c9d1d9", "#e6edf3", "#f0f3f6", "#ffffff"] },
+      "muted": { "role": "neutral", "displayName": "Ash", "canonical": "#8b949e", "tonalRamp": ["#484f58", "#5a6270", "#6b7280", "#8b949e", "#aeb8c4", "#c9d1d9", "#e6edf3", "#f0f3f6"] },
+      "accent": { "role": "primary", "displayName": "Brand Violet", "canonical": "#7c5cff", "tonalRamp": ["#1a1133", "#2d1f5e", "#3f2c8f", "#523dc0", "#7c5cff", "#9b80ff", "#b6a3ff", "#d6ccff"] },
+      "accent-2": { "role": "secondary", "displayName": "Signal Green", "canonical": "#2ea043", "tonalRamp": ["#0f2e18", "#16451f", "#1f5e2a", "#2ea043", "#3fb950", "#56c267", "#7fd98f", "#b6f0c2"] },
+      "danger": { "role": "neutral", "displayName": "Alarm Red", "canonical": "#f85149", "tonalRamp": ["#3d1310", "#5e1d18", "#7f2720", "#f85149", "#ff6b63", "#ff8a84", "#ffb0ab", "#ffd6d3"] },
+      "live": { "role": "neutral", "displayName": "Signal Green", "canonical": "#2ea043", "tonalRamp": ["#0f2e18", "#1f5e2a", "#2ea043", "#3fb950", "#56c267", "#7fd98f", "#b6f0c2", "#ffffff"] },
+      "warn": { "role": "neutral", "displayName": "Amber", "canonical": "#f0a23a", "tonalRamp": ["#3d2810", "#5e3e18", "#7f5320", "#f0a23a", "#ffb95c", "#ffce89", "#ffe3b6", "#fff3df"] },
+      "off": { "role": "neutral", "displayName": "Off", "canonical": "#484f58", "tonalRamp": ["#1c2230", "#2a3140", "#353d4c", "#484f58", "#5a6270", "#6b7280", "#8b949e", "#aeb8c4"] },
+      "accent-blue": { "role": "neutral", "displayName": "Signal Blue", "canonical": "#4da3ff", "tonalRamp": ["#0f2840", "#1a4068", "#255f9f", "#4da3ff", "#74b8ff", "#9ccdff", "#c4e2ff", "#e6f3ff"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Wordmark", "purpose": "Logo Muxlyve en header; peso 700, -0.03em." },
+      "body": { "displayName": "Body", "purpose": "Texto general y notas; 0.85rem / 1.5." },
+      "label": { "displayName": "Technical Label", "purpose": "Secciones y stats; mono 0.72rem uppercase 0.06em." }
+    },
+    "shadows": [
+      { "name": "modal-lift", "value": "0 24px 64px rgba(0,0,0,.5)", "purpose": "Modales de preferencias y licencia." },
+      { "name": "dropdown", "value": "0 12px 28px rgba(0,0,0,.35)", "purpose": "Menú del chat." },
+      { "name": "state-glow", "value": "0 8px 25px -8px color-mix(in srgb, var(--glow) 55%, transparent), inset 0 0 16px -8px color-mix(in srgb, var(--glow) 50%, transparent)", "purpose": "Preview y bloques de plataforma tintados por estado." },
+      { "name": "field-rest", "value": "0 1px 2px rgba(0,0,0,.15)", "purpose": "Campos de conexión a reposo." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.23, 1, 0.32, 1)", "purpose": "Transiciones de estado por defecto." },
+      { "name": "ease-std", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Sidebar, sub-bloques, collapse." },
+      { "name": "video-glow-live", "value": "6s ease-in-out infinite", "purpose": "Glow morado→azul en preview en vivo." },
+      { "name": "video-glow-offline", "value": "4s ease-in-out infinite", "purpose": "Glow rojo→naranja sin señal." }
+    ],
+    "breakpoints": [
+      { "name": "sidebar", "value": "360px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Acción primaria (guardar, conectar) en púrpura de marca.",
+      "html": "<button class=\"ds-btn-primary\">Guardar</button>",
+      "css": ".ds-btn-primary { background: #7c5cff; color: #fff; border: none; border-radius: 8px; padding: 0.5rem 0.85rem; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: filter .15s, transform .15s; } .ds-btn-primary:hover { filter: brightness(1.1); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: 2px solid #7c5cff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Toggle Switch",
+      "kind": "button",
+      "refersTo": "button-toggle-on",
+      "description": "Interruptor ON/OFF de reenvío a una plataforma.",
+      "html": "<label class=\"ds-switch\"><input type=\"checkbox\" checked><span class=\"ds-thumb\"></span></label>",
+      "css": ".ds-switch { position: relative; display: inline-block; width: 42px; height: 24px; } .ds-switch input { opacity: 0; width: 0; height: 0; position: absolute; } .ds-switch .ds-thumb { position: absolute; inset: 0; background: #484f58; border-radius: 12px; cursor: pointer; transition: background .2s cubic-bezier(0.23,1,0.32,1); } .ds-switch .ds-thumb::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s cubic-bezier(0.23,1,0.32,1); } .ds-switch input:checked ~ .ds-thumb { background: #2ea043; } .ds-switch input:checked ~ .ds-thumb::before { transform: translateX(18px); }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "card",
+      "description": "Píldora de estado de relay: live / reconnecting / failed / lagging.",
+      "html": "<span class=\"ds-pill ds-pill-live\">LIVE</span>",
+      "css": ".ds-pill { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px; background: #1c2230; color: #8b949e; white-space: nowrap; } .ds-pill-live { background: rgba(46,160,67,.15); color: #2ea043; } .ds-pill-reconnecting, .ds-pill-lagging { background: rgba(240,162,58,.15); color: #f0a23a; } .ds-pill-failed { background: rgba(248,81,73,.15); color: #f85149; }"
+    },
+    {
+      "name": "Destination Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Tarjeta de destino con head, toggle, estado y campos de clave.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-head\"><span class=\"ds-name\">Twitch</span><span class=\"ds-pill ds-pill-live\">LIVE</span></div></div>",
+      "css": ".ds-card { background: #161b22; border: 1px solid #2a3140; border-radius: 12px; padding: 1.1rem 1.2rem; } .ds-card-head { display: flex; align-items: center; gap: .6rem; margin-bottom: .8rem; } .ds-card .ds-name { font-weight: 600; font-size: 1rem; flex: 1; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "card",
+      "description": "Input mono para claves RTMP y URLs.",
+      "html": "<input type=\"text\" class=\"ds-input\" placeholder=\"rtmp://...\">",
+      "css": ".ds-input { width: 100%; background: #0d1117; border: 1px solid #2a3140; color: #e6edf3; border-radius: 8px; padding: .5rem .65rem; font-size: .88rem; font-family: ui-monospace, monospace; } .ds-input:focus { outline: none; border-color: #7c5cff; }"
+    },
+    {
+      "name": "Platform Block",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "Bloque colapsable de plataforma con glow de estado por borde.",
+      "html": "<div class=\"ds-pb-block ds-pb-on\"><div class=\"ds-pb-head\"><span class=\"ds-pb-name\">Kick</span></div></div>",
+      "css": ".ds-pb-block { border: 1px solid #2a3140; border-radius: 12px; margin-bottom: .5rem; overflow: hidden; --glow: #2ea043; border-color: color-mix(in srgb, var(--glow) 45%, transparent); box-shadow: 0 8px 25px -8px color-mix(in srgb, var(--glow) 55%, transparent), inset 0 0 16px -8px color-mix(in srgb, var(--glow) 50%, transparent); } .ds-pb-block.ds-pb-off { --glow: #f85149; } .ds-pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem; cursor: pointer; user-select: none; background: #161b22; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Cockpit",
+    "overview": "Un centro de control denso pero respirando: superficies oscuras en capas, un único acento púrpura de marca, y estado de conexión que se lee de lejos sin ruido. Es la cabina de un streamer en vivo — lo crítico visible de inmediato, lo secundario plegado. Moderno, limpio, premium por acabado, no por ornamento. Rechaza el fondo crema de SaaS genérico, el hero-metric, las tarjetas idénticas y la estética gaming neon.",
+    "keyCharacteristics": [
+      "Dark-first con tema claro opcional, ambos a WCAG AA.",
+      "Un acento púrpura; el verde está reservado para 'en vivo'.",
+      "Profundidad por capas tonales + glow de estado, no sombras pesadas.",
+      "Micro-estados con prefers-reduced-motion respetado.",
+      "Tipografía de sistema sobria; mono solo para datos de máquina."
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "El púrpura #7c5cff se usa en ≤15% de cualquier pantalla; su rareza lo hace legible como marca. Verde/ámbar/rojo son lenguaje de estado, no competidores.", "section": "colors" },
+      { "name": "The Status-Is-Content Rule", "body": "Verde/ámbar/rojo nunca decoran; solo comunican estado de relay.", "section": "colors" },
+      { "name": "The Mono-For-Machines Rule", "body": "Solo datos de máquina (claves, URLs, IDs, bitrate/fps) usan mono.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Superficies planas a reposo. Glow/sombra aparecen solo por estado o modal; nunca decoran una card vacía.", "section": "elevation" }
+    ],
+    "dos": [
+      "Usar el púrpura #7c5cff solo como acento de marca y el verde #2ea043 solo para estado en vivo.",
+      "Comunicar estado de relay con verde/ámbar/rojo en píldoras y glow de borde.",
+      "Respetar prefers-reduced-motion en cada animación.",
+      "Usar mono exclusivamente para claves, URLs e IDs técnicos.",
+      "Mantener contraste 4.5:1 en ambos temas."
+    ],
+    "donts": [
+      "Usar fondo cálido crema ni paleta near-white tipo SaaS genérico.",
+      "Imitar el layout de Restream/OBS uno a uno.",
+      "Usar estética gaming neon sobrecargada.",
+      "Meter glow decorativo en cards en reposo.",
+      "Anidar tarjetas dentro de tarjetas.",
+      "Usar verde/ámbar/rojo como decoración fuera de estado de conexión."
+    ]
+  }
+}

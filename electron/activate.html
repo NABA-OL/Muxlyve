@@ -173,10 +173,45 @@
     .sep {
       margin: .3rem 0;
     }
+
+    body {
+      position: relative;
+    }
+
+    .lang-switch {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      display: flex;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+    }
+
+    .lang-btn {
+      width: auto;
+      margin: 0;
+      padding: .28rem .55rem;
+      font-size: .68rem;
+      font-weight: 600;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 6px;
+    }
+
+    .lang-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
   </style>
 </head>
 
 <body>
+  <div class="lang-switch">
+    <button type="button" class="lang-btn" data-lang="es" onclick="switchLang('es')">ES</button>
+    <button type="button" class="lang-btn" data-lang="en" onclick="switchLang('en')">EN</button>
+  </div>
   <div class="logo">
     <img src="../build/icon-muxlyve.png" alt="Muxlyve">
     <span class="logo-name">Muxlyve</span>
@@ -199,6 +234,85 @@
 
   <script>
     const STORE_URL = 'https://muxlyve.app/#buy';
+    const urlParams = new URLSearchParams(window.location.search);
+    const lang = urlParams.get('lang') || 'en';
+
+    const t = {
+      es: {
+        title: 'Muxlyve — Activar licencia',
+        h1: 'Activar licencia',
+        sub: 'Pega tu clave para desbloquear la app en este equipo.',
+        label: 'Clave de licencia',
+        activateBtn: 'Activar',
+        noLic: '¿No tienes licencia? ',
+        buy: 'Comprar Muxlyve',
+        footer: 'Solo necesitas internet para activar — transmites offline.',
+        subCancelTitle: 'Suscripción cancelada',
+        subCancelDesc: 'Tu suscripción fue cancelada. Para seguir usando Muxlyve, renuévala o adquiere un nuevo plan.',
+        subCancelBtn: 'Renovar suscripción',
+        subCancelNote: '¿Ya renovaste? Libera este equipo desde otro dispositivo o espera a que la validación se actualice.',
+        errPaste: 'Pega tu clave primero.',
+        btnVerifying: 'Verificando…',
+        okEmail: email => `Activado como ${email}. Abriendo la app…`,
+        okMsg: '¡Activado! Abriendo la app…',
+        btnOk: '✓ Activado',
+        errInvalid: 'Clave inválida.',
+        errUnexpected: 'Error inesperado. Intenta de nuevo.'
+      },
+      en: {
+        title: 'Muxlyve — Activate license',
+        h1: 'Activate license',
+        sub: 'Paste your key to unlock the app on this device.',
+        label: 'License key',
+        activateBtn: 'Activate',
+        noLic: "Don't have a license? ",
+        buy: 'Buy Muxlyve',
+        footer: 'Internet is only needed for activation — you stream offline.',
+        subCancelTitle: 'Subscription cancelled',
+        subCancelDesc: 'Your subscription was cancelled. To continue using Muxlyve, renew it or purchase a new plan.',
+        subCancelBtn: 'Renew subscription',
+        subCancelNote: 'Already renewed? Release this device from another one or wait for validation to update.',
+        errPaste: 'Paste your key first.',
+        btnVerifying: 'Verifying…',
+        okEmail: email => `Activated as ${email}. Opening app…`,
+        okMsg: 'Activated! Opening app…',
+        btnOk: '✓ Activated',
+        errInvalid: 'Invalid key.',
+        errUnexpected: 'Unexpected error. Try again.'
+      }
+    };
+    let currentLang = (lang === 'es' ? 'es' : 'en');
+    let i18n = t[currentLang];
+
+    function updateLangButtons() {
+      document.querySelectorAll('.lang-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.lang === currentLang);
+      });
+    }
+
+    function switchLang(newLang) {
+      if (newLang === currentLang) return;
+      currentLang = newLang;
+      i18n = t[currentLang];
+      applyTranslations();
+      updateLangButtons();
+      // Persiste la elección para que la app principal abra en el mismo idioma después de
+      // activar — msApp viene del mismo preload.cjs que usa la ventana principal.
+      window.msApp?.setLanguage?.(currentLang).catch(() => {});
+    }
+
+    function applyTranslations() {
+      document.title = i18n.title;
+      document.querySelector('h1').textContent = i18n.h1;
+      document.querySelector('.sub').textContent = i18n.sub;
+      document.querySelector('label[for="keyInput"]').textContent = i18n.label;
+      document.getElementById('activateBtn').textContent = i18n.activateBtn;
+      
+      const footerSep = document.querySelector('.footer .sep');
+      footerSep.childNodes[0].nodeValue = i18n.noLic;
+      footerSep.querySelector('a').textContent = i18n.buy;
+      document.querySelector('.footer div:nth-child(2)').textContent = i18n.footer;
+    }
 
     function openBuy(e) {
       e.preventDefault();
@@ -207,14 +321,16 @@
 
     // Al cargar: si la suscripción está cancelada, reemplaza el formulario.
     window.addEventListener('DOMContentLoaded', async () => {
+      applyTranslations();
+      updateLangButtons();
       try {
         const info = await window.msLicense?.getInfo();
         if (info?.status === 'cancelled') {
           document.querySelector('.card').innerHTML = `
-            <h1 style="margin-bottom:.5rem">Suscripción cancelada</h1>
-            <p class="sub">Tu suscripción fue cancelada. Para seguir usando Muxlyve, renuévala o adquiere un nuevo plan.</p>
-            <button onclick="window.open('${STORE_URL}','_blank')">Renovar suscripción</button>
-            <p class="sub" style="margin-top:.9rem;font-size:.75rem">¿Ya renovaste? Libera este equipo desde otro dispositivo o espera a que la validación se actualice.</p>
+            <h1 style="margin-bottom:.5rem">${i18n.subCancelTitle}</h1>
+            <p class="sub">${i18n.subCancelDesc}</p>
+            <button onclick="window.open('${STORE_URL}','_blank')">${i18n.subCancelBtn}</button>
+            <p class="sub" style="margin-top:.9rem;font-size:.75rem">${i18n.subCancelNote}</p>
           `;
         }
       } catch { /* sin licencia en caché — mostrar formulario normal */ }
@@ -228,30 +344,30 @@
 
     async function activate() {
       const key = document.getElementById('keyInput').value.trim();
-      if (!key) { setStatus('Pega tu clave primero.'); return; }
+      if (!key) { setStatus(i18n.errPaste); return; }
 
       const btn = document.getElementById('activateBtn');
       btn.disabled = true;
-      btn.textContent = 'Verificando…';
+      btn.textContent = i18n.btnVerifying;
       setStatus('');
 
       try {
         const result = await window.msLicense.activate(key);
         if (result.ok) {
           const msg = result.email
-            ? `Activado como ${result.email}. Abriendo la app…`
-            : '¡Activado! Abriendo la app…';
+            ? i18n.okEmail(result.email)
+            : i18n.okMsg;
           setStatus(msg, true);
-          btn.textContent = '✓ Activado';
+          btn.textContent = i18n.btnOk;
         } else {
-          setStatus(result.error || 'Clave inválida.');
+          setStatus(result.error || i18n.errInvalid);
           btn.disabled = false;
-          btn.textContent = 'Activar';
+          btn.textContent = i18n.activateBtn;
         }
       } catch {
-        setStatus('Error inesperado. Intenta de nuevo.');
+        setStatus(i18n.errUnexpected);
         btn.disabled = false;
-        btn.textContent = 'Activar';
+        btn.textContent = i18n.activateBtn;
       }
     }
 

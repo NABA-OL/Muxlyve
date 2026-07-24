@@ -36,6 +36,24 @@ function parseTags(tagStr) {
   return tags;
 }
 
+// tag emotes de IRCv3: "emoteId:start-end,start-end/emoteId2:start-end" — start/end son
+// índices inclusivos dentro del mensaje. Se normaliza a {start, end(exclusivo), url} para
+// que el renderer (panel + ventana externa) no tenga que saber nada de Twitch en particular.
+function parseTwitchEmotes(tagValue) {
+  if (!tagValue) return [];
+  const out = [];
+  for (const part of tagValue.split('/')) {
+    const [id, ranges] = part.split(':');
+    if (!id || !ranges) continue;
+    for (const range of ranges.split(',')) {
+      const [start, end] = range.split('-').map(Number);
+      if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
+      out.push({ start, end: end + 1, url: `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0` });
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
 function handleLine(line) {
   if (!line) return;
   if (line.startsWith('PING')) {
@@ -58,6 +76,12 @@ function handleLine(line) {
     username: tags['display-name'] || nick,
     message: text,
     color: tags.color || null,
+    emotes: parseTwitchEmotes(tags.emotes),
+    // El nick de IRC de Twitch siempre es el login en minúsculas (aunque el display-name
+    // tenga mayúsculas/acentos) — currentLogin viene de la misma fuente (Helix), comparación exacta.
+    isBroadcaster: !!currentLogin && nick.toLowerCase() === currentLogin.toLowerCase(),
+    // id: UUID del mensaje (tag IRCv3) — lo exige /helix/chat/messages/pin como message_id.
+    id: tags.id || null,
     timestamp: Date.now(),
   });
 }
@@ -226,13 +250,25 @@ let kickReconnectTimer = null;
 let kickReconnectDelay = 2000;
 let kickSlug = null;
 let kickStopped = true;
+// El slug del canal (para el lookup de chatroom) no siempre es igual al username que
+// Kick muestra en el chat (mayúsculas/formato distinto) — se guarda aparte para comparar
+// bien contra sender.username y marcar isBroadcaster.
+let kickBroadcasterName = null;
+
+// fetch inyectable — por defecto el global de Node, pero ese SIEMPRE recibe 403 de
+// Cloudflare en kick.com/api/v2 (probado: bloquea aunque mandes headers de navegador
+// completos, es huella de TLS/HTTP, no de headers). electron/oauth.js reemplaza esto por
+// electron.net.fetch al arrancar — corre por el stack de red de Chromium, mismo que un
+// navegador real, y ese sí pasa. src/ no importa 'electron' directo (debe poder correr
+// headless — Docker, npm start) por eso queda como inyección en vez de import fijo.
+let kickFetchImpl = (...args) => fetch(...args);
+export function setKickFetchImpl(fn) { kickFetchImpl = fn; }
 
 // Endpoint interno del sitio de Kick (no el oficial de dev.kick.com) — es lo que usa el
 // propio frontend de Kick para resolver slug → chatroom id, no hay equivalente en la API
-// pública documentada todavía. Puede estar detrás de protección Cloudflare; con un
-// User-Agent de navegador normal suele pasar.
+// pública documentada todavía.
 async function findKickChatroomId(slug) {
-  const r = await fetch(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`, {
+  const r = await kickFetchImpl(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
       Accept: 'application/json',
@@ -249,6 +285,25 @@ async function findKickChatroomId(slug) {
 // coinciden entre sí (Kick no publica esto oficialmente) — se acepta cualquiera de las
 // variantes conocidas en vez de asumir una sola, para no depender de adivinar cuál es
 // la vigente hoy.
+// Kick mete los emotes como texto plano tipo "[emote:12345:Nombre]" dentro del propio
+// mensaje (no como metadata aparte, a diferencia de Twitch) — se detecta con regex y se
+// normaliza a la misma forma {start, end, url} que usa Twitch, para que el renderer sea
+// uno solo. El span completo del token (corchetes incluidos) se reemplaza por la imagen.
+const KICK_EMOTE_RE = /\[emote:(\d+):[^\]]+\]/g;
+function parseKickEmotes(text) {
+  const out = [];
+  let match;
+  KICK_EMOTE_RE.lastIndex = 0;
+  while ((match = KICK_EMOTE_RE.exec(text))) {
+    out.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      url: `https://files.kick.com/emotes/${match[1]}/fullsize`,
+    });
+  }
+  return out;
+}
+
 function handleKickPusherEvent(raw) {
   let outer;
   try { outer = JSON.parse(raw); } catch { return; }
@@ -263,6 +318,8 @@ function handleKickPusherEvent(raw) {
     username,
     message: text,
     color: payload.sender?.identity?.color || null,
+    emotes: parseKickEmotes(text),
+    isBroadcaster: !!kickBroadcasterName && username.toLowerCase() === kickBroadcasterName.toLowerCase(),
     timestamp: Date.now(),
   });
 }
@@ -296,17 +353,19 @@ function scheduleKickReconnect() {
   kickReconnectDelay = Math.min(kickReconnectDelay * 2, MAX_RECONNECT_DELAY);
 }
 
-export function startKickChat(slug) {
+export function startKickChat(slug, broadcasterName) {
   if (!slug) return;
   if (!kickStopped && kickSlug === slug) return; // ya conectado a ese canal
   stopKickChat();
   kickStopped = false;
   kickSlug = slug;
+  kickBroadcasterName = broadcasterName || null;
   connectKick();
 }
 
 export function stopKickChat() {
   kickStopped = true;
+  kickBroadcasterName = null;
   clearTimeout(kickReconnectTimer);
   kickSlug = null;
   if (kickWs) { try { kickWs.close(); } catch {} kickWs = null; }

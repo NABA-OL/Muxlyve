@@ -1,18 +1,40 @@
 // Desarrollado por BlacKraken Solutions (NABA-OL)
-import { BrowserWindow, safeStorage, app, session } from 'electron';
+import { BrowserWindow, safeStorage, app, session, net } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat } from '../src/chat.js';
+import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
+import { setViewerCounts } from '../src/viewers.js';
+import { setChatModeHandler, setChatSendHandler, setChatPinHandler } from '../src/chatmod.js';
+import { tMap } from '../src/i18n.js';
+
+// Los resultados de este módulo llegan al renderer directo (IPC) o vía el puente HTTP de
+// chatmod.js — ninguno de los dos pasa por translateHtml() de src/panel.js (eso solo
+// traduce el HTML servido), así que hay que traducir acá mismo, en la fuente. Mismo
+// diccionario que usa el panel, mismo criterio: APP_LANG se lee en el momento (no al
+// importar), igual que el resto de este archivo — ver nota en CLAUDE.md.
+function t(text) {
+  if (process.env.APP_LANG === 'es' || !process.env.APP_LANG) return text;
+  return tMap[text] || text;
+}
+
+// El lookup de chatroom de Kick (ver src/chat.js) necesita el stack de red de Chromium
+// para no chocar con el bloqueo de Cloudflare — net.fetch corre por ahí, el fetch global
+// de Node no.
+setKickFetchImpl(net.fetch);
 
 const PLATFORMS = {
   twitch: {
     name: 'Twitch',
     authUrl: 'https://id.twitch.tv/oauth2/authorize',
     tokenUrl: 'https://id.twitch.tv/oauth2/token',
-    // channel:manage:broadcast → título global (setStreamTitle). Cambiar el scope invalida
-    // los tokens ya emitidos — quien ya conectó Twitch antes de esto necesita reconectar.
-    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key channel:manage:broadcast',
+    // channel:manage:broadcast → título global (setStreamTitle).
+    // moderator:manage:chat_settings → modo lento / solo emotes (setTwitchChatMode).
+    // user:write:chat → enviar mensaje como el streamer (sendChatMessage).
+    // moderator:manage:chat_messages → fijar mensaje (pinTwitchMessage).
+    // Cambiar el scope invalida los tokens ya emitidos — quien ya conectó Twitch antes de
+    // esto necesita reconectar.
+    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key channel:manage:broadcast moderator:manage:chat_settings user:write:chat moderator:manage:chat_messages',
     pkce: true,
     envKey: 'TWITCH',
     // Twitch solo acepta https:// o http://localhost — usa localhost interceptado por Electron
@@ -37,9 +59,11 @@ const PLATFORMS = {
     tokenUrl: 'https://id.kick.com/oauth/token',
     // user:read → perfil. channel:read → slug del canal (necesario para el chat, que va
     // aparte por Pusher sin usar este token en absoluto — ver src/chat.js).
-    // channel:write → título global (setStreamTitle). Cambiar el scope invalida los tokens
-    // ya emitidos — quien ya conectó Kick antes de esto necesita reconectar.
-    scope: 'user:read channel:read channel:write',
+    // channel:write → título global (setStreamTitle).
+    // chat:write → enviar mensaje como el streamer (sendChatMessage).
+    // Cambiar el scope invalida los tokens ya emitidos — quien ya conectó Kick antes de
+    // esto necesita reconectar.
+    scope: 'user:read channel:read channel:write chat:write',
     pkce: true,
     // Cliente confidencial pese a usar PKCE — igual que Twitch, exige client_secret.
     envKey: 'KICK',
@@ -150,6 +174,9 @@ async function fetchProfile(platform, accessToken) {
       if (!ru.ok) return { username: null, rtmpUrl: null, login: null };
       const du = await ru.json();
       const username = du.data?.[0]?.name || null;
+      // broadcaster_user_id: lo exige POST /public/v1/chat al enviar como streamer
+      // (sendChatMessage) — no se necesitaba antes, el título es implícito al token.
+      const broadcasterId = du.data?.[0]?.user_id || null;
       // El chat (Pusher, ver src/chat.js) necesita el slug del canal, no el nombre para
       // mostrar — /public/v1/channels lo trae directo, más confiable que derivarlo del
       // nombre a mano (el slug no siempre es "nombre en minúsculas con guiones").
@@ -166,7 +193,7 @@ async function fetchProfile(platform, accessToken) {
       // Kick no tiene (todavía) un endpoint público documentado para stream key/RTMP vía
       // OAuth — a diferencia de Twitch/YouTube, acá no se autocompleta, el usuario la pega
       // a mano como siempre. El OAuth solo sirve para conectar cuenta + habilitar el chat.
-      return { username, rtmpUrl: null, login };
+      return { username, rtmpUrl: null, login, broadcasterId };
     }
   } catch { /* silent */ }
   return { username: null, rtmpUrl: null };
@@ -310,7 +337,7 @@ export async function connect(platform, panelPort) {
 
       if (oauthError) return finish({ ok: false, error: `OAuth rechazado: ${oauthError}` });
       if (!code || returnedState !== state) {
-        return finish({ ok: false, error: 'Respuesta inválida (state mismatch).' });
+        return finish({ ok: false, error: t('Respuesta inválida (state mismatch).') });
       }
 
       exchangeCode(platform, code, rUri, pkcePair?.verifier)
@@ -328,7 +355,7 @@ export async function connect(platform, panelPort) {
           writeTokens(all);
           if (platform === 'twitch' && login) startTwitchChat(login);
           if (platform === 'youtube') startYoutubeChat(() => getValidToken('youtube'));
-          if (platform === 'kick' && login) startKickChat(login);
+          if (platform === 'kick' && login) startKickChat(login, username);
           finish({ ok: true, username, rtmpUrl });
         })
         .catch((err) => finish({ ok: false, error: err.message }));
@@ -336,7 +363,7 @@ export async function connect(platform, panelPort) {
     popup.webContents.on('will-navigate', handleRedirect);
     popup.webContents.on('will-redirect', handleRedirect);
 
-    popup.on('closed', () => finish({ ok: false, error: 'Ventana cerrada.' }));
+    popup.on('closed', () => finish({ ok: false, error: t('Ventana cerrada.') }));
     popup.loadURL(`${cfg.authUrl}?${params}`);
   });
 }
@@ -357,7 +384,7 @@ export function resumeChatIfConnected() {
   const tokens = readTokens();
   if (tokens.twitch?.login) startTwitchChat(tokens.twitch.login);
   if (tokens.youtube) startYoutubeChat(() => getValidToken('youtube'));
-  if (tokens.kick?.login) startKickChat(tokens.kick.login);
+  if (tokens.kick?.login) startKickChat(tokens.kick.login, tokens.kick.username);
 }
 
 async function refreshAccessToken(platform) {
@@ -407,6 +434,21 @@ export async function getValidToken(platform) {
   return nearExpiry ? refreshAccessToken(platform) : tok.access_token;
 }
 
+// Chequeo previo a salir en vivo — para cada plataforma conectada, confirma que el
+// access_token siga siendo válido (refrescándolo si estaba por vencer, mismo criterio
+// que getValidToken() ya usa para el polling de chat de YouTube). true = token vivo,
+// false = se cayó la sesión y hay que reconectar desde el panel antes de confiar en esa
+// plataforma para el stream.
+export async function checkLiveTokens() {
+  const all = readTokens();
+  const result = {};
+  for (const p of ['twitch', 'youtube', 'kick']) {
+    if (!all[p]) continue; // no conectado, no aplica
+    result[p] = !!(await getValidToken(p));
+  }
+  return result;
+}
+
 export function getStatus() {
   const all = readTokens();
   const result = {};
@@ -427,12 +469,41 @@ export function getToken(platform) {
 // verificación OAuth de Google que ya está pendiente — se retoma cuando la aprueben.
 const TITLE_SYNC_PLATFORMS = ['twitch', 'kick'];
 
-async function setTwitchTitle(title) {
+// Busca la categoría por nombre y devuelve el id — Twitch/Kick exigen un id numérico
+// interno, no aceptan el nombre libre en el PATCH del canal.
+async function findTwitchCategoryId(category, token) {
+  const res = await fetch(`https://api.twitch.tv/helix/search/categories?query=${encodeURIComponent(category)}&first=1`, {
+    headers: { Authorization: `Bearer ${token}`, 'Client-Id': clientId(PLATFORMS.twitch) },
+  });
+  if (!res.ok) return null;
+  const d = await res.json();
+  return d.data?.[0]?.id || null;
+}
+
+async function findKickCategoryId(category, token) {
+  const res = await fetch(`https://api.kick.com/public/v2/categories?name[]=${encodeURIComponent(category)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const d = await res.json();
+  return d.data?.[0]?.id || null;
+}
+
+async function setTwitchTitle(title, category) {
   const cfg = PLATFORMS.twitch;
   const tok = readTokens().twitch;
-  if (!tok?.broadcasterId) return { ok: false, error: 'Falta broadcasterId — reconecta Twitch.' };
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
   const token = await getValidToken('twitch');
-  if (!token) return { ok: false, error: 'Sesión de Twitch inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  // Solo se manda lo que realmente cambió — mandar title:'' borraría el título existente.
+  const body = {};
+  if (title) body.title = title;
+  if (category) {
+    const gameId = await findTwitchCategoryId(category, token);
+    if (!gameId) return { ok: false, error: process.env.APP_LANG === 'es' || !process.env.APP_LANG ? `Categoría "${category}" no encontrada en Twitch.` : `Category "${category}" not found on Twitch.` };
+    body.game_id = gameId;
+  }
+  if (!Object.keys(body).length) return { ok: false, error: t('Nada que actualizar.') };
   const res = await fetch(`https://api.twitch.tv/helix/channels?broadcaster_id=${tok.broadcasterId}`, {
     method: 'PATCH',
     headers: {
@@ -440,7 +511,7 @@ async function setTwitchTitle(title) {
       'Client-Id': clientId(cfg),
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -449,13 +520,21 @@ async function setTwitchTitle(title) {
   return { ok: true };
 }
 
-async function setKickTitle(title) {
+async function setKickTitle(title, category) {
   const token = await getValidToken('kick');
-  if (!token) return { ok: false, error: 'Sesión de Kick inválida — reconecta.' };
+  if (!token) return { ok: false, error: t('Sesión de Kick inválida — reconecta.') };
+  const body = {};
+  if (title) body.stream_title = title;
+  if (category) {
+    const categoryId = await findKickCategoryId(category, token);
+    if (!categoryId) return { ok: false, error: process.env.APP_LANG === 'es' || !process.env.APP_LANG ? `Categoría "${category}" no encontrada en Kick.` : `Category "${category}" not found on Kick.` };
+    body.category_id = categoryId;
+  }
+  if (!Object.keys(body).length) return { ok: false, error: t('Nada que actualizar.') };
   const res = await fetch('https://api.kick.com/public/v1/channels', {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stream_title: title }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -464,18 +543,206 @@ async function setKickTitle(title) {
   return { ok: true };
 }
 
-// Aplica el título a todas las plataformas conectadas que lo soportan — devuelve un
-// resultado por plataforma para que la UI muestre exactamente cuál falló, si alguna falla.
-export async function setStreamTitle(title) {
+// Aplica título + categoría a todas las plataformas conectadas que lo soportan — devuelve
+// un resultado por plataforma para que la UI muestre exactamente cuál falló, si alguna falla.
+export async function setStreamTitle(title, category) {
   const tokens = readTokens();
   const results = {};
   for (const platform of TITLE_SYNC_PLATFORMS) {
     if (!tokens[platform]) continue; // no conectado — se omite en silencio, no es error
     try {
-      results[platform] = platform === 'twitch' ? await setTwitchTitle(title) : await setKickTitle(title);
+      results[platform] = platform === 'twitch' ? await setTwitchTitle(title, category) : await setKickTitle(title, category);
     } catch (err) {
       results[platform] = { ok: false, error: err.message };
     }
   }
   return results;
 }
+
+// ── Espectadores por plataforma ─────────────────────────────────────────────────────
+// Solo lectura, no necesita scopes nuevos (channel:read/user:read ya alcanzan) — a
+// diferencia del título o la moderación, esto SÍ se puede sumar YouTube sin tocar el
+// scope pendiente de revisión de Google (youtube.readonly ya cubre streams.list).
+const VIEWER_POLL_MS = 30000;
+
+async function fetchTwitchViewers() {
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return null;
+  const token = await getValidToken('twitch');
+  if (!token) return null;
+  const res = await fetch(`https://api.twitch.tv/helix/streams?user_id=${tok.broadcasterId}`, {
+    headers: { Authorization: `Bearer ${token}`, 'Client-Id': clientId(PLATFORMS.twitch) },
+  });
+  if (!res.ok) return null;
+  const d = await res.json();
+  const stream = d.data?.[0];
+  return { live: !!stream, count: stream?.viewer_count ?? 0 };
+}
+
+async function fetchKickViewers() {
+  const token = await getValidToken('kick');
+  if (!token) return null;
+  const res = await fetch('https://api.kick.com/public/v1/channels', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const d = await res.json();
+  const stream = d.data?.[0]?.stream;
+  return { live: !!stream?.is_live, count: stream?.viewer_count ?? 0 };
+}
+
+async function fetchYoutubeViewers() {
+  const token = await getValidToken('youtube');
+  if (!token) return null;
+  try {
+    const rb = await fetch(
+      'https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id&broadcastStatus=active&broadcastType=all',
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!rb.ok) return null;
+    const db = await rb.json();
+    const videoId = db.items?.[0]?.id;
+    if (!videoId) return { live: false, count: 0 };
+    const rv = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=${videoId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!rv.ok) return null;
+    const dv = await rv.json();
+    const n = dv.items?.[0]?.liveStreamingDetails?.concurrentViewers;
+    return { live: true, count: n != null ? Number(n) : 0 };
+  } catch { return null; }
+}
+
+async function pollViewerCounts() {
+  const tokens = readTokens();
+  const next = {};
+  if (tokens.twitch) { const v = await fetchTwitchViewers(); if (v) next.twitch = v; }
+  if (tokens.kick) { const v = await fetchKickViewers(); if (v) next.kick = v; }
+  if (tokens.youtube) { const v = await fetchYoutubeViewers(); if (v) next.youtube = v; }
+  setViewerCounts(next);
+}
+
+setInterval(pollViewerCounts, VIEWER_POLL_MS);
+pollViewerCounts();
+
+// ── Modo lento / solo emotes ─────────────────────────────────────────────────────────
+// Solo Twitch — Kick no expone esto en su API pública (revisado: moderation.md documenta
+// únicamente ban/unban, nada de ajustes de chat a nivel canal). YouTube tampoco se toca
+// acá, mismo criterio que el título (scope más amplio, revisión de Google pendiente).
+export async function setTwitchChatMode({ emoteOnly, slowSeconds, subscriberOnly }) {
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  const body = { emote_mode: !!emoteOnly, slow_mode: !!slowSeconds, subscriber_mode: !!subscriberOnly };
+  if (slowSeconds) body.slow_mode_wait_time = slowSeconds;
+  const res = await fetch(
+    `https://api.twitch.tv/helix/chat/settings?broadcaster_id=${tok.broadcasterId}&moderator_id=${tok.broadcasterId}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Client-Id': clientId(PLATFORMS.twitch),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+setChatModeHandler(setTwitchChatMode);
+
+// ── Enviar mensaje como el streamer ─────────────────────────────────────────────────
+// Mismo patrón que el título: aplica a las plataformas conectadas que lo soporten.
+// YouTube queda fuera — mismo criterio que el título/moderación (scope más amplio,
+// revisión de Google pendiente).
+const CHAT_SEND_PLATFORMS = ['twitch', 'kick'];
+
+async function sendTwitchMessage(text) {
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  const res = await fetch('https://api.twitch.tv/helix/chat/messages', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Client-Id': clientId(PLATFORMS.twitch),
+      'Content-Type': 'application/json',
+    },
+    // El streamer manda como sí mismo: sender_id = broadcaster_id.
+    body: JSON.stringify({ broadcaster_id: tok.broadcasterId, sender_id: tok.broadcasterId, message: text }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${t.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+async function sendKickMessage(text) {
+  const tok = readTokens().kick;
+  const token = await getValidToken('kick');
+  if (!token) return { ok: false, error: t('Sesión de Kick inválida — reconecta.') };
+  const body = { content: text, type: 'user' };
+  if (tok?.broadcasterId) body.broadcaster_user_id = tok.broadcasterId;
+  const res = await fetch('https://api.kick.com/public/v1/chat', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    return { ok: false, error: `Kick ${res.status}: ${t.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+export async function sendChatMessage(text) {
+  const tokens = readTokens();
+  const results = {};
+  for (const platform of CHAT_SEND_PLATFORMS) {
+    if (!tokens[platform]) continue;
+    try {
+      results[platform] = platform === 'twitch' ? await sendTwitchMessage(text) : await sendKickMessage(text);
+    } catch (err) {
+      results[platform] = { ok: false, error: err.message };
+    }
+  }
+  return results;
+}
+setChatSendHandler(sendChatMessage);
+
+// ── Fijar mensaje ────────────────────────────────────────────────────────────────────
+// Solo Twitch tiene esto como API pública real (POST /helix/chat/messages/pin, scope
+// moderator:manage:chat_messages). Kick sí lo tiene en su web, pero es un endpoint interno
+// (api/internal/v1/...) no expuesto a apps de terceros — mismo caso que el modo lento/solo-
+// emotes de Kick, ver AskUserQuestion anterior. YouTube no tiene nada de esto en su API
+// pública (liveChatMessages solo trae list/insert/delete/transition, ningún pin).
+export async function pinTwitchMessage(messageId) {
+  if (!messageId) return { ok: false, error: t('Mensaje sin id — no se puede fijar.') };
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  const res = await fetch('https://api.twitch.tv/helix/chat/messages/pin', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Client-Id': clientId(PLATFORMS.twitch),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ broadcaster_id: tok.broadcasterId, message_id: messageId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+setChatPinHandler(pinTwitchMessage);
