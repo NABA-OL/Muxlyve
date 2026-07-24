@@ -303,8 +303,16 @@ ipcMain.handle('license:activate', async (_, key) => {
 
 ipcMain.handle('license:release', async () => {
   const result = await releaseLicense();
-  // Reiniciar la app para volver a mostrar la pantalla de activación.
-  if (result.ok) { app.relaunch(); app.quit(); }
+  // Reiniciar la app para volver a mostrar la pantalla de activación. app.quit() NO sirve
+  // acá: la ventana principal intercepta 'close' para minimizar a bandeja si closeToTray
+  // está activo (ver win.on('close') arriba), así que quit() se queda pegado con la app
+  // abierta. app.exit() salta ese interceptor — mismo patrón que "Salir" del menú de
+  // bandeja. setImmediate da tiempo a que la respuesta de este IPC llegue al renderer
+  // antes de matar el proceso.
+  if (result.ok) {
+    app.relaunch();
+    setImmediate(() => app.exit(0));
+  }
   return result;
 });
 

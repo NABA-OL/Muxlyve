@@ -1969,6 +1969,23 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   </div>
 </div>
 
+<!-- Confirmación propia — reemplaza confirm() nativo del navegador (blanco, sin estilo
+     propio posible, se ve fuera de lugar en Mac/Windows). Contenido se llena en runtime,
+     ver showConfirm() en el script del panel. -->
+<div class="prefs-overlay" id="confirmOverlay" onclick="if(event.target===this)resolveConfirm(false)">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2 id="confirmTitle">Confirmar</h2>
+      <button class="prefs-close" onclick="resolveConfirm(false)">✕</button>
+    </div>
+    <p id="confirmMessage" style="margin:0 0 1rem;font-size:.9rem"></p>
+    <div class="about-btn-row">
+      <button class="about-close-btn" onclick="resolveConfirm(false)">Cancelar</button>
+      <button class="lic-danger-btn" id="confirmOkBtn" style="width:auto;flex:1" onclick="resolveConfirm(true)"></button>
+    </div>
+  </div>
+</div>
+
 <!-- Resumen post-stream — se llena en runtime con los acumuladores de sesión, ver
      showSessionSummary()/resetSessionStats() en el script del panel. -->
 <div class="prefs-overlay" id="summaryOverlay" onclick="if(event.target===this)closeSessionSummary()">
@@ -3805,8 +3822,27 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     el.title = title;
   }
 
+  // Reemplaza confirm() nativo — resolveConfirmFn guarda el resolve de la promesa
+  // pendiente mientras el modal está abierto.
+  let resolveConfirmFn = null;
+  function showConfirm(message, okText, title) {
+    $('#confirmTitle').textContent = title || 'Confirmar';
+    $('#confirmMessage').textContent = message;
+    $('#confirmOkBtn').textContent = okText || 'Confirmar';
+    $('#confirmOverlay').classList.add('open');
+    return new Promise((resolve) => { resolveConfirmFn = resolve; });
+  }
+  function resolveConfirm(value) {
+    $('#confirmOverlay').classList.remove('open');
+    if (resolveConfirmFn) { resolveConfirmFn(value); resolveConfirmFn = null; }
+  }
+
   async function releaseLic() {
-    if (!confirm('¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.')) return;
+    const ok = await showConfirm(
+      '¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.',
+      'Liberar equipo',
+    );
+    if (!ok) return;
     await window.msLicense?.release();
   }
 
