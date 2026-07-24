@@ -2,11 +2,20 @@ services:
   multistream:
     build: .
     container_name: Muxlyve
+    init: true # tini como PID 1 — reenvía señales y reapea huérfanos (CN-008)
     ports:
-      - "1935:1935" # Ingest RTMP (OBS apunta aqui)
-      - "8000:8000" # API / panel HTTP
+      - "19350:19350" # Ingest RTMP (OBS apunta aqui)
+      - "19000:19000" # HTTP interno de node-media-server (preview HTTP-FLV)
+      - "127.0.0.1:19080:19080" # Panel — solo localhost del host por defecto; para
+        # exponerlo a la LAN (plugin Stream Deck en otra máquina), cambiar a "19080:19080"
+        # a propósito, junto con ALLOW_LAN_PANEL=true en .env (ver CN-004 del reporte).
     env_file:
       - .env
     volumes:
       - ./config:/app/config
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g

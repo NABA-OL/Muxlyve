@@ -4,6 +4,14 @@ electron/oauth-credentials.js
 config/destinations.json
 config/destinations.json.bak
 config/settings.json
+config/panel-token.json
+config/crypto-salt.json
+# CN-021 — patrones defensivos: nada de esto debería existir en el repo hoy, pero si algún
+# día se agrega un certificado de firma de código o una llave TLS, que no se cuele por descuido.
+*.pem
+*.p12
+*.pfx
+*.jks
 *.log
 media/
 dist-app/

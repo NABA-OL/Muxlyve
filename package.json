@@ -1,6 +1,6 @@
 {
   "name": "muxlyve",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "App propia de retransmisión (restreaming) a Twitch, Kick, TikTok Live y YouTube — sin marca de agua.",
   "author": "BLACKRAKEN SOLUTIONS <nabaol.dev@gmail.com>",
   "type": "module",
@@ -130,11 +130,11 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
-    "ffmpeg-static": "^5.3.0",
+    "ffmpeg-static": "5.3.0",
     "node-media-server": "^2.6.0"
   },
   "devDependencies": {
-    "electron": "^42.5.0",
-    "electron-builder": "^26.15.3"
+    "electron": "42.7.1",
+    "electron-builder": "26.15.3"
   }
 }
