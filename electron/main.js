@@ -258,7 +258,7 @@ function showActivationWindow() {
   return new Promise((resolve) => {
     activationResolve = resolve;
     activationWin = new BrowserWindow({
-      width: 520, height: 500,
+      width: 620, height: 600,
       resizable: false,
       center: true,
       backgroundColor: '#0d1117',
