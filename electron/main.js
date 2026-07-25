@@ -491,6 +491,33 @@ ipcMain.handle('report:send', async (_, description) => {
   }
 });
 
+// Feedback/ideas — mismo patrón que report:send de arriba, pero sin el log adjunto: esto
+// no es diagnóstico de un bug puntual, es "se me ocurrió esto", no hace falta el estado
+// interno de la app para leerlo. Backend separado (/api/support/feedback, tabla propia
+// en la web) — ver docs/WEBSITE_HELP_CENTER.md o el prompt que arma el chat de la app
+// para el repo web.
+ipcMain.handle('feedback:send', async (_, description) => {
+  try {
+    const license = getLicenseInfo();
+    const body = JSON.stringify({
+      email: license?.email || '',
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      description: description || '',
+    });
+    const res = await fetch('https://muxlyve.com/api/support/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 // Registra muxlyve:// como protocolo de la app (necesario para OAuth redirect en producción).
 app.setAsDefaultProtocolClient('muxlyve');

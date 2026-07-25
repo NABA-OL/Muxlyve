@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('msApp', {
   getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),
   setLoginItem: (openAtLogin, startMinimized) => ipcRenderer.invoke('app:set-login-item', openAtLogin, startMinimized),
   sendReport: (description) => ipcRenderer.invoke('report:send', description),
+  sendFeedback: (description) => ipcRenderer.invoke('feedback:send', description),
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
   setTitleBarTheme: (isDark) => ipcRenderer.invoke('app:set-titlebar-theme', isDark),

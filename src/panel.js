@@ -2100,6 +2100,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             </div>
             <button class="danger-btn" onclick="openReport()">Reportar</button>
           </div>
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Enviar una idea</div>
+              <div class="pref-desc">¿Qué te gustaría ver en Muxlyve?</div>
+            </div>
+            <button class="lic-manage-btn" onclick="openFeedback()">Feedback</button>
+          </div>
         </div>
         <div class="prefs-panel" id="prefsLicenseBlock" data-panel="license">
           <div class="lic-row">
@@ -2150,6 +2157,24 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       Se adjuntan automáticamente los últimos logs, tu versión y sistema operativo — no incluye claves ni contraseñas.
     </div>
     <button id="reportSendBtn" onclick="sendReport()" style="width:100%">Enviar reporte</button>
+  </div>
+</div>
+<div class="prefs-overlay" id="feedbackOverlay" onclick="if(event.target===this)closeFeedback()">
+  <div class="prefs-modal lic-modal">
+    <div class="prefs-head">
+      <h2>Enviar una idea</h2>
+      <button class="prefs-close" onclick="closeFeedback()">✕</button>
+    </div>
+    <div class="field">
+      <label>¿Qué te gustaría ver en Muxlyve?</label>
+      <textarea id="feedbackDesc" rows="4" placeholder="Una función, una mejora, lo que sea…"
+        style="width:100%;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></textarea>
+    </div>
+    <div class="pref-desc" style="margin:.6rem 0 .8rem">
+      Se manda con tu versión de la app — no adjunta logs ni datos de tu equipo.
+    </div>
+    <button id="feedbackSendBtn" onclick="sendFeedback()" style="width:100%">Enviar idea</button>
   </div>
 </div>
 <div class="prefs-overlay" id="aboutOverlay" onclick="if(event.target===this)closeAbout()">
@@ -3979,6 +4004,32 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     btn.textContent = 'Enviar reporte';
   }
 
+  function openFeedback() { $('#feedbackOverlay').classList.add('open'); }
+  function closeFeedback() { $('#feedbackOverlay').classList.remove('open'); }
+
+  async function sendFeedback() {
+    if (!window.msApp) return;
+    const btn = $('#feedbackSendBtn');
+    const desc = $('#feedbackDesc').value.trim();
+    if (!desc) { toast('Escribí algo primero', true); return; }
+    btn.disabled = true;
+    btn.textContent = 'Enviando…';
+    try {
+      const r = await window.msApp.sendFeedback(desc);
+      if (r.ok) {
+        toast('✓ Idea enviada — gracias');
+        $('#feedbackDesc').value = '';
+        closeFeedback();
+      } else {
+        toast(r.error || 'No se pudo enviar', true);
+      }
+    } catch (e) {
+      toast(e.message, true);
+    }
+    btn.disabled = false;
+    btn.textContent = 'Enviar idea';
+  }
+
   async function loadLicenseInfo() {
     $('#licEmail').textContent = '…';
     const info = await window.msLicense?.getStatus().catch(() => window.msLicense?.getInfo());
@@ -4372,7 +4423,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     await window.msLicense?.release();
   }
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeAbout(); closeReport(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeAbout(); closeReport(); closeFeedback(); } });
 
   // Pestañas del sidebar: Conexiones y Chat son mutuamente excluyentes. Click en la
   // pestaña activa colapsa todo el sidebar (mismo gesto que el botón único de antes).
