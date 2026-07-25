@@ -1,4 +1,6 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Desarrollado por "BlacKraken Solutions"
+// Correo: nabaol.dev@gmail.com
+// Fecha: 2026-07-25
 // Fase 3 del refactor (docs/PLAN_REFACTOR_PANEL.md) — endpoints de estado/ajustes
 // generales del motor: /api/state, /api/config, /api/stream-key, /api/public-ip,
 // /api/audio, /api/viewers, /api/settings, /api/notify-test-*, /api/pick-folder.

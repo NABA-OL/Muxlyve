@@ -894,7 +894,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
             <div>
               <div>Comando !clip en el chat</div>
-              <div class="pref-desc">Mods y vos pueden escribir !clip para guardar un clip del buffer, sin salir del juego.</div>
+              <div class="pref-desc">Los mods y tú pueden escribir !clip para guardar un clip del buffer, sin salir del juego.</div>
             </div>
             <label class="sys-toggle">
               <input type="checkbox" id="chatCmdChk" onchange="toggleChatCommands()">
@@ -911,7 +911,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           </div>
           <div class="field" style="margin-top:1.3rem;padding-top:1.1rem;border-top:1px solid var(--border)">
             <label>Bots de Telegram <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
-            <div class="pref-desc" style="margin-bottom:.5rem">Creá un bot con @BotFather en Telegram, copiá el token, y el chat ID del canal o grupo donde querés el aviso.</div>
+            <div class="pref-desc" style="margin-bottom:.5rem">Crea un bot con @BotFather en Telegram, copia el token, y el chat ID del canal o grupo donde quieres enviar el aviso.</div>
             <div id="telegramBotsList"></div>
             <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
           </div>
@@ -929,7 +929,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div>Enviar una idea</div>
               <div class="pref-desc">¿Qué te gustaría ver en Muxlyve?</div>
             </div>
-            <button class="lic-manage-btn" onclick="openFeedback()">Feedback</button>
+            <button class="success-btn" onclick="openFeedback()">Feedback</button>
           </div>
         </div>
         <div class="prefs-panel" id="prefsLicenseBlock" data-panel="license">
@@ -1142,7 +1142,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <h2>Programar inicio</h2>
       <button class="prefs-close" onclick="closeScheduleModal()">✕</button>
     </div>
-    <p class="pref-desc" style="margin:0 0 .75rem">Cada destino puede tener su propia hora — marcalo y elegí cuándo se activa solo, igual que si le dieras al toggle a mano. Desmarcalo para cancelar su programación. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
+    <p class="pref-desc" style="margin:0 0 .75rem">Cada destino puede tener su propia hora — márcalo y elige cuándo se activa solo, igual que si le dieras al toggle a mano. Desmárcalo para cancelar su programación. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
     <div id="scheduleDestList" style="display:flex;flex-direction:column;gap:.65rem;margin-bottom:.75rem"></div>
     <button class="browse-btn" style="width:100%" onclick="confirmSchedule()">Programar</button>
   </div>

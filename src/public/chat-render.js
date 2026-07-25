@@ -30,8 +30,8 @@ function platformIconSvg(id, size, radius) {
     '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
 }
 
-// Insignia propia (no imitamos el ícono nativo de cada plataforma) para marcar "este
-// mensaje lo escribiste vos, el streamer" — chat.js ya calcula msg.isBroadcaster.
+// Insignia propia (no imitamos el ícono nativo de cada plataforma) para marcar que este
+// mensaje lo escribió el streamer — chat.js ya calcula msg.isBroadcaster.
 const BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
 const PIN_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
 

@@ -431,6 +431,10 @@
     border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
   .danger-btn:hover { background: rgba(248,81,73,.1); }
 
+  .success-btn { background: transparent; color: var(--accent-2); border: 1px solid var(--accent-2);
+    border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
+  .success-btn:hover { background: rgba(46,160,67,.1); }
+
   /* ── Chat unificado ── */
   .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
     gap: .3rem; padding-right: .2rem; }

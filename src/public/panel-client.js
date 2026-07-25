@@ -187,7 +187,7 @@
   // El toggle nunca se deshabilita, aunque no haya señal todavía — activarlo sin señal
   // solo "arma" la intención (localStorage, ver toggleRec/autoResumeRecorders); en cuanto
   // llegue la señal, arranca solo. Así no hace falta acordarse de prenderlo justo cuando
-  // conectás el software de streaming.
+  // conectas el software de streaming.
   function updateRecorder(state) {
     const rec = state.recorder || { active: false, duration: 60 };
     const toggle = $('#recToggle');
@@ -623,7 +623,7 @@
     if (!presets.length) {
       const empty = document.createElement('span');
       empty.className = 'preset-chips-empty';
-      empty.textContent = 'Sin perfiles guardados — activá los destinos que quieras y tocá "Guardar actual".';
+      empty.textContent = 'Sin perfiles guardados — activa los destinos que quieras y toca "Guardar actual".';
       chips.appendChild(empty);
       return;
     }
@@ -1647,7 +1647,7 @@
     if (!window.msApp) return;
     const btn = $('#feedbackSendBtn');
     const desc = $('#feedbackDesc').value.trim();
-    if (!desc) { toast('Escribí algo primero', true); return; }
+    if (!desc) { toast('Escribe algo primero', true); return; }
     btn.disabled = true;
     btn.textContent = 'Enviando…';
     try {
@@ -1846,7 +1846,7 @@
   // ── Programar inicio ──
   // Cada destino tiene su propia hora, independiente de los demás (ej. Kick a las 12:08,
   // Twitch a otra hora) — name -> { atMs, timerId }. Solo vive en esta sesión del panel
-  // (setTimeout en el navegador) — no persiste si cerrás la app entera antes de que
+  // (setTimeout en el navegador) — no persiste si cierras la app entera antes de que
   // llegue la hora.
   const scheduledEntries = {};
 
@@ -2167,7 +2167,7 @@
     if (msg.isBroadcaster) {
       const badge = document.createElement('span');
       badge.className = 'chat-icon';
-      badge.title = 'Vos (streamer)';
+      badge.title = 'Tú (streamer)';
       badge.innerHTML = BROADCASTER_BADGE_SVG;
       row.appendChild(badge);
     }

@@ -1,4 +1,6 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Desarrollado por "BlacKraken Solutions"
+// Correo: nabaol.dev@gmail.com
+// Fecha: 2026-07-25
 // Fase 3 del refactor (docs/PLAN_REFACTOR_PANEL.md) — buffer rodante, grabación completa,
 // clips y grabaciones guardadas: /api/record/*, /api/fullrecord/*, /api/clips*,
 // /api/recordings*. Ver contrato en src/routes/system.js.

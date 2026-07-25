@@ -158,7 +158,7 @@ export const tMap = {
   'Abrir en ventana aparte': { en: 'Open in separate window', fr: 'Ouvrir dans une fenêtre séparée', pt: 'Abrir em janela separada' },
   'Escribir en el chat': { en: 'Type in chat', fr: 'Écrire dans le chat', pt: 'Escrever no chat' },
   'Enviar a todas las plataformas': { en: 'Send to all platforms', fr: 'Envoyer sur toutes les plateformes', pt: 'Enviar para todas as plataformas' },
-  'Vos (streamer)': { en: 'You (streamer)', fr: 'Toi (streamer)', pt: 'Você (streamer)' },
+  'Tú (streamer)': { en: 'You (streamer)', fr: 'Toi (streamer)', pt: 'Você (streamer)' },
   'Fijar este mensaje en Twitch': { en: 'Pin this message on Twitch', fr: 'Épingler ce message sur Twitch', pt: 'Fixar esta mensagem na Twitch' },
   'Aplicando…': { en: 'Applying…', fr: 'Application…', pt: 'Aplicando…' },
   'Aplicar': { en: 'Apply', fr: 'Appliquer', pt: 'Aplicar' },

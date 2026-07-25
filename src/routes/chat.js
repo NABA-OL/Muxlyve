@@ -1,4 +1,6 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Desarrollado por "BlacKraken Solutions"
+// Correo: nabaol.dev@gmail.com
+// Fecha: 2026-07-25
 // Fase 3 del refactor (docs/PLAN_REFACTOR_PANEL.md) — endpoints de chat unificado:
 // /api/chat (SSE), /api/chat-mode, /api/chat-send, /api/chat-pin, /api/chat-unpin,
 // /api/chat-pinned. Ver contrato en src/routes/system.js.

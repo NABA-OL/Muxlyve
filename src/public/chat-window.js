@@ -121,7 +121,7 @@ function append(msg) {
   if (msg.isBroadcaster) {
     const badge = document.createElement('span');
     badge.className = 'chat-icon';
-    badge.title = 'Vos (streamer)';
+    badge.title = 'Tú (streamer)';
     badge.innerHTML = BROADCASTER_BADGE_SVG;
     row.appendChild(badge);
   }
