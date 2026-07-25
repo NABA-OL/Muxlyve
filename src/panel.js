@@ -5,18 +5,20 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { timingSafeEqual, createHash } from 'node:crypto';
-import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir, listOrphanRecordings, convertOrphanRecording, resolveClipsDir, resolveRecordingsDir } from './relays.js';
-import { ingestInfo, audioBus } from './monitor.js';
-import { chatBus, getHistory as getChatHistory } from './chat.js';
-import { getViewerCounts } from './viewers.js';
-import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend, unpinChatMessage as unpinChatMessageBackend, getChatPinned as getChatPinnedBackend } from './chatmod.js';
+import { isLive, relayInfo, uptimeSeconds, recorderInfo, fullRecordingInfo } from './relays.js';
+import { loadAll, isPlayable } from './destinations.js';
+import { ingestInfo } from './monitor.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
-import { loadSettings, saveSettings, isValidStreamKey, isValidDiscordWebhook, isValidTelegramBot, MAX_DISCORD_WEBHOOKS, MAX_TELEGRAM_BOTS } from './settings.js';
-import { testDiscordWebhook } from './notify.js';
-import { testTelegramBot } from './telegram.js';
-import { listPresets, savePreset, deletePreset, applyPresetToDestinations, deactivatePresetInDestinations, isPresetActive } from './presets.js';
+import * as systemRoutes from './routes/system.js';
+import * as chatRoutes from './routes/chat.js';
+import * as destinationsRoutes from './routes/destinations.js';
+import * as recordingRoutes from './routes/recording.js';
+
+// Fase 3 del refactor — cada módulo de src/routes/ atiende un dominio y devuelve
+// true/false según haya manejado la request. Orden sin significado especial (los paths
+// no se pisan entre módulos).
+const ROUTE_MODULES = [systemRoutes, chatRoutes, destinationsRoutes, recordingRoutes];
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
@@ -27,15 +29,35 @@ const TMAP_KEYS_BY_LENGTH = Object.keys(tMap).sort((a, b) => b.length - a.length
 // completar esa columna en todas las entradas de i18n.js, nada más se toca.
 const SUPPORTED_LANGS = ['en', 'fr', 'pt'];
 
+function computeEtag(content) {
+  return '"' + createHash('sha256').update(content).digest('hex').slice(0, 16) + '"';
+}
+
+// Fase 4.1 (docs/PLAN_REFACTOR_PANEL.md) — sin esto, translateHtml() repetía sus 201
+// split/join sobre ~180 KB en CADA request, siempre para el mismo resultado (el HTML/CSS/
+// JS servido es estático, solo cambia con el idioma). OJO: process.env.APP_LANG SÍ puede
+// cambiar en caliente sin reiniciar la app (ver ipcMain 'app:set-language' en
+// electron/main.js, que solo hace win.reload()) — por eso el cache está indexado por
+// idioma y no asume que sea fijo por proceso. Devuelve {content, etag} para que Fase 4.2
+// (ETag/Cache-Control de abajo) no tenga que volver a hashear lo que ya se tradujo.
+const translateCache = new Map(); // langKey -> Map(original -> {content, etag})
 function translateHtml(html) {
   const lang = process.env.APP_LANG;
-  if (!SUPPORTED_LANGS.includes(lang)) return html; // 'es', sin definir, o algo no soportado -> tal cual
+  const langKey = SUPPORTED_LANGS.includes(lang) ? lang : 'es'; // 'es' cubre indefinido u otros no soportados
+  let byContent = translateCache.get(langKey);
+  if (!byContent) { byContent = new Map(); translateCache.set(langKey, byContent); }
+  const cached = byContent.get(html);
+  if (cached) return cached;
   let translated = html;
-  for (const es of TMAP_KEYS_BY_LENGTH) {
-    const val = tMap[es][lang];
-    if (val) translated = translated.split(es).join(val);
+  if (langKey !== 'es') {
+    for (const es of TMAP_KEYS_BY_LENGTH) {
+      const val = tMap[es][langKey];
+      if (val) translated = translated.split(es).join(val);
+    }
   }
-  return translated;
+  const entry = { content: translated, etag: computeEtag(translated) };
+  byContent.set(html, entry);
+  return entry;
 }
 
 function t(text) {
@@ -46,20 +68,23 @@ function t(text) {
   return (tMap[text] && tMap[text][lang]) || text;
 }
 
-const MAX_NAME = 40;
-const MAX_URL = 500;
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
-// Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar.
-const FLV_JS = readFileSync(path.join(PUBLIC, 'flv.min.js'));
-const LOGO_SVG       = readFileSync(path.join(PUBLIC, 'logo-muxlyve.svg'));
-const LOGO_SVG_LIGHT = readFileSync(path.join(PUBLIC, 'logo-muxlyve-light.svg'));
-const ICON_SVG       = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
-const CONNECTIONS_SVG = readFileSync(path.join(PUBLIC, 'connections.svg'));
-const VIDEO_OFF_SVG   = readFileSync(path.join(PUBLIC, 'video-off.svg'));
-const CHAT_SVG        = readFileSync(path.join(PUBLIC, 'chat.svg'));
-const WEBHOOK_SVG     = readFileSync(path.join(PUBLIC, 'webhook.svg'));
+// Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar. Fase 4.2 — el
+// contenido no cambia en la vida del proceso, así que el ETag se calcula acá una sola vez
+// (no en cada request) y se sirve junto con el archivo, ver serveWithEtag() más abajo.
+function loadStaticAsset(relPath) {
+  const content = readFileSync(path.join(PUBLIC, relPath));
+  return { content, etag: computeEtag(content) };
+}
+const FLV_JS = loadStaticAsset('flv.min.js');
+const LOGO_SVG       = loadStaticAsset('logo-muxlyve.svg');
+const LOGO_SVG_LIGHT = loadStaticAsset('logo-muxlyve-light.svg');
+const ICON_SVG       = loadStaticAsset('icon-muxlyve.svg');
+const CONNECTIONS_SVG = loadStaticAsset('connections.svg');
+const VIDEO_OFF_SVG   = loadStaticAsset('video-off.svg');
+const CHAT_SVG        = loadStaticAsset('chat.svg');
+const WEBHOOK_SVG     = loadStaticAsset('webhook.svg');
 // Fase 1 del refactor (docs/PLAN_REFACTOR_PANEL.md) — CSS de PANEL_HTML sacado de un
 // <style> inline a archivo real. utf-8 explícito (no Buffer crudo como los SVG de
 // arriba) porque este pasa por translateHtml() al servirse, que opera sobre string.
@@ -81,6 +106,25 @@ function json(res, code, data) {
   const body = JSON.stringify(data);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
+}
+
+// Fase 4.2 (docs/PLAN_REFACTOR_PANEL.md) — sirve un asset estático (SVG, flv.min.js, o el
+// resultado de translateHtml()) con ETag + Cache-Control: no-cache. "no-cache" no es "no
+// guardar" — es "guardar pero revalidar siempre con el server", que es justo lo que
+// queremos: el navegador manda If-None-Match en cada carga y recibe 304 sin body si el
+// contenido no cambió, en vez de re-descargarlo entero cada vez. No usamos max-age: el
+// idioma puede cambiar en caliente (ver comentario de translateCache arriba), así que el
+// contenido de un mismo path puede variar entre una carga y la siguiente sin recargar la
+// app — necesitamos que el navegador SIEMPRE pregunte, solo evitar mandar el body si nada
+// cambió.
+function serveWithEtag(req, res, contentType, item) {
+  if (req.headers['if-none-match'] === item.etag) {
+    res.writeHead(304, { ETag: item.etag });
+    res.end();
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': contentType, ETag: item.etag, 'Cache-Control': 'no-cache' });
+  res.end(item.content);
 }
 
 // Estado que ve el panel: emisión activa, uptime y cada destino con su estado/métricas.
@@ -133,87 +177,15 @@ function readBody(req) {
   });
 }
 
-// Valida la entrada del panel en el límite de confianza antes de tocar el archivo o ffmpeg.
-function validateDestination(input) {
-  const name = typeof input.name === 'string' ? input.name.trim() : '';
-  const url = typeof input.url === 'string' ? input.url.trim() : '';
-  const enabled = Boolean(input.enabled);
-  if (!name) return { error: t('El nombre es obligatorio.') };
-  if (name.length > MAX_NAME) return { error: t('Nombre máximo ') + MAX_NAME + t(' caracteres.') };
-  if (url.length > MAX_URL) return { error: t('URL máxima ') + MAX_URL + t(' caracteres.') };
-  // Solo exigimos URL válida si se quiere habilitar (TikTok puede quedar deshabilitado con placeholder).
-  if (enabled && !isValidUrl(url)) {
-    return { error: t('Para activar, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.') };
-  }
-  // Bitrate máximo opcional — vacío/0/inválido = sin cap, el destino sigue en -c copy
-  // (ver relays.js). No se valida un rango: si el usuario pone algo absurdo, el propio
-  // FFmpeg lo va a rechazar o el resultado se va a ver mal, no rompe nada de la app.
-  const maxBitrateRaw = Number(input.maxBitrate);
-  const maxBitrate = Number.isFinite(maxBitrateRaw) && maxBitrateRaw > 0 ? Math.round(maxBitrateRaw) : null;
-  return { dest: { name, url, enabled, maxBitrate } };
-}
-
-let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
-const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
-
-async function fetchPublicIp() {
-  if (publicIpCache && Date.now() - publicIpCache.at < PUBLIC_IP_TTL_MS) return publicIpCache.ip;
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 4000);
-  try {
-    const r = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
-    const { ip } = await r.json();
-    publicIpCache = { ip, at: Date.now() };
-    return ip;
-  } catch {
-    return publicIpCache?.ip || null; // sirve la última conocida si el servicio falla
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function handleApi(req, res, url) {
-  // GET /api/state
-  if (req.method === 'GET' && url.pathname === '/api/state') {
-    return json(res, 200, buildState());
-  }
-
-  // GET /api/public-ip -> IP pública (para exponer el ingest fuera de la red local vía port forwarding)
-  if (req.method === 'GET' && url.pathname === '/api/public-ip') {
-    const ip = await fetchPublicIp();
-    return json(res, 200, { ip });
-  }
-
-  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
-  if (req.method === 'GET' && url.pathname === '/api/audio') {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
-    audioBus.on('level', onLevel);
-    req.on('close', () => audioBus.off('level', onLevel));
-    return;
-  }
-
-  // GET /api/chat -> SSE: mensajes de chat unificados (Twitch por ahora).
-  if (req.method === 'GET' && url.pathname === '/api/chat') {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    for (const msg of getChatHistory()) res.write(`data: ${JSON.stringify(msg)}\n\n`);
-    const onMessage = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
-    chatBus.on('message', onMessage);
-    req.on('close', () => chatBus.off('message', onMessage));
-    return;
-  }
-
-  // GET /api/debug-log -> SSE de debugBus (ver DEBUG_LOG_ROUTES arriba) — PANEL_HTML lo
+// handleApi() recorre los módulos de src/routes/ en orden hasta que uno atienda la
+// request (devuelve true) — cada uno resuelve un dominio (system/chat/destinations/
+// recording). ctx trae lo que cada módulo necesita del servidor sin acoplarlos entre sí.
+async function handleApi(req, res, url, config) {
+  // GET /api/debug-log -> SSE de debugBus (ver DEBUG_LOG_ROUTES más abajo) — PANEL_HTML lo
   // vuelca a console.log/error para verlo en DevTools, ya que este proceso Node no
-  // comparte consola con el renderer de Electron.
+  // comparte consola con el renderer de Electron. Se queda en panel.js (no en
+  // src/routes/) junto con el resto de la infraestructura de debug-log — ver Fase 3 de
+  // docs/PLAN_REFACTOR_PANEL.md.
   if (req.method === 'GET' && url.pathname === '/api/debug-log') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -226,464 +198,10 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  // GET /api/viewers -> { twitch: {count, live}, kick: {...} } — último valor sondeado
-  // por electron/oauth.js. Lo consultan tanto el panel principal como el popout de chat.
-  if (req.method === 'GET' && url.pathname === '/api/viewers') {
-    return json(res, 200, getViewerCounts());
+  const ctx = { config, json, readBody, t, buildState, debugLog };
+  for (const mod of ROUTE_MODULES) {
+    if (await mod.handle(req, res, url, ctx)) return;
   }
-
-  // POST /api/chat-mode -> modo lento / solo emotes (solo Twitch, ver src/chatmod.js).
-  // Por HTTP y no IPC para que el popout de chat también lo pueda usar (no tiene preload).
-  if (req.method === 'POST' && url.pathname === '/api/chat-mode') {
-    const body = await readBody(req);
-    const result = await applyChatModeBackend({
-      emoteOnly: !!body.emoteOnly,
-      subscriberOnly: !!body.subscriberOnly,
-      slowSeconds: Number(body.slowSeconds) || 0,
-    });
-    return json(res, 200, result);
-  }
-
-  // POST /api/chat-send -> publica un mensaje como el streamer en Twitch + Kick (chatmod.js).
-  if (req.method === 'POST' && url.pathname === '/api/chat-send') {
-    const body = await readBody(req);
-    const text = String(body.text || '').trim().slice(0, 500);
-    if (!text) return json(res, 400, { error: t('Mensaje vacío.') });
-    const result = await sendChatMessageBackend(text);
-    return json(res, 200, result);
-  }
-
-  // POST /api/chat-pin -> fija un mensaje (solo Twitch, ver src/chatmod.js).
-  if (req.method === 'POST' && url.pathname === '/api/chat-pin') {
-    const body = await readBody(req);
-    const messageId = String(body.messageId || '').trim();
-    if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
-    const result = await pinChatMessageBackend(messageId);
-    return json(res, 200, result);
-  }
-
-  // POST /api/chat-unpin -> desfija (solo Twitch, ver src/chatmod.js).
-  if (req.method === 'POST' && url.pathname === '/api/chat-unpin') {
-    const body = await readBody(req);
-    const messageId = String(body.messageId || '').trim();
-    if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
-    const result = await unpinChatMessageBackend(messageId);
-    return json(res, 200, result);
-  }
-
-  // GET /api/chat-pinned -> id del mensaje fijado ahora mismo en Twitch (o null si no hay
-  // ninguno) — para que el botón arranque sincronizado con el estado real, no a ciegas.
-  if (req.method === 'GET' && url.pathname === '/api/chat-pinned') {
-    const result = await getChatPinnedBackend();
-    return json(res, 200, result);
-  }
-
-  // POST /api/settings  { chatCommandsEnabled?, discordWebhooks?, telegramBots?,
-  // liveMessage? } -> ajustes sueltos del motor que no encajan en ningún endpoint más
-  // específico. YAGNI — si sigue creciendo, ahí sí vale la pena generalizar esto.
-  if (req.method === 'POST' && url.pathname === '/api/settings') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const patch = {};
-    if ('chatCommandsEnabled' in input) patch.chatCommandsEnabled = !!input.chatCommandsEnabled;
-    if ('discordWebhooks' in input) {
-      const list = Array.isArray(input.discordWebhooks) ? input.discordWebhooks : [];
-      if (list.length > MAX_DISCORD_WEBHOOKS) {
-        return json(res, 400, { error: t(`Máximo ${MAX_DISCORD_WEBHOOKS} webhooks de Discord.`) });
-      }
-      const cleaned = list.map((u) => (typeof u === 'string' ? u.trim() : '')).filter(Boolean);
-      if (cleaned.some((u) => !isValidDiscordWebhook(u))) {
-        return json(res, 400, { error: t('Una de las URLs de Discord no es válida — debe ser https://discord.com/api/webhooks/...') });
-      }
-      patch.discordWebhooks = cleaned;
-    }
-    if ('telegramBots' in input) {
-      const list = Array.isArray(input.telegramBots) ? input.telegramBots : [];
-      if (list.length > MAX_TELEGRAM_BOTS) {
-        return json(res, 400, { error: t(`Máximo ${MAX_TELEGRAM_BOTS} bots de Telegram.`) });
-      }
-      const cleaned = list
-        .map((b) => ({ botToken: String(b?.botToken || '').trim(), chatId: String(b?.chatId || '').trim() }))
-        .filter((b) => b.botToken || b.chatId);
-      if (cleaned.some((b) => !isValidTelegramBot(b))) {
-        return json(res, 400, { error: t('Uno de los bots de Telegram tiene el token o el chat ID inválido.') });
-      }
-      patch.telegramBots = cleaned;
-    }
-    if ('liveMessage' in input) {
-      const msg = typeof input.liveMessage === 'string' ? input.liveMessage.trim() : '';
-      if (msg.length > 2000) return json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') });
-      patch.liveMessage = msg || null;
-    }
-    saveSettings(patch);
-    return json(res, 200, { ok: true });
-  }
-
-  // POST /api/notify-test-discord  { url } -> prueba UN webhook puntual, sin necesidad
-  // de haberlo guardado antes (así se puede probar antes de confirmar). Ignora el
-  // cooldown de 30 min (ver src/notify.js) — botón "Probar" de cada fila.
-  if (req.method === 'POST' && url.pathname === '/api/notify-test-discord') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const result = await testDiscordWebhook(input.url);
-    return json(res, 200, result);
-  }
-
-  // POST /api/notify-test-telegram  { botToken, chatId } -> mismo criterio, para un bot
-  // de Telegram puntual.
-  if (req.method === 'POST' && url.pathname === '/api/notify-test-telegram') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const result = await testTelegramBot(input.botToken, input.chatId);
-    return json(res, 200, result);
-  }
-
-  // POST /api/notify-test-all -> dispara el mensaje de aviso YA GUARDADO a TODOS los
-  // canales configurados (Discord + Telegram) de una — botón "Probar" del modal de
-  // mensaje (previsualiza cómo va a quedar en cada uno, no uno a la vez).
-  if (req.method === 'POST' && url.pathname === '/api/notify-test-all') {
-    const settings = loadSettings();
-    const results = [];
-    for (let i = 0; i < settings.discordWebhooks.length; i++) {
-      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i])) });
-    }
-    for (let i = 0; i < settings.telegramBots.length; i++) {
-      const bot = settings.telegramBots[i];
-      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId)) });
-    }
-    return json(res, 200, { results });
-  }
-
-  // GET /api/presets -> perfiles guardados + si cada uno está activo AHORA MISMO (todos
-  // sus destinos con enabled=true, ver isPresetActive en presets.js). El campo `active`
-  // viaja calculado desde acá para que un consumidor externo (plugin de Stream Deck, ver
-  // docs/STREAMDECK_PLUGIN.md) no tenga que pedir /api/state aparte solo para saber en
-  // qué estado pintar su botón.
-  if (req.method === 'GET' && url.pathname === '/api/presets') {
-    const destinations = loadAll();
-    const presets = listPresets().map((p) => ({ ...p, active: isPresetActive(destinations, p) }));
-    return json(res, 200, { presets });
-  }
-
-  // POST /api/presets  { name } -> guarda el estado enabled ACTUAL de todos los destinos
-  // bajo ese nombre. Si el nombre ya existe, lo pisa.
-  if (req.method === 'POST' && url.pathname === '/api/presets') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    try {
-      const presets = savePreset(input.name, loadAll());
-      return json(res, 200, { presets });
-    } catch (err) {
-      return json(res, 400, { error: err.message });
-    }
-  }
-
-  // POST /api/presets/apply  { name } -> aplica: cada destino queda enabled según esté o
-  // no en el preset. Mismo camino que el toggle por destino (saveAll + applyChange), para
-  // no duplicar la lógica de arranque/parada de relays.
-  if (req.method === 'POST' && url.pathname === '/api/presets/apply') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const preset = listPresets().find((p) => p.name === input.name);
-    if (!preset) return json(res, 404, { error: t('Perfil no encontrado.') });
-    const next = applyPresetToDestinations(loadAll(), preset);
-    saveAll(next);
-    next.forEach(applyChange);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/presets/deactivate  { name } -> apaga SOLO los destinos que ese perfil
-  // prende, sin tocar el resto (a diferencia de /apply, que es un intercambio total).
-  // Pensado para el botón de "Perfil" del plugin de Stream Deck — un botón físico con un
-  // solo estado ON/OFF necesita un "apagar esto puntual" que no pise otros destinos que
-  // el usuario haya prendido a mano. Ver docs/STREAMDECK_PLUGIN.md.
-  if (req.method === 'POST' && url.pathname === '/api/presets/deactivate') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const preset = listPresets().find((p) => p.name === input.name);
-    if (!preset) return json(res, 404, { error: t('Perfil no encontrado.') });
-    const next = deactivatePresetInDestinations(loadAll(), preset);
-    saveAll(next);
-    next.forEach(applyChange);
-    return json(res, 200, buildState());
-  }
-
-  // DELETE /api/presets?name=X -> borra un perfil guardado.
-  if (req.method === 'DELETE' && url.pathname === '/api/presets') {
-    const name = url.searchParams.get('name');
-    if (!name) return json(res, 400, { error: t('Falta el parámetro name.') });
-    const presets = deletePreset(name);
-    return json(res, 200, { presets });
-  }
-
-  // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
-  if (req.method === 'POST' && url.pathname === '/api/destinations') {
-    let input;
-    try { input = await readBody(req); }
-    catch (err) {
-      debugLog('error', `POST /api/destinations -> 400 leyendo el body: ${err.message}`);
-      return json(res, 400, { error: err.message });
-    }
-    debugLog('log', `POST /api/destinations body recibido: ${JSON.stringify(input)}`);
-    const { error, dest } = validateDestination(input);
-    if (error) {
-      debugLog('error', `POST /api/destinations -> 400 validateDestination: ${error}`);
-      return json(res, 400, { error });
-    }
-
-    const list = loadAll();
-    const idx = list.findIndex((d) => d.name === dest.name);
-    const next = idx >= 0
-      ? list.map((d, i) => (i === idx ? { ...d, url: dest.url, enabled: dest.enabled, maxBitrate: dest.maxBitrate } : d))
-      : [...list, dest];
-    saveAll(next);
-    applyChange(dest); // arranca/para el relay en caliente si hay emisión
-    debugLog('log', `POST /api/destinations -> 200, "${dest.name}" enabled=${dest.enabled}`);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/retry?name=X  -> reintento manual de un destino 'failed'
-  if (req.method === 'POST' && url.pathname === '/api/retry') {
-    const name = url.searchParams.get('name');
-    const dest = loadAll().find((d) => d.name === name);
-    if (!dest) return json(res, 404, { error: t('Destino no encontrado.') });
-    retry(dest);
-    return json(res, 200, buildState());
-  }
-
-  // DELETE /api/destinations?name=X
-  if (req.method === 'DELETE' && url.pathname === '/api/destinations') {
-    const name = url.searchParams.get('name');
-    if (!name) return json(res, 400, { error: t('Falta el parámetro name.') });
-    stopByName(name);
-    saveAll(loadAll().filter((d) => d.name !== name));
-    return json(res, 200, buildState());
-  }
-
-  // Duraciones del buffer rodante: 1/5/10/15 min. Ver src/relays.js — la nota sobre
-  // tmpdir()/tmpfs en Linux (RAM en vez de disco) aplica sobre todo al tope de 15 min.
-  const REC_DURATIONS = [60, 300, 600, 900];
-
-  // POST /api/record/start  { duration?: 60|300|600|900 } — sin duration, usa la última
-  // configurada (recorderInfo().duration): así un cliente que no conoce la preferencia
-  // del usuario (ej. el plugin de Stream Deck) prende el buffer con la misma duración
-  // que ya está seleccionada en Preferencias, sin tener que replicar ese ajuste aparte.
-  // Sin señal todavía: no rechaza con 409 — "arma" el buffer (queda guardado, server-side,
-  // no en el cliente) para que arranque solo apenas OBS conecte (ver onPublish en
-  // relays.js). Mismo comportamiento sea el panel o el plugin de Stream Deck quien llame.
-  if (req.method === 'POST' && url.pathname === '/api/record/start') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
-    armRecording(true, dur);
-    if (isLive()) startRecording(dur);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/record/stop — siempre desarma también (si no, la próxima vez que llegue
-  // señal volvería a arrancar solo, aunque el usuario lo haya apagado a propósito).
-  if (req.method === 'POST' && url.pathname === '/api/record/stop') {
-    stopRecording();
-    armRecording(false);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/record/duration  { duration } — persiste SOLO la duración elegida (sin
-  // armar ni reiniciar un buffer activo). Se llama apenas cambia la selección en
-  // Preferencias, para que quede lista para el próximo arranque automático sin depender
-  // de un des/re-armado manual — ver setRecDuration() en relays.js.
-  if (req.method === 'POST' && url.pathname === '/api/record/duration') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!REC_DURATIONS.includes(Number(input.duration))) return json(res, 400, { error: 'Duración inválida.' });
-    setRecDuration(Number(input.duration));
-    return json(res, 200, { ok: true });
-  }
-
-  // POST /api/record/save  { duration?: 60|300|600|900, outputDir?: string } — sin duration,
-  // usa la del buffer activo (recorderInfo().duration), mismo criterio que /api/record/start.
-  if (req.method === 'POST' && url.pathname === '/api/record/save') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
-    const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
-    // Log SIEMPRE (no gateado por ALLOW_LAN_PANEL como debugLog): a diferencia de
-    // /api/state (poll cada 2s), esto solo dispara con un click explícito de "guardar
-    // clip" — sirve para diagnosticar desde la consola si la request del Stream Deck
-    // realmente llega, con qué body, y qué resultado da, sin depender de tener LAN
-    // habilitada ni de que la ruta esté en DEBUG_LOG_ROUTES.
-    console.log(`[record/save] request desde ${req.socket.remoteAddress} — duration=${input.duration ?? '(no enviado, usa ' + dur + ')'} outputDir=${outputDir ?? '(default)'}`);
-    try {
-      const filePath = await saveClip(dur, outputDir);
-      console.log(`[record/save] OK — ${filePath}`);
-      return json(res, 200, { ok: true, path: filePath });
-    } catch (err) {
-      console.error(`[record/save] FALLÓ — ${err.message}`);
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/fullrecord/start  { outputDir? } — grabación completa (archivo único con
-  // toda la transmisión), independiente del buffer rodante de arriba. Ver relays.js.
-  // Mismo criterio que /api/record/start: sin señal, queda "armada" en vez de rechazar.
-  if (req.method === 'POST' && url.pathname === '/api/fullrecord/start') {
-    let input;
-    try { input = await readBody(req); } catch { input = {}; }
-    const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
-    armFullRecording(true);
-    if (isLive()) startFullRecording(outputDir);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/fullrecord/stop
-  if (req.method === 'POST' && url.pathname === '/api/fullrecord/stop') {
-    stopFullRecording();
-    armFullRecording(false);
-    return json(res, 200, buildState());
-  }
-
-  // GET /api/pick-folder  → abre el selector nativo de carpetas (solo Electron)
-  if (req.method === 'GET' && url.pathname === '/api/pick-folder') {
-    try {
-      const { dialog, BrowserWindow } = await import('electron');
-      const win = BrowserWindow.getFocusedWindow();
-      const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de clips' });
-      return json(res, 200, { path: result.canceled ? null : result.filePaths[0] });
-    } catch {
-      return json(res, 501, { error: t('Selector solo disponible en la app de escritorio.') });
-    }
-  }
-
-  // GET /api/clips?dir=  → últimos clips guardados en el folder configurado (o el
-  // default si no hay uno elegido) — mismo folder que usa /api/record/save.
-  if (req.method === 'GET' && url.pathname === '/api/clips') {
-    const outputDir = url.searchParams.get('dir') || null;
-    try {
-      const { dir, files, total } = listRecentClips(outputDir);
-      return json(res, 200, { dir, files, total });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // DELETE /api/clips  { path, outputDir? } — borra un clip guardado. deleteClip()
-  // valida que el path esté DENTRO de la carpeta de clips antes de borrar.
-  if (req.method === 'DELETE' && url.pathname === '/api/clips') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
-    try {
-      deleteClip(input.path, input.outputDir || null);
-      return json(res, 200, { ok: true });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/clips/set-dir  { dir } — persiste la carpeta de destino de clips
-  // (settings.json, ver setClipsDir en relays.js). Antes esto solo vivía en localStorage
-  // del panel — el plugin de Stream Deck no tiene acceso a eso, así que sus saves
-  // siempre caían en la carpeta default aunque el usuario hubiera elegido otra acá.
-  if (req.method === 'POST' && url.pathname === '/api/clips/set-dir') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    setClipsDir(typeof input.dir === 'string' ? input.dir : null);
-    return json(res, 200, { ok: true });
-  }
-
-  // GET /api/recordings?dir=  → últimas grabaciones completas (.mp4 ya remuxeadas),
-  // mismo criterio que /api/clips pero apuntando a resolveRecordingsDir().
-  if (req.method === 'GET' && url.pathname === '/api/recordings') {
-    const outputDir = url.searchParams.get('dir') || null;
-    try {
-      const { dir, files, total } = listRecentRecordings(outputDir);
-      return json(res, 200, { dir, files, total });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // DELETE /api/recordings  { path, outputDir? } — borra una grabación completa. Mismo
-  // guard de seguridad que DELETE /api/clips (path debe estar dentro del folder).
-  if (req.method === 'DELETE' && url.pathname === '/api/recordings') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
-    try {
-      deleteRecording(input.path, input.outputDir || null);
-      return json(res, 200, { ok: true });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/recordings/set-dir  { dir } — mismo criterio que /api/clips/set-dir.
-  if (req.method === 'POST' && url.pathname === '/api/recordings/set-dir') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    setRecordingsDir(typeof input.dir === 'string' ? input.dir : null);
-    return json(res, 200, { ok: true });
-  }
-
-  // GET /api/recordings/orphans?dir=  → .ts que quedaron sin remuxear a .mp4 (crash,
-  // cierre forzado de la app, o falla del remux automático). Ver listOrphanRecordings().
-  if (req.method === 'GET' && url.pathname === '/api/recordings/orphans') {
-    const outputDir = url.searchParams.get('dir') || null;
-    try {
-      const { dir, files } = listOrphanRecordings(outputDir);
-      return json(res, 200, { dir, files });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/recordings/convert  { path, outputDir? } — remuxea un .ts huérfano a .mp4
-  // a pedido del usuario. Mismo guard de seguridad que DELETE /api/recordings.
-  if (req.method === 'POST' && url.pathname === '/api/recordings/convert') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
-    try {
-      const mp4Path = await convertOrphanRecording(input.path, input.outputDir || null);
-      return json(res, 200, { ok: true, path: mp4Path });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/clips/open  { path, reveal? }  → abre una carpeta, o revela un archivo
-  // puntual en el explorador nativo (solo Electron).
-  // CN-003: a diferencia de deleteClip/deleteRecording/convertOrphanRecording, este era
-  // el único endpoint de archivos sin containment check — shell.openPath() en un path
-  // arbitrario ABRE (y para un ejecutable, corre) lo que sea. Acepta: la carpeta de clips
-  // o grabaciones exacta (para "abrir carpeta"), o un archivo DENTRO de alguna de las dos
-  // (para "revelar clip puntual") — nada fuera de esas dos carpetas.
-  if (req.method === 'POST' && url.pathname === '/api/clips/open') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: 'Falta path.' });
-    const resolved = path.resolve(input.path);
-    const clipsDir = path.resolve(resolveClipsDir(input.outputDir));
-    const recordingsDir = path.resolve(resolveRecordingsDir(input.outputDir));
-    const isAllowedDir = resolved === clipsDir || resolved === recordingsDir;
-    const isAllowedFile = path.dirname(resolved) === clipsDir || path.dirname(resolved) === recordingsDir;
-    if (!isAllowedDir && !isAllowedFile) {
-      return json(res, 400, { error: t('Ruta fuera de la carpeta de clips.') });
-    }
-    try {
-      const { shell } = await import('electron');
-      if (input.reveal) {
-        shell.showItemInFolder(resolved);
-      } else {
-        const err = await shell.openPath(resolved);
-        if (err) return json(res, 500, { error: err });
-      }
-      return json(res, 200, { ok: true });
-    } catch {
-      return json(res, 501, { error: t('Selector solo disponible en la app de escritorio.') });
-    }
-  }
-
   return json(res, 404, { error: t('No encontrado.') });
 }
 
@@ -795,100 +313,40 @@ export function startPanel(port, config = {}) {
             : 'ruta en el allowlist público, no se exige token';
         debugLogSmart(dbgKey, false, `AUTH OMITIDO ${dbgId} — ${why}`);
       }
-      // Config del ingest (URL/clave/preview) — streamKey/flvUrl se recalculan de
-      // settings.json en cada pedido (no vienen del snapshot de arranque) para que un
-      // cambio de clave desde el panel se vea sin reiniciar la app.
-      if (req.method === 'GET' && url.pathname === '/api/config') {
-        const settings = loadSettings();
-        return json(res, 200, {
-          rtmpUrl: config.rtmpUrl || '',
-          lanRtmpUrl: config.lanRtmpUrl || '',
-          lanIp: config.lanIp || null,
-          rtmpPort: config.rtmpPort || null,
-          streamKey: settings.streamKey,
-          flvUrl: config.httpPort ? `http://localhost:${config.httpPort}/live/${settings.streamKey}.flv` : '',
-          version: config.version || '0.0.0',
-          panelToken: process.env.ALLOW_LAN_PANEL === 'true' ? getOrCreatePanelToken() : null,
-          chatCommandsEnabled: settings.chatCommandsEnabled,
-          discordWebhooks: settings.discordWebhooks,
-          telegramBots: settings.telegramBots,
-          liveMessage: settings.liveMessage || '',
-        });
-      }
-
-      // POST /api/stream-key { streamKey } — cambia la clave de retransmisión. El valor
-      // por defecto (env STREAM_KEY o "mistream") no se toca hasta que el usuario la
-      // edite acá — ver settings.js.
-      if (req.method === 'POST' && url.pathname === '/api/stream-key') {
-        let input;
-        try { input = await readBody(req); } catch (err) { return json(res, 400, { error: err.message }); }
-        const streamKey = typeof input.streamKey === 'string' ? input.streamKey.trim() : '';
-        if (!isValidStreamKey(streamKey)) {
-          return json(res, 400, { error: t('La clave debe tener 3-64 caracteres: letras, números, guion o guion bajo.') });
-        }
-        saveSettings({ streamKey });
-        return json(res, 200, { ok: true, streamKey });
-      }
-      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-      if (url.pathname === '/flv.min.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-        return res.end(FLV_JS);
-      }
+      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url, config);
+      if (url.pathname === '/flv.min.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', FLV_JS);
       if (url.pathname === '/panel.css') {
-        res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
         // Por translateHtml() igual que el HTML — hoy este CSS no tiene texto traducible
         // (solo glifos decorativos ▸/▾ en content:), pero si algún día se le agrega algo
         // visible, ya queda cubierto sin acordarse de este archivo aparte.
-        return res.end(translateHtml(PANEL_CSS));
+        return serveWithEtag(req, res, 'text/css; charset=utf-8', translateHtml(PANEL_CSS));
       }
       if (url.pathname === '/chat-window.css' || url.pathname === '/chat-overlay.css') {
-        res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
-        return res.end(translateHtml(url.pathname === '/chat-window.css' ? CHAT_WINDOW_CSS : CHAT_OVERLAY_CSS));
+        return serveWithEtag(req, res, 'text/css; charset=utf-8', translateHtml(url.pathname === '/chat-window.css' ? CHAT_WINDOW_CSS : CHAT_OVERLAY_CSS));
       }
-      if (url.pathname === '/chat-window.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-        return res.end(translateHtml(CHAT_WINDOW_JS));
-      }
-      if (url.pathname === '/panel-client.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-        return res.end(translateHtml(PANEL_CLIENT_JS));
-      }
-      if (url.pathname === '/chat-render.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-        return res.end(translateHtml(CHAT_RENDER_JS));
-      }
+      if (url.pathname === '/chat-window.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_WINDOW_JS));
+      if (url.pathname === '/panel-client.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(PANEL_CLIENT_JS));
+      if (url.pathname === '/chat-render.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_RENDER_JS));
       if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/logo-muxlyve-light.svg' || url.pathname === '/icon-muxlyve.svg') {
-        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        if (url.pathname === '/icon-muxlyve.svg') return res.end(ICON_SVG);
-        return res.end(url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
+        if (url.pathname === '/icon-muxlyve.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', ICON_SVG);
+        return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
       }
       if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg' || url.pathname === '/chat.svg' || url.pathname === '/webhook.svg') {
-        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        if (url.pathname === '/connections.svg') return res.end(CONNECTIONS_SVG);
-        if (url.pathname === '/video-off.svg') return res.end(VIDEO_OFF_SVG);
-        if (url.pathname === '/webhook.svg') return res.end(WEBHOOK_SVG);
-        return res.end(CHAT_SVG);
+        if (url.pathname === '/connections.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', CONNECTIONS_SVG);
+        if (url.pathname === '/video-off.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', VIDEO_OFF_SVG);
+        if (url.pathname === '/webhook.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', WEBHOOK_SVG);
+        return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', CHAT_SVG);
       }
-      if (url.pathname === '/' || url.pathname === '/index.html') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml(PANEL_HTML));
-      }
-      if (url.pathname === '/chat-window') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml(CHAT_WINDOW_HTML));
-      }
+      if (url.pathname === '/' || url.pathname === '/index.html') return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml(PANEL_HTML));
+      if (url.pathname === '/chat-window') return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml(CHAT_WINDOW_HTML));
       // Fuente de navegador para OBS — mismo feed SSE que /chat-window, sin chrome de
       // ventana (estrellas, header, menú de moderación, caja de envío): solo mensajes,
       // fondo transparente para componer directo sobre la escena.
-      if (url.pathname === '/chat-overlay') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml(CHAT_OVERLAY_HTML));
-      }
+      if (url.pathname === '/chat-overlay') return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml(CHAT_OVERLAY_HTML));
       // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
       // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
       if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>'));
+        return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>'));
       }
       res.writeHead(404).end('No encontrado');
     } catch (err) {
