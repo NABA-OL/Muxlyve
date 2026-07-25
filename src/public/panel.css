@@ -311,6 +311,14 @@
   .vu-fill { display: block; height: 100%; width: 0%;
     background: linear-gradient(90deg, #2ea043 0%, #2ea043 65%, #d29922 82%, #f85149 100%);
     border-radius: 4px; transition: width 80ms linear; }
+  /* Más chico que .eye-btn (30px): la barra de ingest mide ~33px de alto, uno de 30 la
+     llenaría entera. Se pinta con el acento cuando está sonando, para que se note de una
+     que el audio está abierto. */
+  .mon-btn { background: var(--bg); color: var(--muted); border: none; border-radius: 6px;
+    width: 24px; height: 24px; padding: 0; flex-shrink: 0; display: flex;
+    align-items: center; justify-content: center; cursor: pointer; transition: color .15s; }
+  .mon-btn:hover { color: var(--text); }
+  .mon-btn.on { color: var(--accent); }
 
   /* ── Grabador de clips ── */
   .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
@@ -638,6 +646,10 @@
   /* .conn en el wrapper del submenú no alcanza a los .field (quedan 2 niveles más abajo,
      dentro de .pb-body-inner) — el gap real va acá, donde sí son hijos directos. */
   .pb-subblock.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; padding: .5rem .1rem .15rem; }
+  /* Los bloques de la pestaña Conexión RTMP (#rtmpPanel) ya no son .pb-subblock — son
+     tarjetas sueltas — pero siguen necesitando el mismo gap entre campos, que .conn no
+     alcanza a darles por la misma razón de arriba. Padding no: el de .pb-block va bien. */
+  .conn.pb-block.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; }
   .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
   .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
     max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

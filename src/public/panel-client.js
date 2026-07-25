@@ -517,13 +517,6 @@
     localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
   }
 
-  function toggleConnInfo() {
-    const block = $('#connInfoBlock');
-    const isOpen = block.classList.toggle('open');
-    localStorage.setItem('ms_pb_conninfo', isOpen ? '1' : '0');
-  }
-  if (localStorage.getItem('ms_pb_conninfo') === '0') $('#connInfoBlock').classList.remove('open');
-
   function showAddPlatformRtmp(pid) {
     pbAddOpen[pid] = true;
     const form = $('#pb-add-form-' + pid);
@@ -706,10 +699,9 @@
   }
   function openChatConnInfo() {
     $('#overlayInfoDd').classList.remove('open');
-    // "Información de conexión" vive en el sidebar de Conexiones, no en este tab de
-    // chat — hay que cambiar de pestaña antes de abrir/scrollear o quedaría oculto.
-    if (activeSidebarTab !== 'conn') showSidebarTab('conn');
-    openSubBlock('connInfoBlock');
+    // La info de conexión tiene su propia pestaña (#rtmpPanel), no es este tab de chat —
+    // hay que cambiar de pestaña antes de abrir/scrollear o quedaría oculto.
+    if (activeSidebarTab !== 'rtmp') showSidebarTab('rtmp');
     openSubBlock('connChatBlock');
     $('#connChatBlock').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -853,6 +845,28 @@
   // o detrás de otra app en Windows) — si no, el preview queda congelado en el
   // frame de cuando se ocultó y al volver parece un delay real de transmisión,
   // cuando en realidad el relay real (procesos FFmpeg aparte) nunca se detuvo.
+  // Monitoreo de audio del preview. El <video> ya recibe el audio del FLV — solo nace
+  // con muted. El estado vive en el propio elemento (no en una variable aparte): así
+  // sobrevive a que se destruya y recree el player de flv.js al ocultar/mostrar la
+  // ventana, sin tener que re-aplicarlo a mano.
+  const VOL_OFF_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+  const VOL_ON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+
+  function updateMonBtn() {
+    const btn = $('#monBtn');
+    if (!btn) return;
+    const on = !$('#player').muted;
+    btn.innerHTML = on ? VOL_ON_SVG : VOL_OFF_SVG;
+    btn.classList.toggle('on', on);
+    btn.title = on ? 'Silenciar la transmisión' : 'Escuchar la transmisión';
+  }
+
+  function togglePreviewAudio() {
+    const video = $('#player');
+    video.muted = !video.muted;
+    updateMonBtn();
+  }
+
   function updatePreview(live) {
     const ph = $('#videoPh');
     const shouldPlay = live && !document.hidden;
@@ -862,7 +876,14 @@
       player = flvjs.createPlayer({ type: 'flv', url: flvUrl, isLive: true });
       player.attachMediaElement(video);
       player.load();
-      player.play().catch(() => {});
+      player.play().catch(() => {
+        // Reproducir con sonido puede estar bloqueado por la política de autoplay (pasa
+        // en un navegador común, no en Electron). Sin esto el preview quedaría en negro
+        // sin explicación: se vuelve a mudo — que siempre está permitido — y se reintenta.
+        video.muted = true;
+        updateMonBtn();
+        if (player) player.play().catch(() => {});
+      });
       ph.style.display = 'none';
     } else if (!shouldPlay) {
       if (player) { player.destroy(); player = null; }
@@ -2075,9 +2096,11 @@
       col.classList.remove('collapsed');
       $('#connPanel').style.display = tab === 'conn' ? '' : 'none';
       $('#chatPanel').style.display = tab === 'chat' ? '' : 'none';
+      $('#rtmpPanel').style.display = tab === 'rtmp' ? '' : 'none';
     }
     $('#connBtn').classList.toggle('panel-open', activeSidebarTab === 'conn');
     $('#chatBtn').classList.toggle('panel-open', activeSidebarTab === 'chat');
+    $('#rtmpBtn').classList.toggle('panel-open', activeSidebarTab === 'rtmp');
   }
 
   function openChatWindow() {
@@ -2233,6 +2256,7 @@
 
   if (window.msApp) { window.msApp.isPackaged().then(v => { window._isPackaged = v; }).catch(() => {}); }
 
+  updateMonBtn(); // pinta el ícono de audio inicial (mudo) — ver togglePreviewAudio()
   loadConfig();
   refresh();
   loadAuthStatus();

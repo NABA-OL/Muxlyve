@@ -422,6 +422,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
       <span class="icon-mask icon-connections"></span>
     </button>
+    <!-- Conserva el ícono que ya tenía este bloque cuando era un colapsable más dentro
+         del panel de Conexiones — ahora es su propia pestaña, ver #rtmpPanel. -->
+    <button class="sidebar-toggle-btn" id="rtmpBtn" onclick="showSidebarTab('rtmp')" title="Conexión RTMP">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+        <line x1="6" y1="6" x2="6.01" y2="6"/>
+        <line x1="6" y1="18" x2="6.01" y2="18"/>
+      </svg>
+    </button>
   </div>
   <div class="side-actions-bottom">
     <button class="sidebar-toggle-btn" id="updateBtn" style="display:none" onclick="openUpdaterModal()" title="Actualización disponible">
@@ -457,6 +467,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="vu-ch"><span class="vu-fill" id="vuL"></span></div>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
           </div>
+          <!-- Escuchar la transmisión. Arranca SIEMPRE silenciado (el <video> del preview
+               nace con muted): sin esto, abrir la app con los parlantes arriba y el
+               micrófono abierto es un acople directo. El estado no se recuerda entre
+               sesiones a propósito, por lo mismo. -->
+          <button class="mon-btn" id="monBtn" onclick="togglePreviewAudio()" title="Escuchar la transmisión"></button>
         </div>
         <!-- Grabador de clips -->
         <div class="rec-section">
@@ -575,99 +590,89 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </details>
       </div>
 
-      <!-- Movido acá desde debajo del preview (antes vivía en .main-col) — es
-           información de referencia, no hace falta que esté siempre a la vista. -->
-      <div class="pb-block open" id="connInfoBlock">
-        <div class="pb-head" onclick="toggleConnInfo()">
+    </div>
+
+    <!-- Pestaña propia (antes era un bloque colapsable más dentro de #connPanel, con su
+         propia caja envolvente). Al quedar sola, cada sub-bloque deja de ser .pb-subblock
+         y pasa a ser una tarjeta .pb-block normal, igual que las de plataforma. -->
+    <div class="sidebar-inner" id="rtmpPanel" style="display:none">
+      <div class="conn pb-block" id="connServerBlock">
+        <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
           <i class="pb-chevron">&#9654;</i>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
-            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-            <line x1="6" y1="6" x2="6.01" y2="6"/>
-            <line x1="6" y1="18" x2="6.01" y2="18"/>
-          </svg>
-          <span class="pb-head-name">Información de conexión</span>
+          <span class="pb-head-name">Conexión servidor de streaming</span>
         </div>
         <div class="pb-body"><div class="pb-body-inner">
-          <div class="conn pb-block pb-subblock" id="connServerBlock">
-            <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
-              <i class="pb-chevron">&#9654;</i>
-              <span class="pb-head-name">Conexión servidor de streaming</span>
-            </div>
-            <div class="pb-body"><div class="pb-body-inner">
-              <div class="field">
-                <label>Servidor RTMP (en tu software de streaming)</label>
-                <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-              </div>
-              <div class="field">
-                <label>Clave de retransmisión</label>
-                <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                <!-- "mistream" sigue siendo el default de siempre — esto solo entra en
-                     juego si el usuario decide cambiarla, ver POST /api/stream-key. -->
-                <details class="bitrate-collapse">
-                  <summary>Cambiar clave</summary>
-                  <div class="copyrow" style="margin-top:.4rem">
-                    <input type="text" id="streamKeyEditInput" placeholder="mistream">
-                    <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
-                  </div>
-                </details>
-              </div>
-              <div class="field" id="lanField" style="display:none">
-                <label>Desde otra máquina en tu red</label>
-                <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-              </div>
-              <div class="field" id="pubField" style="display:none">
-                <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-                <div class="copyrow">
-                  <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
-                  <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                  <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                </div>
-              </div>
-            </div></div>
+          <div class="field">
+            <label>Servidor RTMP (en tu software de streaming)</label>
+            <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
           </div>
-          <div class="conn pb-block pb-subblock" id="connChatBlock">
-            <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
-              <i class="pb-chevron">&#9654;</i>
-              <span class="pb-head-name">Conexión del chat</span>
-            </div>
-            <div class="pb-body"><div class="pb-body-inner">
-              <div class="field">
-                <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
-                <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+          <div class="field">
+            <label>Clave de retransmisión</label>
+            <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+            <!-- "mistream" sigue siendo el default de siempre — esto solo entra en
+                 juego si el usuario decide cambiarla, ver POST /api/stream-key. -->
+            <details class="bitrate-collapse">
+              <summary>Cambiar clave</summary>
+              <div class="copyrow" style="margin-top:.4rem">
+                <input type="text" id="streamKeyEditInput" placeholder="mistream">
+                <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
               </div>
-              <div class="field" id="chatLanField" style="display:none">
-                <label>Desde otra máquina en tu red</label>
-                <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-              </div>
-              <div class="field" id="chatPubField" style="display:none">
-                <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-                <div class="copyrow">
-                  <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
-                  <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                  <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                </div>
-              </div>
-            </div></div>
+            </details>
           </div>
-          <div class="conn pb-block pb-subblock" id="connStreamDeckBlock">
-            <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
-              <i class="pb-chevron">&#9654;</i>
-              <span class="pb-head-name">Conexión plugin Stream Deck</span>
-            </div>
-            <div class="pb-body"><div class="pb-body-inner">
-              <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
-              <div class="field" id="panelTokenField" style="display:none">
-                <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
-                <div class="copyrow">
-                  <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
-                  <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                  <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                </div>
-              </div>
-              <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
-            </div></div>
+          <div class="field" id="lanField" style="display:none">
+            <label>Desde otra máquina en tu red</label>
+            <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
           </div>
+          <div class="field" id="pubField" style="display:none">
+            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+            <div class="copyrow">
+              <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+              <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <div class="conn pb-block" id="connChatBlock">
+        <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
+          <i class="pb-chevron">&#9654;</i>
+          <span class="pb-head-name">Conexión del chat</span>
+        </div>
+        <div class="pb-body"><div class="pb-body-inner">
+          <div class="field">
+            <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
+            <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+          </div>
+          <div class="field" id="chatLanField" style="display:none">
+            <label>Desde otra máquina en tu red</label>
+            <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+          </div>
+          <div class="field" id="chatPubField" style="display:none">
+            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+            <div class="copyrow">
+              <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
+              <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <div class="conn pb-block" id="connStreamDeckBlock">
+        <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
+          <i class="pb-chevron">&#9654;</i>
+          <span class="pb-head-name">Conexión plugin Stream Deck</span>
+        </div>
+        <div class="pb-body"><div class="pb-body-inner">
+          <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
+          <div class="field" id="panelTokenField" style="display:none">
+            <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
+            <div class="copyrow">
+              <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
+              <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            </div>
+          </div>
+          <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
         </div></div>
       </div>
     </div>
@@ -705,7 +710,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               </svg>
             </button>
             <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Información de conexión" → "Conexión del chat".</div>
+              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Conexión RTMP" → "Conexión del chat".</div>
               <button class="browse-btn" style="width:100%" onclick="openChatConnInfo()">Ver información de conexión</button>
             </div>
           </div>
@@ -1213,7 +1218,7 @@ export const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       </svg>
     </button>
     <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → ícono "Conexiones" → "Información de conexión" → "Conexión del chat" para copiar la URL.</div>
+      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → "Conexión RTMP" → "Conexión del chat" para copiar la URL.</div>
     </div>
   </div>
   <div class="chat-win-controls">
