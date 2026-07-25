@@ -1,0 +1,672 @@
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
+    --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
+    --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
+    --header-h: 68px;
+    --side-bar-w: 56px;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  }
+  [data-theme="light"] {
+    --bg: #f0f2f5; --surface: #ffffff; --surface-2: #e8eaef; --border: #d0d4de;
+    --text: #1a1a2e; --muted: #5a6070; --accent: #7c5cff; --accent-2: #1a8a35;
+    --danger: #cc2222; --live: #1a8a35; --warn: #b07020; --off: #a8adb8;
+  }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  /* ── Header ── */
+  /* Grid de 3 columnas (no flex+space-between): logo | status | placeholder vacío.
+     Los dos extremos son 1fr — reparten el sobrante en partes iguales, así el status
+     del medio queda centrado de verdad sin importar cuánto mida el logo. Con solo 2
+     hijos y space-between, el status se va pegado al borde derecho (justo el bug que
+     apareció al sacar los botones que antes ocupaban esa 3ra columna). */
+  header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+    background: var(--surface); position: sticky; top: 0; z-index: 5;
+    height: var(--header-h); -webkit-app-region: drag; }
+  .logo-wrap { justify-self: start; }
+  .status { justify-self: center; }
+  header button, header a, header input { -webkit-app-region: no-drag; }
+  /* Barra de título fundida (hiddenInset en Mac deja los 3 botones a la izquierda;
+     titleBarOverlay en Windows deja los suyos a la derecha) — espacio para que no se
+     encimen con el logo o los botones propios de la app. El padding-right base (barra
+     lateral nueva) va aparte más abajo; en Windows los controles nativos ocupan más
+     ancho que la barra sola, así que esa regla más específica manda igual. */
+  body.platform-darwin header { padding-left: 96px; }
+  body.platform-win32 header { padding-right: 150px; }
+  /* Linux: sin traffic lights ni titleBarOverlay nativos — botones propios dibujados
+     acá, ocupan la 3ra columna del grid (antes un div vacío solo para centrar .status). */
+  .win-controls { display: none; justify-self: end; gap: .15rem; -webkit-app-region: no-drag; }
+  body.platform-linux .win-controls { display: flex; }
+  .win-controls button { background: transparent; color: var(--muted); border: none;
+    border-radius: 6px; width: 34px; height: 30px; padding: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .win-controls button:hover { background: rgba(128,128,128,.15); color: var(--text); }
+  .win-controls .win-close-btn:hover { background: #e5484d; color: #fff; }
+  /* Barra lateral fija a la derecha (ajustes/conexiones/chat) — el header y el
+     contenido principal dejan este ancho libre para que no quede nada debajo. */
+  header { padding-right: var(--side-bar-w); }
+  main { margin-right: var(--side-bar-w); }
+  .logo-wrap { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; text-decoration: none; }
+  .logo-icon { height: 32px; width: 32px; object-fit: contain; }
+  .wordmark { font-size: 1.1rem; font-weight: 700; letter-spacing: -.03em; cursor: default; user-select: none; color: var(--text); }
+  .wm-ve { color: var(--accent); }
+  .wm-li {
+    display: inline-block; overflow: hidden; max-width: 0; opacity: 0;
+    transition: max-width .7s cubic-bezier(.4,0,.2,1), opacity .55s var(--ease-out);
+    vertical-align: bottom;
+  }
+  .wm-li { color: var(--accent); }
+  .wm-li.show { max-width: 2.4ch; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .wm-li { transition: none; } }
+  .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); min-width: 0; }
+  .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); flex-shrink: 0; }
+  .stream-title-display { color: var(--text); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; min-width: 0; padding-left: .5rem; border-left: 1px solid var(--border); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
+    box-shadow: 0 0 0 0 transparent; transition: background .3s var(--ease-out), box-shadow .3s var(--ease-out); }
+  .dot.on {
+    background: var(--live);
+    box-shadow: 0 0 0 4px rgba(46,160,67,.18);
+    animation: live-pulse .5s var(--ease-out);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dot.on { animation: none; }
+  }
+  @keyframes live-pulse {
+    0%   { transform: scale(1); }
+    60%  { transform: scale(1.35); }
+    100% { transform: scale(1); }
+  }
+  /* Barra vertical fija a la derecha — reemplaza los 3 botones que antes vivían en el
+     header. Mismo color que la barra superior (surface), para que se vea como una sola
+     pieza de UI. El grupo de arriba arranca debajo de donde iría el botón de cerrar
+     nativo (--header-h) — en Windows ahí mismo dibuja sus controles el titleBarOverlay,
+     así que dejar ese espacio vacío evita que se encimen. Ajustes queda solo, pegado
+     a la esquina inferior. */
+  /* Arranca justo debajo del header (top: var(--header-h)), no en top:0 — así el header
+     queda de punta a punta arriba, sin que esta barra se le monte encima ni se crucen
+     bordes/z-index entre las dos. */
+  /* Sin borde ni esquina redondeada propia a propósito — mismo fondo que el header,
+     misma línea divisoria (el border-bottom del header sigue derecho por encima) para
+     que se vea como una sola pieza fundida, no como un panel aparte pegado al lado. */
+  .side-actions { position: fixed; top: var(--header-h); right: 0; bottom: 0; width: var(--side-bar-w);
+    background: var(--surface);
+    display: flex; flex-direction: column; align-items: center; z-index: 4;
+    -webkit-app-region: drag; }
+  .side-actions button { -webkit-app-region: no-drag; }
+  .side-actions-top { display: flex; flex-direction: column; gap: .35rem; padding-top: 1rem; }
+  .side-actions-bottom { margin-top: auto; padding-bottom: .85rem; }
+  /* Solo ícono, look tipo rail (WhatsApp Mac) — sin caja/borde por botón, un resaltado
+     redondeado sutil en hover/activo alcanza. */
+  .side-actions .sidebar-toggle-btn { background: transparent; border: none;
+    width: 38px; height: 38px; border-radius: 10px; color: var(--muted);
+    padding: 0; justify-content: center; position: relative; }
+  .side-actions .sidebar-toggle-btn:hover { background: var(--surface-2); color: var(--text); }
+  .side-actions .sidebar-toggle-btn.panel-open { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  /* Aviso no invasivo de actualización — ícono discreto arriba de Ajustes, solo visible
+     si hay versión nueva (ver openUpdaterModal/pendingUpdatePayload). Nada de modal al
+     abrir la app: el usuario decide cuándo verlo, con clic. */
+  #updateBtn { color: var(--accent); }
+  #updateBtn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  #updateBtn .upd-dot { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
+
+  /* ── Canvas fondo ── */
+  #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 0; opacity: .55; }
+  header, main, .prefs-overlay { position: relative; z-index: 1; }
+
+  /* ── Sidebar colapsable ── */
+  html, body { height: 100%; overflow: hidden; }
+  main { padding: 0; display: flex; height: calc(100vh - var(--header-h)); overflow: hidden; }
+  .main-col { flex: 1 1 0; min-width: 0; overflow-y: auto; padding: 1.25rem 1.5rem; }
+  .sidebar-col {
+    flex: 0 0 360px; width: 360px; min-width: 0;
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    transition: flex-basis .22s cubic-bezier(.4,0,.2,1), width .22s cubic-bezier(.4,0,.2,1);
+    overflow: hidden;
+  }
+  .sidebar-col.collapsed { flex-basis: 0; width: 0; }
+  .sidebar-inner { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 360px;
+    display: flex; flex-direction: column; gap: 1rem; }
+  /* Más aire que el gap base — acá cada hijo directo es un bloque grande y distinto
+     (acciones / plataformas / información de conexión), no como el chat que comparte
+     esta misma clase con elementos chicos que sí quedan bien con gap:1rem. */
+  #connPanel { gap: 1.75rem; }
+  .sidebar-toggle-btn {
+    background: transparent; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--muted); cursor: pointer; padding: .35rem .5rem;
+    display: flex; align-items: center; line-height: 1; font-weight: 400;
+    transition: color .15s, border-color .15s;
+  }
+  .sidebar-toggle-btn:hover { color: var(--text); border-color: var(--muted); }
+  .sidebar-toggle-btn.panel-open { border-color: var(--accent); color: var(--accent); }
+  /* SVG externo de un solo color (fill sólido, sin currentColor propio) pintado vía
+     máscara con background-color: currentColor — así hereda el color del botón (incluida
+     la transición de hover) igual que los íconos inline con stroke="currentColor". */
+  .icon-mask { display: inline-block; background-color: currentColor;
+    -webkit-mask-size: contain; mask-size: contain;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: center; mask-position: center; }
+  .icon-connections { width: 16px; height: 16px;
+    -webkit-mask-image: url(/connections.svg); mask-image: url(/connections.svg); }
+  .icon-chat { width: 16px; height: 16px;
+    -webkit-mask-image: url(/chat.svg); mask-image: url(/chat.svg); }
+  .icon-webhook { width: 16px; height: 16px;
+    -webkit-mask-image: url(/webhook.svg); mask-image: url(/webhook.svg); }
+
+  /* ── Toggle switch ── */
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch .thumb {
+    position: absolute; inset: 0; background: var(--off); border-radius: 12px;
+    cursor: pointer; transition: background .2s var(--ease-out);
+  }
+  .switch .thumb::before {
+    content: ''; position: absolute; width: 18px; height: 18px;
+    left: 3px; top: 3px; background: #fff; border-radius: 50%;
+    transition: transform .2s var(--ease-out);
+  }
+  .switch input:checked ~ .thumb { background: var(--accent); }
+  .switch input:checked ~ .thumb::before { transform: translateX(18px); }
+
+  /* ── Modal de Preferencias ── */
+  .prefs-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0);
+    z-index: 50;
+    align-items: center; justify-content: center;
+    backdrop-filter: blur(0px);
+    opacity: 0;
+    transition:
+      opacity 180ms var(--ease-out),
+      background 180ms var(--ease-out),
+      backdrop-filter 180ms var(--ease-out),
+      display 180ms allow-discrete;
+  }
+  .prefs-overlay.open {
+    display: flex;
+    opacity: 1;
+    background: rgba(0,0,0,.5);
+    backdrop-filter: blur(3px);
+    @starting-style {
+      opacity: 0;
+      background: rgba(0,0,0,0);
+      backdrop-filter: blur(0px);
+    }
+  }
+  .prefs-modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 1.5rem; width: 420px; max-width: 90vw;
+    max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 24px 64px rgba(0,0,0,.5);
+    transform: scale(.96);
+    opacity: 0;
+    transition: transform 180ms var(--ease-out), opacity 180ms var(--ease-out);
+  }
+  .prefs-overlay.open .prefs-modal {
+    transform: scale(1);
+    opacity: 1;
+  }
+  .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+  .prefs-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  .prefs-close { background: transparent; color: var(--muted); border: 1px solid transparent;
+    font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
+  .prefs-close:hover { color: var(--text); background: var(--surface-2); }
+  .prefs-modal-wide { width: 720px; }
+  .upd-progress-track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin: .25rem 0 .75rem; }
+  .upd-progress-fill { height: 100%; background: var(--accent); border-radius: 99px; width: 0%; transition: width 160ms linear; }
+  .upd-progress-text { font-size: .8rem; color: var(--muted); margin: 0 0 .75rem; }
+  .prefs-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+  .prefs-nav { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .prefs-nav-item { display: flex; align-items: center; gap: .55rem; width: 100%;
+    padding: .6rem .7rem; border-radius: 9px; background: transparent; border: none;
+    color: var(--muted); font-size: .85rem; font-weight: 600; text-align: left;
+    transition: background .15s var(--ease-out), color .15s var(--ease-out); }
+  .prefs-nav-item svg:first-child, .prefs-nav-item .icon-mask:first-child { flex-shrink: 0; }
+  .prefs-nav-item span:not(.icon-mask) { flex: 1; }
+  .prefs-nav-chevron { flex-shrink: 0; opacity: 0; transition: opacity .15s var(--ease-out); }
+  .prefs-nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .prefs-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+  .prefs-nav-item.active .prefs-nav-chevron { opacity: 1; }
+  /* Grid con todos los paneles apilados en la misma celda (1/1): el alto de la fila
+     queda fijado por el más alto de los 4 (Sistema, normalmente) aunque esté oculto —
+     visibility:hidden sigue contando para el layout, a diferencia de display:none. Así
+     el modal no salta de tamaño al cambiar de sección, solo cambia el contenido visible. */
+  .prefs-panels { flex: 1; min-width: 0; max-height: 60vh; overflow-y: auto; padding-right: .25rem;
+    display: grid; }
+  .prefs-panel { grid-area: 1 / 1; opacity: 0; visibility: hidden; pointer-events: none; }
+  .prefs-panel.active { opacity: 1; visibility: visible; pointer-events: auto;
+    animation: prefsPanelFade .18s var(--ease-out); }
+  @keyframes prefsPanelFade { from { opacity: 0; } to { opacity: 1; } }
+  .pref-row { display: flex; align-items: center; justify-content: space-between;
+    padding: .5rem 0; border-bottom: 1px solid var(--border); }
+  .pref-row:last-child { border-bottom: none; }
+  .pref-row label:first-child { font-size: .85rem; color: var(--text); }
+  .pref-row .pref-desc { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
+  .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+  .sys-toggle input { opacity: 0; width: 0; height: 0; }
+  .sys-toggle-track { position: absolute; inset: 0; background: var(--surface-2);
+    border-radius: 20px; border: 1px solid var(--border); transition: background .2s var(--ease-out); cursor: pointer; }
+  .sys-toggle input:checked + .sys-toggle-track { background: var(--accent); border-color: var(--accent); }
+  .sys-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #fff;
+    transition: transform .2s var(--ease-out); }
+  .sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(16px); }
+  .lang-opt-btn { padding: .3rem .65rem; font-size: .78rem; border-radius: 7px;
+    border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer;
+    transition: background .2s var(--ease-out), color .2s var(--ease-out), border-color .2s var(--ease-out); }
+  .lang-opt-btn:hover { color: var(--text); }
+  .lang-opt-btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ── Modal licencia ── */
+  .lic-modal { width: 380px; }
+  .lic-row { display: flex; flex-direction: column; gap: .3rem; margin-bottom: 1rem; }
+  .lic-label { font-size: .72rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+  .lic-value { font-size: .9rem; color: var(--text); font-family: ui-monospace, monospace; word-break: break-all; }
+  .lic-danger { margin-top: .5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .lic-status-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .lic-badge { font-size: .68rem; font-weight: 700; padding: .15rem .55rem; border-radius: 20px; text-transform: uppercase; letter-spacing: .06em; }
+  .lic-badge.active   { background: rgba(46,160,67,.15);  color: #3fb950; border: 1px solid rgba(46,160,67,.3); }
+  .lic-badge.cancelled{ background: rgba(210,153,34,.15); color: #d29922; border: 1px solid rgba(210,153,34,.3); }
+  .lic-badge.lifetime { background: rgba(124,92,255,.15); color: #7c5cff; border: 1px solid rgba(124,92,255,.3); }
+  .lic-manage-btn { width: 100%; padding: .45rem; background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; margin-bottom: .5rem; transition: background .15s; }
+  .lic-manage-btn:hover { background: var(--surface-2); }
+  .lic-danger-btn { width: 100%; padding: .5rem; background: transparent; border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; font-size: .85rem; cursor: pointer; transition: background .15s; }
+  .lic-danger-btn:hover { background: rgba(235,64,52,.12); }
+  .lic-note { font-size: .72rem; color: var(--muted); margin: .5rem 0 0; line-height: 1.4; }
+
+  /* ── Modal Acerca de ── */
+  .about-modal { width: 340px; text-align: center; }
+  .about-logo { font-size: 2rem; font-weight: 800; letter-spacing: -.03em;
+    background: linear-gradient(135deg, #7c5cff, #a78bfa); -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent; background-clip: text; margin: .5rem 0 .25rem; }
+  .about-version { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; }
+  .about-dev { font-size: .9rem; color: var(--text); margin-bottom: .25rem; }
+  .about-copy { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; line-height: 1.5; }
+  .about-link { font-size: .8rem; color: var(--accent); text-decoration: none; }
+  .about-link:hover { text-decoration: underline; }
+  .about-divider { height: 1px; background: var(--border); margin: 1rem 0; }
+  .about-btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
+  .about-close-btn { flex: 1; padding: .5rem; background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }
+  .about-close-btn:hover { background: var(--border); }
+
+  /* ── Barra de ingest: stats + VU meter ── */
+  .ingest-bar { display: flex; align-items: center; gap: .75rem; margin-top: .6rem;
+    padding: .5rem .65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+  .ingest-pill { font-size: .72rem; font-weight: 600; color: var(--muted); font-family: ui-monospace, monospace;
+    white-space: nowrap; letter-spacing: .02em; }
+  .vu { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+  .vu-ch { height: 7px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .vu-fill { display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, #2ea043 0%, #2ea043 65%, #d29922 82%, #f85149 100%);
+    border-radius: 4px; transition: width 80ms linear; }
+
+  /* ── Grabador de clips ── */
+  .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .rec-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .65rem; }
+  .rec-dur { display: flex; gap: .4rem; margin-bottom: .65rem; }
+  .rec-dur button { flex: 1; padding: .3rem .4rem; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--bg); color: var(--muted); font-size: .8rem; cursor: pointer; }
+  .rec-dur button.sel { border-color: var(--accent); color: var(--accent); background: rgba(124,92,255,.1); }
+  /* Perfiles de destinos — chips arriba de la lista, ver src/presets.js. */
+  /* Cabecera (etiqueta + botón guardar) en su propia línea, SIEMPRE — antes compartía
+     flex-row con los chips y el botón saltaba a donde hubiera hueco según cuántos chips
+     entraran, quedando en una posición distinta cada vez. Los chips van en su propio
+     bloque debajo, con su wrap propio, sin pelear layout con nada más. */
+  .preset-block { margin-bottom: .7rem; }
+  .preset-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .45rem; }
+  .preset-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  .preset-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .preset-chips-empty { font-size: .78rem; color: var(--muted); font-style: italic; }
+  .preset-chip { display: flex; align-items: center; gap: .35rem; padding: .3rem .55rem; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: .78rem;
+    cursor: pointer; transition: border-color .15s, color .15s; max-width: 100%; }
+  .preset-chip span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preset-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .preset-chip.active { border-color: var(--accent); background: rgba(124,92,255,.14); color: var(--accent); }
+  .preset-chip .preset-del { opacity: .5; padding: 0 1px; line-height: 1; flex-shrink: 0; }
+  .preset-chip .preset-del:hover { opacity: 1; color: var(--danger); }
+  .preset-save-btn { display: flex; align-items: center; gap: .3rem; padding: .3rem .6rem; border-radius: 7px;
+    border: 1px dashed var(--border); background: transparent; color: var(--muted); font-size: .78rem;
+    cursor: pointer; flex-shrink: 0; }
+  .preset-save-btn:hover { color: var(--text); border-color: var(--accent); }
+  /* Filas de webhooks de Discord / bots de Telegram (Preferencias → Webhooks), ver
+     renderDiscordWebhooks()/renderTelegramBots() en el script del panel. */
+  .webhook-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .5rem; }
+  .webhook-row input[type="text"] { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: .78rem; }
+  /* Telegram necesita token Y chat ID juntos para ser válido — el token solo, guardado
+     apenas se sale del campo, siempre rechaza (falta el chat ID) y por el error volvía a
+     pintar la fila con el valor viejo, borrando lo recién tecleado. El token ocupa su
+     propia línea completa para que el chat ID + los 3 botones entren cómodos debajo. */
+  .webhook-row-telegram .tg-token { flex: 1 1 100%; }
+  .webhook-save-btn, .webhook-test-btn { flex-shrink: 0; width: auto; padding: .35rem .7rem; font-size: .75rem; }
+  .webhook-del-btn { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
+    cursor: pointer; padding: .3rem .5rem; border-radius: 6px; transition: background .15s, color .15s; }
+  .webhook-del-btn:hover { background: rgba(229,72,77,.15); color: #e5484d; }
+  .rec-status { font-size: .78rem; color: var(--muted); margin-top: .5rem; min-height: 1.2em; }
+  .rec-status.on { color: var(--live); }
+  .rec-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+  .rec-toggle-label { font-size: .85rem; color: var(--text); font-weight: 600; }
+  .rec-toggle-row .rec-status { margin-top: .15rem; }
+  .recent-clips { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+  .recent-clips-head { font-size: .72rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: .5rem; }
+  .recent-clip-item { display: flex; align-items: center; gap: .55rem; padding: .4rem .5rem;
+    border-radius: 8px; cursor: pointer; transition: background .15s var(--ease-out); }
+  .recent-clip-item:hover { background: var(--surface-2); }
+  .recent-clip-item svg { flex-shrink: 0; color: var(--muted); }
+  .recent-clip-info { flex: 1; min-width: 0; }
+  .recent-clip-name { font-size: .8rem; color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .recent-clip-meta { font-size: .7rem; color: var(--muted); }
+  .recent-clip-del { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
+    width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; }
+  .recent-clip-del:hover { background: rgba(229,72,77,.15); color: #e5484d; }
+  .recent-clips-more { font-size: .72rem; color: var(--muted); text-align: center;
+    padding: .4rem .5rem 0; cursor: pointer; }
+  .recent-clips-more:hover { color: var(--text); }
+
+  /* ── Preview ── */
+  .preview { margin-bottom: 1rem; }
+  /* Registrada como <color> para que @keyframes la interpole en vez de saltar entre valores. */
+  @property --glow-video { syntax: '<color>'; inherits: false; initial-value: #7c5cff; }
+  .video-wrap { position: relative; background: #000;
+    border: 1px solid color-mix(in srgb, var(--glow-video) 45%, var(--border));
+    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9;
+    box-shadow:
+      0 8px 25px -8px color-mix(in srgb, var(--glow-video) 55%, transparent),
+      inset 0 0 16px -8px color-mix(in srgb, var(--glow-video) 50%, transparent);
+    animation: videoGlowOffline 4s ease-in-out infinite; }
+  /* Sin señal: rojo↔naranja, ciclo más corto (llama la atención). En vivo: morado↔azul de marca. */
+  @keyframes videoGlowOffline {
+    0%, 100% { --glow-video: #f85149; }
+    50% { --glow-video: #f0a23a; }
+  }
+  @keyframes videoGlowLive {
+    0%, 100% { --glow-video: #7c5cff; }
+    50% { --glow-video: #4da3ff; }
+  }
+  .video-wrap.live { animation: videoGlowLive 6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .video-wrap { animation: none; --glow-video: #f85149; }
+    .video-wrap.live { animation: none; --glow-video: #7c5cff; }
+  }
+  .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .video-ph { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .65rem;
+    align-items: center; justify-content: center; color: var(--muted); font-size: .88rem;
+    text-align: center; padding: 1rem; }
+  /* El fondo del preview es negro fijo (#000) sin importar el tema — el ícono va claro
+     siempre, no var(--muted)/var(--text) que cambian con tema claro/oscuro. */
+  .icon-video-off { width: 40px; height: 40px; background-color: #e6edf3;
+    -webkit-mask-image: url(/video-off.svg); mask-image: url(/video-off.svg);
+    animation: videoOffBlink 3s ease-in-out infinite; }
+  @keyframes videoOffBlink { 0%, 100% { opacity: .3; } 50% { opacity: .9; } }
+  @media (prefers-reduced-motion: reduce) {
+    .icon-video-off { animation: none; opacity: .6; }
+  }
+  .conn { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
+  .conn .field { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: .6rem .75rem; box-shadow: 0 1px 2px rgba(0,0,0,.15);
+    transition: border-color .15s var(--ease-out); }
+  .conn .field:hover { border-color: var(--muted); }
+  .copyrow { display: flex; gap: .4rem; align-items: center; }
+  .copyrow input[type="text"] { flex: 1; min-width: 0; }
+  .browse-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: .4rem .65rem; font-size: .85rem; flex-shrink: 0; cursor: pointer; }
+  .browse-btn:hover { filter: brightness(1.1); }
+  .danger-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger);
+    border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
+  .danger-btn:hover { background: rgba(248,81,73,.1); }
+
+  /* ── Chat unificado ── */
+  .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
+    gap: .3rem; padding-right: .2rem; }
+  .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
+  .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
+    color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s var(--ease-out);
+    padding: 0 2px; display: flex; align-items: center; }
+  .chat-row:hover .chat-pin-btn { opacity: 1; }
+  .chat-pin-btn:hover { color: var(--accent); }
+  .chat-pin-btn:disabled { opacity: .4; cursor: default; }
+  .chat-pin-btn.pinned { opacity: 1; color: var(--accent); }
+  .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
+  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
+  .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
+  .chat-panel { display: flex; flex-direction: column; height: 100%; }
+  .chat-panel-head { display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0; margin-bottom: .1rem; }
+  .chat-panel-title { font-weight: 600; font-size: .95rem; }
+  .chat-popout-btn { background: var(--surface-2); color: var(--muted); border: none;
+    border-radius: 6px; width: 28px; height: 28px; padding: 0; flex-shrink: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .chat-popout-btn:hover { color: var(--text); }
+  .chat-menu-wrap { position: relative; flex-shrink: 0; }
+  .chat-menu-dd { position: absolute; top: 34px; right: 0; z-index: 20; display: none;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: .65rem; width: 210px; box-shadow: 0 12px 28px rgba(0,0,0,.35); }
+  .chat-menu-dd.open { display: block; }
+  .chat-menu-dd .cmd-note { font-size: .68rem; color: var(--muted); margin-bottom: .5rem; line-height: 1.3; }
+  .chat-menu-dd .cmd-row { display: flex; align-items: center; justify-content: space-between; padding: .3rem 0; }
+  .chat-menu-dd .cmd-label { font-size: .8rem; }
+  .chat-menu-dd input[type=number] { width: 55px; }
+  .chat-box.chat-box-full { flex: 1; min-height: 0; max-height: none; }
+  .chat-send-row { display: flex; gap: .4rem; padding-top: .5rem; flex-shrink: 0; }
+  .chat-send-row input { flex: 1; min-width: 0; }
+  .viewer-bar { display: flex; gap: .7rem; flex-wrap: wrap; padding-top: .5rem;
+    margin-top: .3rem; border-top: 1px solid var(--border); font-size: .75rem; color: var(--muted); }
+  .viewer-bar .vb-item { display: flex; align-items: center; gap: .3rem; }
+  .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
+    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
+    font-size: .75rem; border: none; border-radius: 6px; cursor: pointer; }
+  .conn button:hover { color: var(--text); }
+
+  /* ── Campos ocultables (claves de stream, IP pública) ── */
+  .eyerow { display: flex; gap: .4rem; align-items: center; }
+  .eyerow input { flex: 1; }
+  .eye-btn, .copy-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
+    width: 30px; height: 30px; padding: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; }
+  .eye-btn:hover, .copy-btn:hover { color: var(--text); }
+
+  /* ── Destination cards ── */
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.1rem 1.2rem; }
+  .card.tiktok { border-color: var(--accent); }
+  /* flex-wrap: la sidebar es angosta — nombre + píldora + métricas + sparkline no siempre
+     caben en una sola línea, que baje a la siguiente en vez de desbordar la tarjeta. */
+  .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin-bottom: .8rem; }
+  .card-head .name { font-weight: 600; font-size: 1rem; flex: 1; }
+  .pill { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px;
+    background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .pill.live { background: rgba(46,160,67,.15); color: var(--live); }
+  .pill.reconnecting { background: rgba(240,162,58,.15); color: var(--warn); }
+  .pill.failed { background: rgba(248,81,73,.15); color: var(--danger); }
+  .pill.lagging { background: rgba(240,162,58,.15); color: var(--warn); }
+  .pill.on { background: rgba(46,160,67,.15); color: var(--live); }
+  .pill.off { background: rgba(248,81,73,.15); color: var(--danger); }
+  /* Gráfico de salud de red por destino — sparkline de bitrate reciente (ver
+     trackMetricsHistory/sparklineSvg()). margin-left:auto la empuja al borde derecho
+     de .card-head aunque no haya un elemento flex:1 hermano (caso de .pb-rtmp). */
+  svg.spark { flex-shrink: 0; opacity: .9; margin-right: .5rem; }
+  .card-head svg.spark { margin-left: auto; }
+  .spark-slot { flex-shrink: 0; }
+  /* Mismo lugar que el sparkline (pb-head-name tiene flex:1 y lo empuja a la derecha
+     igual) — aparece en vez del gráfico mientras no hay datos de transmisión todavía. */
+  .sched-time-badge { font-size: .72rem; color: var(--muted); margin-right: .5rem; white-space: nowrap; }
+  .metrics { font-size: .72rem; color: var(--muted); margin-left: auto;
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .retry { background: var(--danger); color: #fff; }
+  label { display: block; font-size: .75rem; color: var(--muted); margin: 0 0 .25rem; }
+  input[type=text], input[type=password], input[type=number], input[type=datetime-local] { width: 100%; background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: .5rem .65rem; font-size: .88rem;
+    font-family: ui-monospace, monospace; }
+  input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, input[type=datetime-local]:focus { outline: none; border-color: var(--accent); }
+  /* El selector de calendario/reloj nativo de datetime-local no hereda color de texto —
+     el ícono queda negro sobre fondo oscuro si no se invierte a mano (solo en tema oscuro). */
+  input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
+  [data-theme="light"] input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: none; }
+  /* Los navegadores agregan un ícono nativo de mostrar/ocultar en type=password — ya
+     tenemos nuestro propio .eye-btn al lado, el nativo duplica y no matchea el tema. */
+  input[type=password]::-ms-reveal, input[type=password]::-ms-clear { display: none; }
+  input[type=password]::-webkit-credentials-auto-fill-button,
+  input[type=password]::-webkit-textfield-decoration-container { display: none !important; }
+  .row { display: flex; gap: .6rem; align-items: flex-end; margin-top: .75rem; }
+  .row .field { flex: 1; }
+  button { cursor: pointer; border: none; border-radius: 8px; padding: .5rem .85rem;
+    font-size: .85rem; font-weight: 600; transition: .15s; }
+  button:active { transform: translateY(1px); }
+  .toggle { min-width: 100px; background: var(--off); color: var(--text); }
+  .toggle.on { background: var(--accent-2); }
+  .auto-note { font-size: .72rem; color: var(--muted); margin-top: .45rem; }
+  .save { background: var(--accent); color: #fff; }
+  .del { background: transparent; color: var(--danger); border: 1px solid var(--border); }
+  .note { font-size: .78rem; color: var(--muted); margin-top: .6rem; }
+
+  /* ── Add form ── */
+  .add summary { list-style: none; cursor: pointer; }
+  .add summary::-webkit-details-marker { display: none; }
+  .add-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem 1.2rem; margin-top: .5rem; }
+  /* Ajuste avanzado, no una acción principal — colapsado y discreto a propósito, para
+     que solo haga ruido si el usuario lo abre a buscarlo. */
+  .bitrate-collapse { margin-top: .75rem; }
+  .bitrate-collapse summary { list-style: none; cursor: pointer; font-size: .78rem;
+    color: var(--muted); }
+  .bitrate-collapse summary::-webkit-details-marker { display: none; }
+  .bitrate-collapse summary:hover { color: var(--text); }
+  .bitrate-collapse summary::before { content: '▸ '; }
+  .bitrate-collapse[open] summary::before { content: '▾ '; }
+  .bitrate-collapse input[type=number] { margin-top: .4rem; }
+
+  /* ── Toast ── */
+  #msg { position: fixed; bottom: 1rem; left: 50%;
+    transform: translateX(-50%) translateY(6px);
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    padding: .6rem 1rem; border-radius: 8px; opacity: 0;
+    transition: opacity .3s var(--ease-out), transform .3s var(--ease-out); pointer-events: none;
+    white-space: nowrap; z-index: 10; }
+  #msg.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #msg.err { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Cuentas OAuth ── */
+  #authSection { border-top: 1px solid var(--border); padding-top: .85rem; margin-top: .85rem; }
+  .auth-hd { font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .08em; margin-bottom: .55rem; }
+  .auth-row { display: flex; align-items: center; gap: .45rem; padding: .38rem 0;
+    border-bottom: 1px solid var(--border); }
+  .auth-row:last-child { border-bottom: none; }
+  .p-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .auth-name { flex: 1; font-size: .82rem; }
+  .auth-user { font-size: .72rem; color: var(--muted); font-family: ui-monospace,monospace;
+    max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .auth-soon { font-size: .68rem; color: var(--off); font-style: italic; }
+  .auth-conn { font-size: .7rem; padding: .18rem .5rem; }
+  .auth-disc { font-size: .68rem; padding: .14rem .38rem;
+    background: transparent; border-color: var(--border); color: var(--muted); }
+  .auth-disc:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Platform blocks ── */
+  /* flex-shrink:0 a propósito — .pb-block vive como hijo directo de contenedores flex
+     (#connPanel es flex column). overflow:hidden hace que flexbox trate su min-height
+     automático como 0 en vez de "el que pida el contenido" (así lo define la spec),
+     así que sin esto un pb-block con contenido anidado grande (ej. Información de
+     conexión con sus 3 sub-bloques) se encoge por debajo de su alto real y corta texto
+     sin avisar — ver overflow: hidden más abajo. */
+  .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; flex-shrink: 0; }
+  /* Glow por estado del toggle de reenvío (solo bloques con destino RTMP configurado) —
+     mismo patrón pulsante que .video-wrap (@property + @keyframes): verde si está
+     activada, rojo si está apagada. Sin URL configurada no se aplica pb-on/pb-off — el
+     bloque queda gris fijo, sin animar (ver stateClass en renderPlatforms()). */
+  @property --glow-pb { syntax: '<color>'; inherits: false; initial-value: #2ea043; }
+  .pb-block.pb-on, .pb-block.pb-off {
+    border-color: color-mix(in srgb, var(--glow-pb) 45%, var(--border));
+    box-shadow:
+      0 8px 25px -8px color-mix(in srgb, var(--glow-pb) 55%, transparent),
+      inset 0 0 16px -8px color-mix(in srgb, var(--glow-pb) 50%, transparent);
+    animation: pbGlowOn 5s ease-in-out infinite;
+  }
+  @keyframes pbGlowOn { 0%, 100% { --glow-pb: #2ea043; } 50% { --glow-pb: #56d364; } }
+  @keyframes pbGlowOff { 0%, 100% { --glow-pb: #f85149; } 50% { --glow-pb: #f0a23a; } }
+  .pb-block.pb-off { animation-name: pbGlowOff; }
+  @media (prefers-reduced-motion: reduce) {
+    .pb-block.pb-on { animation: none; --glow-pb: #2ea043; }
+    .pb-block.pb-off { animation: none; --glow-pb: #f85149; }
+  }
+  .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
+    cursor: pointer; user-select: none; background: var(--surface); transition: background .15s var(--ease-out); }
+  .pb-head:hover { background: var(--surface-2); }
+  .pb-chevron { color: var(--muted); transition: transform .2s var(--ease-out); flex-shrink: 0;
+    font-style: normal; font-size: .6rem; display: inline-block; }
+  .pb-block.open > .pb-head .pb-chevron { transform: rotate(90deg); }
+  .pb-body {
+    display: grid;
+    grid-template-rows: 0fr;
+    border-top: 0px solid var(--border);
+    transition: grid-template-rows .2s var(--ease-out), border-top-width .2s var(--ease-out);
+  }
+  .pb-block.open > .pb-body { grid-template-rows: 1fr; border-top-width: 1px; }
+  .pb-body-inner { overflow: hidden; padding: 0 .9rem; }
+  .pb-block.open > .pb-body > .pb-body-inner { padding: .65rem .9rem; }
+
+  /* Submenú anidado (ej. Conexión servidor / Conexión del chat dentro de Información de
+     conexión): plano, sin su propia tarjeta — evita el look "caja dentro de caja dentro
+     de caja" cuando ya está adentro de un .pb-block con borde. */
+  .pb-subblock { border: none; border-radius: 0; margin-bottom: 0; background: transparent; }
+  .pb-subblock + .pb-subblock { margin-top: .35rem; padding-top: .35rem; border-top: 1px solid var(--border); }
+  .pb-subblock > .pb-head { background: transparent; padding: .3rem .1rem; }
+  .pb-subblock > .pb-head:hover { background: transparent; }
+  .pb-subblock > .pb-head:hover .pb-head-name { color: var(--text); }
+  .pb-subblock.open > .pb-body { border-top-width: 0; }
+  /* .conn en el wrapper del submenú no alcanza a los .field (quedan 2 niveles más abajo,
+     dentro de .pb-body-inner) — el gap real va acá, donde sí son hijos directos. */
+  .pb-subblock.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; padding: .5rem .1rem .15rem; }
+  .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
+  .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
+    max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pb-soon-tag { font-size: .65rem; color: var(--off); font-style: italic; }
+  /* Plano a propósito — iba con su propia tarjeta (bg + borde) igual que .pb-block que
+     lo contiene, mismo look "caja dentro de caja" que ya se corrigió en Información de
+     conexión (.pb-subblock). Acá no hace falta ni ese nivel intermedio. */
+  .pb-rtmp { margin-bottom: .55rem; }
+  .pb-rtmp label { font-size: .7rem; }
+  .pb-rtmp input[type=text] { font-size: .82rem; padding: .38rem .5rem; }
+  .pb-rtmp .row { margin-top: .5rem; gap: .4rem; }
+  .pb-rtmp .save { padding: .38rem .6rem; font-size: .78rem; }
+  .pb-rtmp .del { padding: .38rem .6rem; font-size: .78rem; }
+  .pb-rtmp .auto-note { font-size: .68rem; }
+  .pb-add-rtmp-btn { background: transparent; border: 1px dashed var(--border); color: var(--muted);
+    width: 100%; padding: .38rem; font-size: .76rem; border-radius: 8px; font-weight: 400; }
+  .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pb-add-rtmp-form { margin-top: .45rem; }
+  /* Grilla 2x2 de acciones — antes 3 botones de ancho completo con texto, ocupaban mucho
+     alto en el sidebar. Solo ícono + title nativo como tooltip (mismo criterio que
+     .eye-btn de arriba, sin componente de tooltip propio). */
+  .stream-actions-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+  .stream-icon-btn { display: flex; align-items: center; justify-content: center;
+    padding: .65rem; border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent); transition: background .15s var(--ease-out), border-color .15s var(--ease-out); }
+  .stream-icon-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: var(--accent); }
+  .custom-add-card { display: flex; align-items: center; justify-content: center; gap: .5rem;
+    width: 100%; padding: .68rem .9rem; border-radius: 12px; margin-bottom: .5rem;
+    background: transparent; border: 1px dashed var(--border); color: var(--muted);
+    font-size: .88rem; font-weight: 600;
+    transition: border-color .15s var(--ease-out), color .15s var(--ease-out); }
+  .custom-add-card:hover { border-color: var(--accent); color: var(--accent); }
+  .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }
