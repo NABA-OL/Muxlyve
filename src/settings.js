@@ -31,11 +31,99 @@ export function isValidRecDuration(d) {
 
 const DEFAULT_SETTINGS = {
   streamKey: DEFAULT_STREAM_KEY, recArmed: false, fullRecArmed: false, recDuration: 60,
-  clipsDir: null, recordingsDir: null,
+  clipsDir: null, recordingsDir: null, chatCommandsEnabled: true, discordWebhooks: [],
+  telegramBots: [], liveMessage: null, destinationPresets: [],
 };
 
 function validDir(d) {
   return typeof d === 'string' && d.trim() ? d.trim() : null;
+}
+
+// Límite real de Discord para el campo `content` de un webhook (Telegram permite más,
+// 4096 — se usa el menor de los dos para no tener que truncar distinto por plataforma al
+// mandar el mismo mensaje a ambas). Se recorta acá (al guardar) para no descubrirlo recién
+// al streamear.
+const MAX_LIVE_MSG = 2000;
+function validLiveMessage(m) {
+  return typeof m === 'string' && m.trim() ? m.trim().slice(0, MAX_LIVE_MSG) : null;
+}
+
+// Validación estricta del webhook — https y host de Discord nada más. Vive acá (no en
+// notify.js, que la importa) para que la reutilicen tanto el guardado desde el panel
+// como el envío real, mismo criterio que isValidStreamKey de arriba. Se aplica al
+// GUARDAR (endpoint) y al USAR (notify.js), no al leer — ver validDiscordWebhooks abajo.
+export function isValidDiscordWebhook(url) {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  try {
+    const u = new URL(url.trim());
+    return u.protocol === 'https:' && (u.hostname === 'discord.com' || u.hostname === 'discordapp.com');
+  } catch {
+    return false;
+  }
+}
+
+// Hasta 3 de cada uno — un streamer con varios canales/servidores, no una lista sin
+// límite. Mismo tope para Discord y Telegram, por simetría, no hay motivo real para que
+// difieran.
+export const MAX_DISCORD_WEBHOOKS = 3;
+export const MAX_TELEGRAM_BOTS = 3;
+
+// Filtra + dedupea + recorta al tope. Entradas inválidas se descartan en silencio acá
+// (mismo criterio que validPresets) — la validación que SÍ rechaza con error al usuario
+// vive en el endpoint POST /api/settings, esta es la red de seguridad al leer del disco.
+function validDiscordWebhooks(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const url = typeof raw === 'string' ? raw.trim() : '';
+    if (!isValidDiscordWebhook(url) || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= MAX_DISCORD_WEBHOOKS) break;
+  }
+  return out;
+}
+
+// Token de bot de Telegram: "<bot_id numérico>:<35 chars alfanuméricos/guiones>" — forma
+// real de los tokens que da @BotFather. chatId puede ser un ID numérico (negativo para
+// grupos/canales) o "@usuario_del_canal" — no se valida el formato exacto, Telegram lo
+// rechaza solo si está mal, no vale la pena duplicar esa validación acá.
+const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{30,}$/;
+export function isValidTelegramBot(bot) {
+  if (!bot || typeof bot !== 'object') return false;
+  const token = typeof bot.botToken === 'string' ? bot.botToken.trim() : '';
+  const chatId = typeof bot.chatId === 'string' ? bot.chatId.trim() : '';
+  return TELEGRAM_TOKEN_RE.test(token) && chatId.length > 0;
+}
+
+function validTelegramBots(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    const bot = {
+      botToken: typeof raw.botToken === 'string' ? raw.botToken.trim() : '',
+      chatId: typeof raw.chatId === 'string' ? raw.chatId.trim() : '',
+    };
+    if (!isValidTelegramBot(bot)) continue;
+    out.push(bot);
+    if (out.length >= MAX_TELEGRAM_BOTS) break;
+  }
+  return out;
+}
+
+const MAX_PRESETS = 6;
+
+// Perfiles de destinos guardados por NOMBRE de destino (no índice — los destinos se
+// pueden borrar y reordenar). Cualquier entrada mal formada se descarta sin avisar: el
+// archivo lo puede haber editado el usuario a mano, nunca se confía en su forma.
+function validPresets(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((p) => p && typeof p.name === 'string' && p.name.trim() && Array.isArray(p.enabled))
+    .map((p) => ({ name: p.name.trim(), enabled: p.enabled.filter((n) => typeof n === 'string') }))
+    .slice(0, MAX_PRESETS);
 }
 
 // Si el usuario nunca la cambió, sigue siendo la de siempre (env var o "mistream") —
@@ -57,6 +145,18 @@ export function loadSettings() {
       recDuration: isValidRecDuration(data.recDuration) ? Number(data.recDuration) : 60,
       clipsDir: validDir(data.clipsDir),
       recordingsDir: validDir(data.recordingsDir),
+      chatCommandsEnabled: data.chatCommandsEnabled === undefined ? true : !!data.chatCommandsEnabled,
+      // Migración: discordWebhookUrl (versión anterior, un solo webhook) se suma a la
+      // lista si existe — así nadie pierde el que ya tenía configurado al pasar a la
+      // versión multi-webhook. discordMessage (nombre viejo) -> liveMessage (ahora
+      // compartido con Telegram, ya no es "solo de Discord").
+      discordWebhooks: validDiscordWebhooks([
+        ...(Array.isArray(data.discordWebhooks) ? data.discordWebhooks : []),
+        ...(typeof data.discordWebhookUrl === 'string' && data.discordWebhookUrl ? [data.discordWebhookUrl] : []),
+      ]),
+      telegramBots: validTelegramBots(data.telegramBots),
+      liveMessage: validLiveMessage(data.liveMessage ?? data.discordMessage),
+      destinationPresets: validPresets(data.destinationPresets),
     };
   } catch (err) {
     console.error('[config] No se pudo leer settings.json:', err.message);

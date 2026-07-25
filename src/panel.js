@@ -13,7 +13,10 @@ import { getViewerCounts } from './viewers.js';
 import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend, unpinChatMessage as unpinChatMessageBackend, getChatPinned as getChatPinnedBackend } from './chatmod.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
-import { loadSettings, saveSettings, isValidStreamKey } from './settings.js';
+import { loadSettings, saveSettings, isValidStreamKey, isValidDiscordWebhook, isValidTelegramBot, MAX_DISCORD_WEBHOOKS, MAX_TELEGRAM_BOTS } from './settings.js';
+import { testDiscordWebhook } from './notify.js';
+import { testTelegramBot } from './telegram.js';
+import { listPresets, savePreset, deletePreset, applyPresetToDestinations, deactivatePresetInDestinations, isPresetActive } from './presets.js';
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
@@ -56,6 +59,7 @@ const ICON_SVG       = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
 const CONNECTIONS_SVG = readFileSync(path.join(PUBLIC, 'connections.svg'));
 const VIDEO_OFF_SVG   = readFileSync(path.join(PUBLIC, 'video-off.svg'));
 const CHAT_SVG        = readFileSync(path.join(PUBLIC, 'chat.svg'));
+const WEBHOOK_SVG     = readFileSync(path.join(PUBLIC, 'webhook.svg'));
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -256,6 +260,144 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/chat-pinned') {
     const result = await getChatPinnedBackend();
     return json(res, 200, result);
+  }
+
+  // POST /api/settings  { chatCommandsEnabled?, discordWebhooks?, telegramBots?,
+  // liveMessage? } -> ajustes sueltos del motor que no encajan en ningún endpoint más
+  // específico. YAGNI — si sigue creciendo, ahí sí vale la pena generalizar esto.
+  if (req.method === 'POST' && url.pathname === '/api/settings') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const patch = {};
+    if ('chatCommandsEnabled' in input) patch.chatCommandsEnabled = !!input.chatCommandsEnabled;
+    if ('discordWebhooks' in input) {
+      const list = Array.isArray(input.discordWebhooks) ? input.discordWebhooks : [];
+      if (list.length > MAX_DISCORD_WEBHOOKS) {
+        return json(res, 400, { error: t(`Máximo ${MAX_DISCORD_WEBHOOKS} webhooks de Discord.`) });
+      }
+      const cleaned = list.map((u) => (typeof u === 'string' ? u.trim() : '')).filter(Boolean);
+      if (cleaned.some((u) => !isValidDiscordWebhook(u))) {
+        return json(res, 400, { error: t('Una de las URLs de Discord no es válida — debe ser https://discord.com/api/webhooks/...') });
+      }
+      patch.discordWebhooks = cleaned;
+    }
+    if ('telegramBots' in input) {
+      const list = Array.isArray(input.telegramBots) ? input.telegramBots : [];
+      if (list.length > MAX_TELEGRAM_BOTS) {
+        return json(res, 400, { error: t(`Máximo ${MAX_TELEGRAM_BOTS} bots de Telegram.`) });
+      }
+      const cleaned = list
+        .map((b) => ({ botToken: String(b?.botToken || '').trim(), chatId: String(b?.chatId || '').trim() }))
+        .filter((b) => b.botToken || b.chatId);
+      if (cleaned.some((b) => !isValidTelegramBot(b))) {
+        return json(res, 400, { error: t('Uno de los bots de Telegram tiene el token o el chat ID inválido.') });
+      }
+      patch.telegramBots = cleaned;
+    }
+    if ('liveMessage' in input) {
+      const msg = typeof input.liveMessage === 'string' ? input.liveMessage.trim() : '';
+      if (msg.length > 2000) return json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') });
+      patch.liveMessage = msg || null;
+    }
+    saveSettings(patch);
+    return json(res, 200, { ok: true });
+  }
+
+  // POST /api/notify-test-discord  { url } -> prueba UN webhook puntual, sin necesidad
+  // de haberlo guardado antes (así se puede probar antes de confirmar). Ignora el
+  // cooldown de 30 min (ver src/notify.js) — botón "Probar" de cada fila.
+  if (req.method === 'POST' && url.pathname === '/api/notify-test-discord') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const result = await testDiscordWebhook(input.url);
+    return json(res, 200, result);
+  }
+
+  // POST /api/notify-test-telegram  { botToken, chatId } -> mismo criterio, para un bot
+  // de Telegram puntual.
+  if (req.method === 'POST' && url.pathname === '/api/notify-test-telegram') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const result = await testTelegramBot(input.botToken, input.chatId);
+    return json(res, 200, result);
+  }
+
+  // POST /api/notify-test-all -> dispara el mensaje de aviso YA GUARDADO a TODOS los
+  // canales configurados (Discord + Telegram) de una — botón "Probar" del modal de
+  // mensaje (previsualiza cómo va a quedar en cada uno, no uno a la vez).
+  if (req.method === 'POST' && url.pathname === '/api/notify-test-all') {
+    const settings = loadSettings();
+    const results = [];
+    for (let i = 0; i < settings.discordWebhooks.length; i++) {
+      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i])) });
+    }
+    for (let i = 0; i < settings.telegramBots.length; i++) {
+      const bot = settings.telegramBots[i];
+      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId)) });
+    }
+    return json(res, 200, { results });
+  }
+
+  // GET /api/presets -> perfiles guardados + si cada uno está activo AHORA MISMO (todos
+  // sus destinos con enabled=true, ver isPresetActive en presets.js). El campo `active`
+  // viaja calculado desde acá para que un consumidor externo (plugin de Stream Deck, ver
+  // docs/STREAMDECK_PLUGIN.md) no tenga que pedir /api/state aparte solo para saber en
+  // qué estado pintar su botón.
+  if (req.method === 'GET' && url.pathname === '/api/presets') {
+    const destinations = loadAll();
+    const presets = listPresets().map((p) => ({ ...p, active: isPresetActive(destinations, p) }));
+    return json(res, 200, { presets });
+  }
+
+  // POST /api/presets  { name } -> guarda el estado enabled ACTUAL de todos los destinos
+  // bajo ese nombre. Si el nombre ya existe, lo pisa.
+  if (req.method === 'POST' && url.pathname === '/api/presets') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    try {
+      const presets = savePreset(input.name, loadAll());
+      return json(res, 200, { presets });
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
+  }
+
+  // POST /api/presets/apply  { name } -> aplica: cada destino queda enabled según esté o
+  // no en el preset. Mismo camino que el toggle por destino (saveAll + applyChange), para
+  // no duplicar la lógica de arranque/parada de relays.
+  if (req.method === 'POST' && url.pathname === '/api/presets/apply') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const preset = listPresets().find((p) => p.name === input.name);
+    if (!preset) return json(res, 404, { error: t('Perfil no encontrado.') });
+    const next = applyPresetToDestinations(loadAll(), preset);
+    saveAll(next);
+    next.forEach(applyChange);
+    return json(res, 200, buildState());
+  }
+
+  // POST /api/presets/deactivate  { name } -> apaga SOLO los destinos que ese perfil
+  // prende, sin tocar el resto (a diferencia de /apply, que es un intercambio total).
+  // Pensado para el botón de "Perfil" del plugin de Stream Deck — un botón físico con un
+  // solo estado ON/OFF necesita un "apagar esto puntual" que no pise otros destinos que
+  // el usuario haya prendido a mano. Ver docs/STREAMDECK_PLUGIN.md.
+  if (req.method === 'POST' && url.pathname === '/api/presets/deactivate') {
+    let input;
+    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    const preset = listPresets().find((p) => p.name === input.name);
+    if (!preset) return json(res, 404, { error: t('Perfil no encontrado.') });
+    const next = deactivatePresetInDestinations(loadAll(), preset);
+    saveAll(next);
+    next.forEach(applyChange);
+    return json(res, 200, buildState());
+  }
+
+  // DELETE /api/presets?name=X -> borra un perfil guardado.
+  if (req.method === 'DELETE' && url.pathname === '/api/presets') {
+    const name = url.searchParams.get('name');
+    if (!name) return json(res, 400, { error: t('Falta el parámetro name.') });
+    const presets = deletePreset(name);
+    return json(res, 200, { presets });
   }
 
   // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
@@ -641,16 +783,20 @@ export function startPanel(port, config = {}) {
       // settings.json en cada pedido (no vienen del snapshot de arranque) para que un
       // cambio de clave desde el panel se vea sin reiniciar la app.
       if (req.method === 'GET' && url.pathname === '/api/config') {
-        const streamKey = loadSettings().streamKey;
+        const settings = loadSettings();
         return json(res, 200, {
           rtmpUrl: config.rtmpUrl || '',
           lanRtmpUrl: config.lanRtmpUrl || '',
           lanIp: config.lanIp || null,
           rtmpPort: config.rtmpPort || null,
-          streamKey,
-          flvUrl: config.httpPort ? `http://localhost:${config.httpPort}/live/${streamKey}.flv` : '',
+          streamKey: settings.streamKey,
+          flvUrl: config.httpPort ? `http://localhost:${config.httpPort}/live/${settings.streamKey}.flv` : '',
           version: config.version || '0.0.0',
           panelToken: process.env.ALLOW_LAN_PANEL === 'true' ? getOrCreatePanelToken() : null,
+          chatCommandsEnabled: settings.chatCommandsEnabled,
+          discordWebhooks: settings.discordWebhooks,
+          telegramBots: settings.telegramBots,
+          liveMessage: settings.liveMessage || '',
         });
       }
 
@@ -677,10 +823,11 @@ export function startPanel(port, config = {}) {
         if (url.pathname === '/icon-muxlyve.svg') return res.end(ICON_SVG);
         return res.end(url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
       }
-      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg' || url.pathname === '/chat.svg') {
+      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg' || url.pathname === '/chat.svg' || url.pathname === '/webhook.svg') {
         res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
         if (url.pathname === '/connections.svg') return res.end(CONNECTIONS_SVG);
         if (url.pathname === '/video-off.svg') return res.end(VIDEO_OFF_SVG);
+        if (url.pathname === '/webhook.svg') return res.end(WEBHOOK_SVG);
         return res.end(CHAT_SVG);
       }
       if (url.pathname === '/' || url.pathname === '/index.html') {
@@ -907,6 +1054,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     -webkit-mask-image: url(/connections.svg); mask-image: url(/connections.svg); }
   .icon-chat { width: 16px; height: 16px;
     -webkit-mask-image: url(/chat.svg); mask-image: url(/chat.svg); }
+  .icon-webhook { width: 16px; height: 16px;
+    -webkit-mask-image: url(/webhook.svg); mask-image: url(/webhook.svg); }
 
   /* ── Toggle switch ── */
   .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
@@ -977,8 +1126,8 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     padding: .6rem .7rem; border-radius: 9px; background: transparent; border: none;
     color: var(--muted); font-size: .85rem; font-weight: 600; text-align: left;
     transition: background .15s var(--ease-out), color .15s var(--ease-out); }
-  .prefs-nav-item svg:first-child { flex-shrink: 0; }
-  .prefs-nav-item span { flex: 1; }
+  .prefs-nav-item svg:first-child, .prefs-nav-item .icon-mask:first-child { flex-shrink: 0; }
+  .prefs-nav-item span:not(.icon-mask) { flex: 1; }
   .prefs-nav-chevron { flex-shrink: 0; opacity: 0; transition: opacity .15s var(--ease-out); }
   .prefs-nav-item:hover { background: var(--surface-2); color: var(--text); }
   .prefs-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
@@ -1065,6 +1214,41 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   .rec-dur button { flex: 1; padding: .3rem .4rem; border: 1px solid var(--border);
     border-radius: 6px; background: var(--bg); color: var(--muted); font-size: .8rem; cursor: pointer; }
   .rec-dur button.sel { border-color: var(--accent); color: var(--accent); background: rgba(124,92,255,.1); }
+  /* Perfiles de destinos — chips arriba de la lista, ver src/presets.js. */
+  /* Cabecera (etiqueta + botón guardar) en su propia línea, SIEMPRE — antes compartía
+     flex-row con los chips y el botón saltaba a donde hubiera hueco según cuántos chips
+     entraran, quedando en una posición distinta cada vez. Los chips van en su propio
+     bloque debajo, con su wrap propio, sin pelear layout con nada más. */
+  .preset-block { margin-bottom: .7rem; }
+  .preset-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .45rem; }
+  .preset-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  .preset-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .preset-chips-empty { font-size: .78rem; color: var(--muted); font-style: italic; }
+  .preset-chip { display: flex; align-items: center; gap: .35rem; padding: .3rem .55rem; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: .78rem;
+    cursor: pointer; transition: border-color .15s, color .15s; max-width: 100%; }
+  .preset-chip span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preset-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .preset-chip.active { border-color: var(--accent); background: rgba(124,92,255,.14); color: var(--accent); }
+  .preset-chip .preset-del { opacity: .5; padding: 0 1px; line-height: 1; flex-shrink: 0; }
+  .preset-chip .preset-del:hover { opacity: 1; color: var(--danger); }
+  .preset-save-btn { display: flex; align-items: center; gap: .3rem; padding: .3rem .6rem; border-radius: 7px;
+    border: 1px dashed var(--border); background: transparent; color: var(--muted); font-size: .78rem;
+    cursor: pointer; flex-shrink: 0; }
+  .preset-save-btn:hover { color: var(--text); border-color: var(--accent); }
+  /* Filas de webhooks de Discord / bots de Telegram (Preferencias → Webhooks), ver
+     renderDiscordWebhooks()/renderTelegramBots() en el script del panel. */
+  .webhook-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .5rem; }
+  .webhook-row input[type="text"] { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: .78rem; }
+  /* Telegram necesita token Y chat ID juntos para ser válido — el token solo, guardado
+     apenas se sale del campo, siempre rechaza (falta el chat ID) y por el error volvía a
+     pintar la fila con el valor viejo, borrando lo recién tecleado. El token ocupa su
+     propia línea completa para que el chat ID + los 3 botones entren cómodos debajo. */
+  .webhook-row-telegram .tg-token { flex: 1 1 100%; }
+  .webhook-save-btn, .webhook-test-btn { flex-shrink: 0; width: auto; padding: .35rem .7rem; font-size: .75rem; }
+  .webhook-del-btn { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
+    cursor: pointer; padding: .3rem .5rem; border-radius: 6px; transition: background .15s, color .15s; }
+  .webhook-del-btn:hover { background: rgba(229,72,77,.15); color: #e5484d; }
   .rec-status { font-size: .78rem; color: var(--muted); margin-top: .5rem; min-height: 1.2em; }
   .rec-status.on { color: var(--live); }
   .rec-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
@@ -1362,13 +1546,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     width: 100%; padding: .38rem; font-size: .76rem; border-radius: 8px; font-weight: 400; }
   .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
   .pb-add-rtmp-form { margin-top: .45rem; }
-  .stream-info-btn { display: flex; align-items: center; justify-content: center; gap: .45rem;
-    width: 100%; margin-bottom: .5rem; padding: .6rem; border-radius: 10px;
+  /* Grilla 2x2 de acciones — antes 3 botones de ancho completo con texto, ocupaban mucho
+     alto en el sidebar. Solo ícono + title nativo como tooltip (mismo criterio que
+     .eye-btn de arriba, sin componente de tooltip propio). */
+  .stream-actions-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+  .stream-icon-btn { display: flex; align-items: center; justify-content: center;
+    padding: .65rem; border-radius: 10px;
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    color: var(--accent); font-size: .85rem; font-weight: 600;
-    transition: background .15s var(--ease-out), border-color .15s var(--ease-out); }
-  .stream-info-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent); transition: background .15s var(--ease-out), border-color .15s var(--ease-out); }
+  .stream-icon-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent);
     border-color: var(--accent); }
   .custom-add-card { display: flex; align-items: center; justify-content: center; gap: .5rem;
     width: 100%; padding: .68rem .9rem; border-radius: 12px; margin-bottom: .5rem;
@@ -1500,31 +1687,31 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
     <div class="sidebar-inner" id="connPanel" style="display:none">
-      <!-- Envueltos en su propio div a propósito: .sidebar-inner es flex con gap:1rem
-           entre CADA hijo directo — sin este wrapper, ese gap se sumaba al margin de
-           cada botón y quedaban mucho más separados entre sí de lo que se ve entre
-           tarjetas de plataforma. Adentro del wrapper, el espaciado es el margin-bottom
-           normal de .stream-info-btn — el gap del flex solo separa este grupo del resto. -->
-      <div class="stream-actions-group">
-        <button class="stream-info-btn" onclick="openStreamInfo()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Grilla 2x2, solo íconos + title nativo como tooltip (ver .stream-icon-btn). -->
+      <div class="stream-actions-grid">
+        <button class="stream-icon-btn" onclick="openStreamInfo()" title="Modificar información del stream">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>
           </svg>
-          Modificar información del stream
         </button>
-        <button class="stream-info-btn" onclick="openPreflightCheck()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="stream-icon-btn" onclick="openPreflightCheck()" title="Comprobar antes de salir en vivo">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
             <polyline points="22 4 12 14.01 9 11.01"/>
           </svg>
-          Comprobar antes de salir en vivo
         </button>
-        <button class="stream-info-btn" style="margin-bottom:0" onclick="openScheduleModal()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="stream-icon-btn" onclick="openScheduleModal()" title="Programar inicio">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
-          Programar inicio
+        </button>
+        <!-- Mensaje que se manda a los webhooks/bots configurados cuando arranca el
+             stream — ver src/notify.js / src/telegram.js. Vive acá, no en Preferencias
+             (donde están las URLs/tokens, pestaña Webhooks), porque es algo que se toca
+             seguido (cada stream puede querer un mensaje distinto), no un ajuste de una vez. -->
+        <button class="stream-icon-btn" onclick="openDiscordMsgModal()" title="Mensaje de aviso al iniciar">
+          <span class="icon-mask icon-webhook" style="width:17px;height:17px"></span>
         </button>
       </div>
 
@@ -1532,6 +1719,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
            solo hijo directo del flex, para que TikTok y "Añadir destino personalizado"
            quedeen tan pegados como las tarjetas entre sí. -->
       <div class="dest-group">
+        <!-- Perfiles de destinos — combinaciones guardadas de "qué está prendido", ver
+             src/presets.js. Los chips se pintan en runtime, ver renderPresets(). -->
+        <div class="preset-block" id="presetBlock">
+          <div class="preset-head">
+            <span class="preset-label">Perfiles</span>
+            <button type="button" class="preset-save-btn" onclick="saveCurrentPreset()" title="Guardar como perfil">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Guardar actual
+            </button>
+          </div>
+          <div id="presetChips" class="preset-chips"></div>
+        </div>
         <div id="platformList"></div>
         <div id="customList"></div>
 
@@ -1731,6 +1930,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Grabador de clips</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="webhooks" onclick="switchPrefsTab('webhooks')">
+          <span class="icon-mask icon-webhook"></span>
+          <span>Webhooks</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="support" id="prefsNavSupport" onclick="switchPrefsTab('support')" style="display:none">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
@@ -1860,6 +2064,33 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — convertilas a .mp4 para poder reproducirlas.</div>
             <div id="orphanRecordingsList"></div>
           </div>
+          <!-- Comando !clip — ajuste del MOTOR (settings.json), no de Electron, por eso
+               vive en esta pestaña (siempre visible) y no en "Sistema" (esa se oculta sin
+               la app de escritorio, ver openPrefs()). -->
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Comando !clip en el chat</div>
+              <div class="pref-desc">Mods y vos pueden escribir !clip para guardar un clip del buffer, sin salir del juego.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="chatCmdChk" onchange="toggleChatCommands()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+        <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">
+          <div class="field">
+            <label>Webhooks de Discord <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
+            <div class="pref-desc" style="margin-bottom:.5rem">Ajustes del canal → Integraciones → Webhooks. Avisa apenas empieza la transmisión — el mensaje se edita aparte, desde el botón de aviso en la pantalla principal.</div>
+            <div id="discordWebhooksList"></div>
+            <button type="button" class="preset-save-btn" id="addDiscordWebhookBtn" onclick="addDiscordWebhookRow()" style="margin-top:.4rem">+ Añadir webhook</button>
+          </div>
+          <div class="field" style="margin-top:1.3rem;padding-top:1.1rem;border-top:1px solid var(--border)">
+            <label>Bots de Telegram <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
+            <div class="pref-desc" style="margin-bottom:.5rem">Creá un bot con @BotFather en Telegram, copiá el token, y el chat ID del canal o grupo donde querés el aviso.</div>
+            <div id="telegramBotsList"></div>
+            <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
+          </div>
         </div>
         <div class="prefs-panel" id="reportSection" data-panel="support">
           <div class="pref-row">
@@ -1982,6 +2213,49 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <div class="about-btn-row">
       <button class="about-close-btn" onclick="resolveConfirm(false)">Cancelar</button>
       <button class="lic-danger-btn" id="confirmOkBtn" style="width:auto;flex:1" onclick="resolveConfirm(true)"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Prompt propio — reemplaza prompt() nativo del navegador, mismo motivo que
+     confirmOverlay arriba. Contenido se llena en runtime, ver showPrompt(). -->
+<div class="prefs-overlay" id="promptOverlay" onclick="if(event.target===this)resolvePrompt(null)">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2 id="promptTitle">Confirmar</h2>
+      <button class="prefs-close" onclick="resolvePrompt(null)">✕</button>
+    </div>
+    <div class="field">
+      <input type="text" id="promptInput" onkeydown="if(event.key==='Enter')resolvePrompt($('#promptInput').value)">
+    </div>
+    <div class="about-btn-row" style="margin-top:1rem">
+      <button class="about-close-btn" onclick="resolvePrompt(null)">Cancelar</button>
+      <button class="browse-btn" style="flex:1" onclick="resolvePrompt($('#promptInput').value)">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mensaje de aviso — compartido entre Discord y Telegram (los webhooks/tokens viven en
+     Preferencias → Webhooks, eso se toca una vez; esto se toca seguido, cada stream puede
+     querer un texto distinto, por eso tiene su propio botón de acceso rápido). Ver
+     src/notify.js / src/telegram.js. -->
+<div class="prefs-overlay" id="discordMsgOverlay" onclick="if(event.target===this)closeDiscordMsgModal()">
+  <div class="prefs-modal" style="width:460px">
+    <div class="prefs-head">
+      <h2>Mensaje de aviso</h2>
+      <button class="prefs-close" onclick="closeDiscordMsgModal()">✕</button>
+    </div>
+    <p class="pref-desc" style="margin:0 0 .6rem">Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.</p>
+    <div class="field">
+      <textarea id="discordMsgInput" rows="5" maxlength="2000" oninput="updateDiscordMsgCount()"
+        placeholder="🔴 ¡La transmisión empezó!"
+        style="width:100%;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></textarea>
+      <div class="pref-desc" style="text-align:right;margin-top:.25rem" id="discordMsgCount">0 / 2000</div>
+    </div>
+    <div class="about-btn-row">
+      <button class="about-close-btn" onclick="testAllChannelsUi()">Probar</button>
+      <button class="browse-btn" style="flex:1" onclick="saveDiscordMsgModal()">Guardar</button>
     </div>
   </div>
 </div>
@@ -2676,6 +2950,63 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido');
     } catch (e) { toast(e.message, true); }
   }
+
+  // Perfiles de destinos — ver src/presets.js. Los chips arrancan cargados en loadPresets()
+  // (llamado al inicio junto con loadConfig/refresh) y se refrescan tras cada cambio.
+  async function loadPresets() {
+    try { renderPresets((await api('GET', '/api/presets')).presets || []); } catch {}
+  }
+  function renderPresets(presets) {
+    const chips = $('#presetChips');
+    chips.innerHTML = '';
+    if (!presets.length) {
+      const empty = document.createElement('span');
+      empty.className = 'preset-chips-empty';
+      empty.textContent = 'Sin perfiles guardados — activá los destinos que quieras y tocá "Guardar actual".';
+      chips.appendChild(empty);
+      return;
+    }
+    for (const p of presets) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'preset-chip' + (p.active ? ' active' : '');
+      chip.title = p.active ? 'Activo ahora' : 'Aplicar este perfil';
+      chip.onclick = () => applyPresetUi(p.name);
+      const label = document.createElement('span');
+      label.textContent = p.name;
+      chip.appendChild(label);
+      const del = document.createElement('span');
+      del.className = 'preset-del';
+      del.textContent = '✕';
+      del.title = 'Borrar perfil';
+      del.onclick = (e) => { e.stopPropagation(); deletePresetUi(p.name); };
+      chip.appendChild(del);
+      chips.appendChild(chip);
+    }
+  }
+  async function applyPresetUi(name) {
+    try {
+      await withDestBusy(async () => { render(await api('POST', '/api/presets/apply', { name })); });
+      toast('Perfil "' + name + '" aplicado');
+    } catch (e) { toast(e.message, true); }
+  }
+  async function saveCurrentPreset() {
+    const name = await showPrompt('Guardar perfil actual', 'Ej. Solo Twitch');
+    if (!name) return;
+    try {
+      const { presets } = await api('POST', '/api/presets', { name });
+      renderPresets(presets);
+      toast('Perfil "' + name + '" guardado');
+    } catch (e) { toast(e.message, true); }
+  }
+  async function deletePresetUi(name) {
+    const ok = await showConfirm('¿Borrar el perfil "' + name + '"?', 'Borrar');
+    if (!ok) return;
+    try {
+      const { presets } = await api('DELETE', '/api/presets?name=' + encodeURIComponent(name));
+      renderPresets(presets);
+    } catch (e) { toast(e.message, true); }
+  }
   async function applyStreamTitle(btn) {
     const title = $('#titleInput').value.trim();
     const category = $('#categoryInput').value.trim();
@@ -2913,6 +3244,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         $('#panelTokenHint').style.display = 'none';
       }
       if (c.version) window._appVersion = c.version;
+      $('#chatCmdChk').checked = c.chatCommandsEnabled !== false;
+      window._liveMessage = c.liveMessage || '';
+      renderDiscordWebhooks(c.discordWebhooks || []);
+      renderTelegramBots(c.telegramBots || []);
     } catch {}
   }
 
@@ -3217,10 +3552,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           '<div class="recent-clip-name"></div>' +
           '<div class="recent-clip-meta"></div>' +
           '</div>' +
-          '<button class="browse-btn orphan-convert-btn" style="width:auto;padding:.35rem .7rem;font-size:.75rem">Convertir a MP4</button>';
+          '<button class="browse-btn orphan-convert-btn" style="width:auto;padding:.35rem .7rem;font-size:.75rem">Convertir a MP4</button>' +
+          '<button class="danger-btn orphan-del-btn" style="width:auto;padding:.35rem .7rem;font-size:.75rem;margin-left:.35rem">Eliminar</button>';
         item.querySelector('.recent-clip-name').textContent = f.name;
         item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
         item.querySelector('.orphan-convert-btn').addEventListener('click', (e) => convertOrphan(f.path, e.currentTarget));
+        item.querySelector('.orphan-del-btn').addEventListener('click', () => deleteOrphan(f.path, f.name));
         list.appendChild(item);
       }
     } catch {}
@@ -3242,6 +3579,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       btn.disabled = false;
       btn.textContent = original;
     }
+  }
+
+  // Borra un .ts huérfano SIN convertirlo — para cuando el usuario no lo quiere guardar.
+  // Confirmación de por medio a propósito: a diferencia de un .mp4 ya guardado, este es
+  // crudo y único (viene de un cierre inesperado) — no hay otra copia si se borra por error.
+  async function deleteOrphan(tsPath, name) {
+    const ok = await showConfirm('¿Eliminar "' + name + '" sin convertir? No se puede deshacer.', 'Eliminar');
+    if (!ok) return;
+    try {
+      const outputDir = $('#recordingsDir').value.trim() || null;
+      await api('DELETE', '/api/recordings', { path: tsPath, outputDir });
+      toast('Eliminado: ' + name);
+      loadOrphanRecordings();
+    } catch (e) { toast(e.message, true); }
   }
 
   // Restaura preferencias guardadas en sesiones anteriores — y las re-sincroniza al
@@ -3372,7 +3723,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'support', 'license'] : ['clips', 'license'];
+    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'support', 'license'] : ['clips', 'webhooks', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -3425,6 +3776,165 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   async function relaunchApp() {
     if (!window.msApp) return;
     try { await window.msApp.relaunchApp(); } catch {}
+  }
+
+  // Ajustes del motor (settings.json vía /api/settings) — no de Electron, funcionan
+  // igual con la app de escritorio o el panel servido a un navegador cualquiera.
+  async function toggleChatCommands() {
+    try { await api('POST', '/api/settings', { chatCommandsEnabled: $('#chatCmdChk').checked }); }
+    catch (e) { toast(e.message, true); }
+  }
+  // Webhooks de Discord (hasta 3) y bots de Telegram (hasta 3) — Preferencias → Webhooks.
+  // Arrays en memoria, poblados por loadConfig()/render*() al abrir el panel; cada cambio
+  // (agregar/borrar/editar una fila) persiste el array COMPLETO vía POST /api/settings —
+  // el backend valida cada entrada y el tope, ver src/panel.js handleApi.
+  const MAX_DISCORD_WEBHOOKS = 3;
+  const MAX_TELEGRAM_BOTS = 3;
+  window._discordWebhooks = window._discordWebhooks || [];
+  window._telegramBots = window._telegramBots || [];
+
+  function renderDiscordWebhooks(list) {
+    window._discordWebhooks = list.slice();
+    const box = $('#discordWebhooksList');
+    box.innerHTML = '';
+    window._discordWebhooks.forEach((url, i) => {
+      const row = document.createElement('div');
+      row.className = 'webhook-row';
+      row.innerHTML =
+        '<input type="text" placeholder="https://discord.com/api/webhooks/…">' +
+        '<button class="browse-btn webhook-test-btn">Probar</button>' +
+        '<button class="webhook-del-btn" title="Borrar">✕</button>';
+      const input = row.querySelector('input');
+      input.value = url;
+      input.addEventListener('change', () => updateDiscordWebhook(i, input.value));
+      row.querySelector('.webhook-test-btn').addEventListener('click', () => testDiscordWebhookRow(input.value));
+      row.querySelector('.webhook-del-btn').addEventListener('click', () => removeDiscordWebhook(i));
+      box.appendChild(row);
+    });
+    $('#addDiscordWebhookBtn').style.display = window._discordWebhooks.length >= MAX_DISCORD_WEBHOOKS ? 'none' : '';
+  }
+  function addDiscordWebhookRow() {
+    if (window._discordWebhooks.length >= MAX_DISCORD_WEBHOOKS) return;
+    renderDiscordWebhooks([...window._discordWebhooks, '']);
+    const inputs = $('#discordWebhooksList').querySelectorAll('input');
+    inputs[inputs.length - 1]?.focus();
+  }
+  async function updateDiscordWebhook(i, value) {
+    const next = window._discordWebhooks.slice();
+    next[i] = value.trim();
+    await persistDiscordWebhooks(next);
+  }
+  async function removeDiscordWebhook(i) {
+    const next = window._discordWebhooks.filter((_, idx) => idx !== i);
+    await persistDiscordWebhooks(next);
+  }
+  async function persistDiscordWebhooks(list) {
+    const cleaned = list.filter((u) => u && u.trim());
+    try {
+      await api('POST', '/api/settings', { discordWebhooks: cleaned });
+      renderDiscordWebhooks(cleaned);
+      toast('Webhooks de Discord actualizados');
+    } catch (e) { toast(e.message, true); } // no re-renderiza — no pisa lo que el usuario tiene escrito
+  }
+  async function testDiscordWebhookRow(url) {
+    try {
+      const r = await api('POST', '/api/notify-test-discord', { url });
+      toast(r.ok ? 'Aviso de prueba enviado a Discord' : (r.error || 'No se pudo enviar'), !r.ok);
+    } catch (e) { toast(e.message, true); }
+  }
+
+  function renderTelegramBots(list) {
+    window._telegramBots = list.slice();
+    const box = $('#telegramBotsList');
+    box.innerHTML = '';
+    window._telegramBots.forEach((bot, i) => {
+      const row = document.createElement('div');
+      row.className = 'webhook-row webhook-row-telegram';
+      row.innerHTML =
+        '<input type="text" class="tg-token" placeholder="Token del bot (@BotFather)">' +
+        '<input type="text" class="tg-chat" placeholder="Chat ID">' +
+        '<button class="browse-btn webhook-save-btn">Guardar</button>' +
+        '<button class="browse-btn webhook-test-btn">Probar</button>' +
+        '<button class="webhook-del-btn" title="Borrar">✕</button>';
+      const tokenInput = row.querySelector('.tg-token');
+      const chatInput = row.querySelector('.tg-chat');
+      tokenInput.value = bot.botToken;
+      chatInput.value = bot.chatId;
+      row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value));
+      row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value));
+      row.querySelector('.webhook-del-btn').addEventListener('click', () => removeTelegramBot(i));
+      box.appendChild(row);
+    });
+    $('#addTelegramBotBtn').style.display = window._telegramBots.length >= MAX_TELEGRAM_BOTS ? 'none' : '';
+  }
+  function addTelegramBotRow() {
+    if (window._telegramBots.length >= MAX_TELEGRAM_BOTS) return;
+    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '' }]);
+    const inputs = $('#telegramBotsList').querySelectorAll('.tg-token');
+    inputs[inputs.length - 1]?.focus();
+  }
+  // Guarda solo al tocar "Guardar" — a diferencia de Discord (un solo campo, autosave al
+  // salir del input anda bien), Telegram necesita token Y chat ID juntos para ser válido:
+  // autosave por campo guardaba apenas se completaba el token (sin chat ID todavía),
+  // el backend lo rechazaba, y el error volvía a pintar la fila con el valor viejo —
+  // borrando lo que el usuario acababa de escribir. Ver .webhook-row-telegram en el CSS.
+  async function saveTelegramBotRow(i, botToken, chatId) {
+    const next = window._telegramBots.slice();
+    next[i] = { botToken: botToken.trim(), chatId: chatId.trim() };
+    await persistTelegramBots(next);
+  }
+  async function removeTelegramBot(i) {
+    const next = window._telegramBots.filter((_, idx) => idx !== i);
+    await persistTelegramBots(next);
+  }
+  async function persistTelegramBots(list) {
+    const cleaned = list.filter((b) => b.botToken || b.chatId);
+    try {
+      await api('POST', '/api/settings', { telegramBots: cleaned });
+      renderTelegramBots(cleaned);
+      toast('Bots de Telegram actualizados');
+    } catch (e) { toast(e.message, true); } // no re-renderiza — no pisa lo que el usuario tiene escrito
+  }
+  async function testTelegramBotRow(botToken, chatId) {
+    try {
+      const r = await api('POST', '/api/notify-test-telegram', { botToken, chatId });
+      toast(r.ok ? 'Aviso de prueba enviado a Telegram' : (r.error || 'No se pudo enviar'), !r.ok);
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // Modal de mensaje de aviso (Discord + Telegram) — acceso rápido desde la grilla 2x2,
+  // ver el botón en stream-actions-grid. window._liveMessage se carga en loadConfig() y
+  // se mantiene en memoria para no tener que pedirlo de nuevo cada vez que se abre.
+  function openDiscordMsgModal() {
+    $('#discordMsgInput').value = window._liveMessage || '';
+    updateDiscordMsgCount();
+    $('#discordMsgOverlay').classList.add('open');
+  }
+  function closeDiscordMsgModal() { $('#discordMsgOverlay').classList.remove('open'); }
+  function updateDiscordMsgCount() {
+    $('#discordMsgCount').textContent = $('#discordMsgInput').value.length + ' / 2000';
+  }
+  async function saveDiscordMsgModal() {
+    const value = $('#discordMsgInput').value.trim();
+    try {
+      await api('POST', '/api/settings', { liveMessage: value });
+      window._liveMessage = value;
+      toast('Mensaje de aviso guardado');
+      closeDiscordMsgModal();
+    } catch (e) { toast(e.message, true); }
+  }
+  // Prueba TODOS los canales configurados de una — usa el mensaje YA GUARDADO (si hay
+  // ediciones sin guardar en el textarea, "Guardar" primero). Toast resume cuántos
+  // salieron bien; si alguno falló, el primer error queda de referencia.
+  async function testAllChannelsUi() {
+    try {
+      const { results } = await api('POST', '/api/notify-test-all');
+      if (!results.length) { toast('No hay ningún webhook o bot configurado todavía', true); return; }
+      const okCount = results.filter((r) => r.ok).length;
+      const firstError = results.find((r) => !r.ok);
+      if (okCount === results.length) toast('Aviso de prueba enviado a los ' + okCount + ' canales configurados');
+      else toast(okCount + '/' + results.length + ' enviados — ' + (firstError?.error || 'revisá Webhooks en Preferencias'), okCount === 0);
+    } catch (e) { toast(e.message, true); }
   }
 
   async function checkForUpdates() {
@@ -3837,6 +4347,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     if (resolveConfirmFn) { resolveConfirmFn(value); resolveConfirmFn = null; }
   }
 
+  // Reemplaza prompt() nativo — mismo motivo/patrón que showConfirm de arriba. Devuelve
+  // el texto (recortado) o null si canceló / lo dejó vacío.
+  let resolvePromptFn = null;
+  function showPrompt(title, placeholder) {
+    $('#promptTitle').textContent = title || 'Confirmar';
+    $('#promptInput').value = '';
+    $('#promptInput').placeholder = placeholder || '';
+    $('#promptOverlay').classList.add('open');
+    setTimeout(() => $('#promptInput').focus(), 50);
+    return new Promise((resolve) => { resolvePromptFn = resolve; });
+  }
+  function resolvePrompt(value) {
+    $('#promptOverlay').classList.remove('open');
+    if (resolvePromptFn) { resolvePromptFn(value && value.trim() ? value.trim() : null); resolvePromptFn = null; }
+  }
+
   async function releaseLic() {
     const ok = await showConfirm(
       '¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.',
@@ -4084,6 +4610,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   loadConfig();
   refresh();
   loadAuthStatus();
+  loadPresets();
   showSidebarTab('chat'); // arranca siempre mostrando el chat
   connectChatStream();
   pollViewers();

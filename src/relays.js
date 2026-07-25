@@ -7,6 +7,8 @@ import { isPlayable } from './destinations.js';
 import { FFMPEG } from './ffmpeg.js';
 import { startMonitor, stopMonitor } from './monitor.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { notifyDiscord } from './notify.js';
+import { notifyTelegram } from './telegram.js';
 
 // Gestor de procesos FFmpeg con reconexión automática.
 // Cada destino: name -> { proc, status, attempts, timer, stopping, startedAt, metrics }
@@ -232,6 +234,8 @@ export function onPublish(url, destinations) {
   const settings = loadSettings();
   if (settings.recArmed && !recProc) startRecording(recDuration);
   if (settings.fullRecArmed && !fullRecProc) startFullRecording();
+  notifyDiscord(); // aviso a Discord (hasta 3 webhooks) si hay configurados — no-op si no
+  notifyTelegram(); // ídem Telegram (hasta 3 bots) — ver src/notify.js / src/telegram.js
 }
 
 // OBS dejó de publicar: para todo y olvida el origen.
