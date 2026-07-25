@@ -16,6 +16,14 @@ import { notifyTelegram } from './telegram.js';
 const relays = new Map();
 let sourceUrl = null; // URL del ingest local mientras hay emisión; null si no.
 let liveSince = null; // timestamp del inicio del directo (uptime).
+// CN — evita el aviso "estoy en vivo" en falso: onPublish() dispara apenas OBS manda señal
+// al ingest LOCAL, sin importar si algún destino (Twitch/Kick/YouTube/TikTok) llegó a
+// conectar de verdad. Un streamer que prueba la señal con todo apagado, o con una clave
+// mala, dispararía el aviso igual. Por eso el aviso se manda desde parseProgress() (abajo),
+// recién cuando el PRIMER destino confirma progreso real de ffmpeg — no desde onPublish().
+// Esta bandera asegura que se mande una sola vez por sesión, no una vez por destino que
+// llegue a 'live'.
+let liveNotified = false;
 
 const MAX_ATTEMPTS = 6;
 const BASE_DELAY = 2000; // ms
@@ -66,6 +74,13 @@ function parseProgress(name, line) {
   };
   // Reset de intentos tras estabilidad: una caída puntual no agota el presupuesto.
   if (r.attempts > 0 && Date.now() - r.startedAt > STABLE_MS) r.attempts = 0;
+  // Primer destino que confirma progreso real = ahí sí "estoy en vivo" de verdad. Ver
+  // liveNotified arriba — antes esto se mandaba desde onPublish(), en falso.
+  if (!liveNotified) {
+    liveNotified = true;
+    notifyDiscord(); // aviso a Discord (hasta 3 webhooks) si hay configurados — no-op si no
+    notifyTelegram(); // ídem Telegram (hasta 3 bots) — ver src/notify.js / src/telegram.js
+  }
 }
 
 // ── Bitrate máximo por destino (opcional) ───────────────────────────────────
@@ -234,8 +249,9 @@ export function onPublish(url, destinations) {
   const settings = loadSettings();
   if (settings.recArmed && !recProc) startRecording(recDuration);
   if (settings.fullRecArmed && !fullRecProc) startFullRecording();
-  notifyDiscord(); // aviso a Discord (hasta 3 webhooks) si hay configurados — no-op si no
-  notifyTelegram(); // ídem Telegram (hasta 3 bots) — ver src/notify.js / src/telegram.js
+  // El aviso a Discord/Telegram NO se manda acá — ver liveNotified arriba y
+  // parseProgress() más abajo: se manda recién cuando algún destino confirma conexión
+  // real, no con la mera señal de OBS al ingest local.
 }
 
 // OBS dejó de publicar: para todo y olvida el origen.
@@ -246,6 +262,7 @@ export function onUnpublish() {
   stopMonitor();
   sourceUrl = null;
   liveSince = null;
+  liveNotified = false; // próxima sesión vuelve a poder avisar cuando algún destino conecte
   // Nueva sesión = nueva evaluación de bitrate desde cero (el bitrate de OBS pudo cambiar).
   transcodingDecided.clear();
   bitrateSamples.clear();
