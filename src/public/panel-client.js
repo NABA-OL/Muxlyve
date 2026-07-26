@@ -1615,7 +1615,7 @@
       const okCount = results.filter((r) => r.ok).length;
       const firstError = results.find((r) => !r.ok);
       if (okCount === results.length) toast('Aviso de prueba enviado a los ' + okCount + ' canales configurados');
-      else toast(okCount + '/' + results.length + ' enviados — ' + (firstError?.error || 'revisá Webhooks en Preferencias'), okCount === 0);
+      else toast(okCount + '/' + results.length + ' enviados — ' + (firstError?.error || 'revisa Webhooks en Preferencias'), okCount === 0);
     } catch (e) { toast(e.message, true); }
   }
 
@@ -1950,7 +1950,7 @@
       scheduleFor(name, atMs);
       changed++;
     }
-    toast(changed ? 'Programación guardada' : 'Sin cambios — revisá que las horas marcadas sean futuras');
+    toast(changed ? 'Programación guardada' : 'Sin cambios — revisa que las horas marcadas sean futuras');
     closeScheduleModal();
   }
 

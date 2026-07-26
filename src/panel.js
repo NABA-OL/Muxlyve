@@ -890,7 +890,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                defecto — solo aparece si hay alguno. -->
           <div class="field" id="orphanRecordingsBlock" style="display:none">
             <label>Grabaciones sin convertir</label>
-            <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — convertilas a .mp4 para poder reproducirlas.</div>
+            <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — conviértelas a .mp4 para poder reproducirlas.</div>
             <div id="orphanRecordingsList"></div>
           </div>
           <!-- Comando !clip — ajuste del MOTOR (settings.json), no de Electron, por eso

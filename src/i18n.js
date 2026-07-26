@@ -240,4 +240,71 @@ export const tMap = {
   '✓ Clip guardado': { en: '✓ Clip saved', fr: '✓ Clip enregistré', pt: '✓ Clipe salvo' },
   '✓ Reporte enviado — gracias': { en: '✓ Report sent — thank you', fr: '✓ Rapport envoyé — merci', pt: '✓ Relatório enviado — obrigado' },
   'No se pudo enviar el reporte': { en: 'Could not send the report', fr: 'Envoi du rapport impossible.', pt: 'Não foi possível enviar o relatório' },
+
+  // Preferencias → Webhooks (Discord/Telegram) + modal "Mensaje de aviso" — nunca se
+  // agregaron a tMap desde que se creó la función, por eso quedaban en español aunque el
+  // resto del panel ya estuviera traducido. Varias de estas keys también viven dentro de
+  // strings JS de comillas simples en panel-client.js (toast(...), textContent = '...',
+  // innerHTML con markup embebido) — mismo motivo que el comentario de arriba sobre fr sin
+  // apóstrofes: un apóstrofe en el valor reemplazado rompe esa comilla en el script servido.
+  'Comando !clip en el chat': { en: 'Chat !clip command', fr: 'Commande !clip du chat', pt: 'Comando !clip no chat' },
+  'Los mods y tú pueden escribir !clip para guardar un clip del buffer, sin salir del juego.': { en: 'Mods and you can type !clip to save a clip from the buffer, without leaving the game.', fr: 'Les modérateurs et toi peuvent écrire !clip pour enregistrer un clip du buffer, sans quitter le jeu.', pt: 'Mods e você podem escrever !clip para salvar um clipe do buffer, sem sair do jogo.' },
+  'Webhooks de Discord actualizados': { en: 'Discord webhooks updated', fr: 'Webhooks Discord mis à jour', pt: 'Webhooks do Discord atualizados' },
+  'Webhooks de Discord': { en: 'Discord webhooks', fr: 'Webhooks Discord', pt: 'Webhooks do Discord' },
+  'Ajustes del canal → Integraciones → Webhooks. Avisa apenas empieza la transmisión — el mensaje se edita aparte, desde el botón de aviso en la pantalla principal.': { en: 'Channel Settings → Integrations → Webhooks. Notifies as soon as the stream starts — the message is edited separately, from the notify button on the main screen.', fr: 'Paramètres du salon → Integrations → Webhooks. Previent des que le stream commence — le message se modifie a part, depuis le bouton avis de l ecran principal.', pt: 'Configurações do canal → Integrações → Webhooks. Avisa assim que a transmissão começa — a mensagem é editada à parte, pelo botão de aviso na tela principal.' },
+  '+ Añadir webhook': { en: '+ Add webhook', fr: '+ Ajouter un webhook', pt: '+ Adicionar webhook' },
+  '(hasta 3)': { en: '(up to 3)', fr: '(jusqu a 3)', pt: '(até 3)' },
+  'Bots de Telegram actualizados': { en: 'Telegram bots updated', fr: 'Bots Telegram mis à jour', pt: 'Bots do Telegram atualizados' },
+  'Bots de Telegram': { en: 'Telegram bots', fr: 'Bots Telegram', pt: 'Bots do Telegram' },
+  'Crea un bot con @BotFather en Telegram, copia el token, y el chat ID del canal o grupo donde quieres enviar el aviso.': { en: 'Create a bot with @BotFather on Telegram, copy the token, and the chat ID of the channel or group where you want to send the notice.', fr: 'Cree un bot avec @BotFather sur Telegram, copie le token, et le chat ID du salon ou groupe ou tu veux envoyer avis.', pt: 'Crie um bot com @BotFather no Telegram, copie o token, e o chat ID do canal ou grupo para onde quer enviar o aviso.' },
+  '+ Añadir bot': { en: '+ Add bot', fr: '+ Ajouter un bot', pt: '+ Adicionar bot' },
+  'Token del bot (@BotFather)': { en: 'Bot token (@BotFather)', fr: 'Token du bot (@BotFather)', pt: 'Token do bot (@BotFather)' },
+  'Probar': { en: 'Test', fr: 'Tester', pt: 'Testar' },
+  'Aviso de prueba enviado a Discord': { en: 'Test notice sent to Discord', fr: 'Avis de test envoye a Discord', pt: 'Aviso de teste enviado ao Discord' },
+  'Aviso de prueba enviado a Telegram': { en: 'Test notice sent to Telegram', fr: 'Avis de test envoye a Telegram', pt: 'Aviso de teste enviado ao Telegram' },
+  'No se pudo enviar': { en: 'Could not send', fr: 'Envoi impossible', pt: 'Não foi possível enviar' },
+  'No hay ningún webhook o bot configurado todavía': { en: 'No webhook or bot configured yet', fr: 'Aucun webhook ou bot configure pour le moment', pt: 'Nenhum webhook ou bot configurado ainda' },
+  'Aviso de prueba enviado a los ': { en: 'Test notice sent to ', fr: 'Avis de test envoye aux ', pt: 'Aviso de teste enviado aos ' },
+  ' canales configurados': { en: ' configured channels', fr: ' canaux configures', pt: ' canais configurados' },
+  ' enviados — ': { en: ' sent — ', fr: ' envoyes — ', pt: ' enviados — ' },
+  'revisa Webhooks en Preferencias': { en: 'check Webhooks in Preferences', fr: 'verifie Webhooks dans Preferences', pt: 'confira Webhooks em Preferências' },
+  'Mensaje de aviso al iniciar': { en: 'Notification message on start', fr: "Message d'avis au demarrage", pt: 'Mensagem de aviso ao iniciar' },
+  'Mensaje de aviso guardado': { en: 'Notification message saved', fr: 'Message avis enregistre', pt: 'Mensagem de aviso salva' },
+  'Mensaje de aviso': { en: 'Notification message', fr: 'Message avis', pt: 'Mensagem de aviso' },
+  'Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.': { en: 'Sent to the configured Discord webhooks and Telegram bots (Preferences → Webhooks) as soon as the stream starts. Discord supports its formatting (**bold**, *italics*, links) — Telegram shows it as plain text.', fr: 'Envoye aux webhooks Discord et bots Telegram configures (Preferences → Webhooks) des que le stream commence. Discord accepte son formatage (**gras**, *italique*, liens) — Telegram affiche du texte brut.', pt: 'Enviado aos webhooks do Discord e bots do Telegram configurados (Preferências → Webhooks) assim que a transmissão começa. Discord aceita sua formatação (**negrito**, *itálico*, links) — Telegram mostra como texto simples.' },
+
+  // Perfiles (presets de destinos) — mismo motivo, la función se agregó sin tocar tMap.
+  'Perfiles': { en: 'Profiles', fr: 'Profils', pt: 'Perfis' },
+  'Guardar como perfil': { en: 'Save as profile', fr: 'Enregistrer comme profil', pt: 'Salvar como perfil' },
+  'Guardar actual': { en: 'Save current', fr: 'Enregistrer actuel', pt: 'Salvar atual' },
+  'Sin perfiles guardados — activa los destinos que quieras y toca "Guardar actual".': { en: 'No saved profiles — turn on the destinations you want and tap "Save current".', fr: 'Aucun profil enregistre — active les destinations voulues et touche "Enregistrer actuel".', pt: 'Nenhum perfil salvo — ative os destinos que quiser e toque em "Salvar atual".' },
+  'Activo ahora': { en: 'Active now', fr: 'Actif maintenant', pt: 'Ativo agora' },
+  'Aplicar este perfil': { en: 'Apply this profile', fr: 'Appliquer ce profil', pt: 'Aplicar este perfil' },
+  'Borrar perfil': { en: 'Delete profile', fr: 'Supprimer le profil', pt: 'Excluir perfil' },
+  'Guardar perfil actual': { en: 'Save current profile', fr: 'Enregistrer le profil actuel', pt: 'Salvar perfil atual' },
+  'Ej. Solo Twitch': { en: 'E.g. Twitch only', fr: 'Ex. Twitch seulement', pt: 'Ex. Apenas Twitch' },
+  'Perfil "': { en: 'Profile "', fr: 'Profil "', pt: 'Perfil "' },
+  '" aplicado': { en: '" applied', fr: '" applique', pt: '" aplicado' },
+  '" guardado': { en: '" saved', fr: '" enregistre', pt: '" salvo' },
+  '¿Borrar el perfil "': { en: 'Delete the profile "', fr: 'Supprimer le profil "', pt: 'Excluir o perfil "' },
+
+  // Feedback ("Enviar una idea") — mismo motivo.
+  'Enviar una idea': { en: 'Send an idea', fr: 'Envoyer une idee', pt: 'Enviar uma ideia' },
+  '¿Qué te gustaría ver en Muxlyve?': { en: 'What would you like to see in Muxlyve?', fr: "Qu'aimerais-tu voir dans Muxlyve ?", pt: 'O que você gostaria de ver no Muxlyve?' },
+  'Se manda con tu versión de la app — no adjunta logs ni datos de tu equipo.': { en: 'Sent with your app version — no logs or data from your computer are attached.', fr: "Envoye avec ta version de l'app — sans logs ni donnees de ton ordinateur.", pt: 'Enviado com sua versão do app — sem anexar logs nem dados do seu computador.' },
+  'Una función, una mejora, lo que sea…': { en: 'A feature, an improvement, anything…', fr: 'Une fonction, une amelioration, ce que tu veux…', pt: 'Uma função, uma melhoria, qualquer coisa…' },
+  'Escribe algo primero': { en: 'Write something first', fr: 'Ecris quelque chose avant', pt: 'Escreva algo primeiro' },
+  'Enviando…': { en: 'Sending…', fr: 'Envoi en cours…', pt: 'Enviando…' },
+  '✓ Idea enviada — gracias': { en: '✓ Idea sent — thank you', fr: '✓ Idee envoyee — merci', pt: '✓ Ideia enviada — obrigado' },
+  'Enviar idea': { en: 'Send idea', fr: 'Envoyer idee', pt: 'Enviar ideia' },
+
+  // Encontrados de paso en el mismo barrido (mismo bug: función nueva, tMap sin tocar).
+  'Abrir carpeta de grabaciones': { en: 'Open recordings folder', fr: 'Ouvrir le dossier des enregistrements', pt: 'Abrir pasta de gravações' },
+  'Actualización disponible': { en: 'Update available', fr: 'Mise a jour disponible', pt: 'Atualização disponível' },
+  'Actualización': { en: 'Update', fr: 'Mise a jour', pt: 'Atualização' },
+  'Todos los derechos reservados.': { en: 'All rights reserved.', fr: 'Tous droits reserves.', pt: 'Todos os direitos reservados.' },
+  'Filtro de palabras — oculta mensajes que las contengan (Twitch y Kick, corre en tu navegador, no depende de su API)': { en: 'Word filter — hides messages that contain them (Twitch and Kick, runs in your browser, does not depend on their API)', fr: 'Filtre de mots — masque les messages qui les contiennent (Twitch et Kick, fonctionne dans ton navigateur, independant de leur API)', pt: 'Filtro de palavras — oculta mensagens que as contenham (Twitch e Kick, roda no seu navegador, não depende da API deles)' },
+  'Programación guardada': { en: 'Schedule saved', fr: 'Programmation enregistree', pt: 'Agendamento salvo' },
+  'Quedaron como .ts por un cierre inesperado — conviértelas a .mp4 para poder reproducirlas.': { en: 'They were left as .ts by an unexpected shutdown — convert them to .mp4 to play them.', fr: 'Restes en .ts suite a un arret inattendu — convertis-les en .mp4 pour pouvoir les lire.', pt: 'Ficaram como .ts por um fechamento inesperado — converta-os para .mp4 para poder reproduzi-los.' },
+  'Sin cambios — revisa que las horas marcadas sean futuras': { en: 'No changes — check that the marked times are in the future', fr: 'Aucun changement — verifie que les heures marquees sont futures', pt: 'Sem alterações — confira se os horários marcados são futuros' },
 };
