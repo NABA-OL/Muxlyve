@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Re-firma ad-hoc el .app COMPLETO tras el empaquetado. En Apple Silicon, el binario de
 // Electron ya trae una firma ad-hoc interna (del compilador), pero cuando electron-builder
 // arma el bundle final (agrega app.asar, FFmpeg, ícono, etc.) esa firma queda incompleta —

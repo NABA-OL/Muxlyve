@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // savePreset() sí toca settings.json (a diferencia de las funciones puras probadas en
 // presets.test.mjs) — mismo patrón que destinations.test.mjs con MS_CONFIG_DIR temporal.
 import { test, after } from 'node:test';

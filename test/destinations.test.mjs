@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Round-trip en texto plano (sin MASTER_KEY) + validación de URLs. MS_CONFIG_DIR/MASTER_KEY
 // se leen en destinations.js al importar el módulo, por eso van antes del import dinámico.
 import { test, after } from 'node:test';

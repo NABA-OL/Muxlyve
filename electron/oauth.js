@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import { BrowserWindow, safeStorage, app, session, net } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';

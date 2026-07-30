@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Con MASTER_KEY definida, la URL debe quedar cifrada (AES-256-GCM) en disco y descifrarse
 // de vuelta al cargar. Va en un archivo aparte de destinations.test.mjs porque MASTER_KEY
 // se lee una sola vez al importar el módulo — no se puede alternar dentro del mismo proceso.

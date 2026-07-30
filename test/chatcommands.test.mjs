@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // shouldTriggerClip() es la decisión de autorización de !clip, sin FFmpeg de por medio
 // (ver src/chatcommands.js) — el cooldown y el estado de señal viven aparte en
 // initChatCommands(), no acá.

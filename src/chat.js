@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Chat unificado — fase 1: solo Twitch. Lee el chat vía IRC-WebSocket con un nick anónimo
 // (justinfanNNNNN) — Twitch permite lectura pública sin autenticación, no requiere el
 // OAuth del usuario para esto en absoluto, solo su channel login para saber a qué unirse.

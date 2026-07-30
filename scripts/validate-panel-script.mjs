@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Valida que TODO el JS que le llega al navegador (inline en los 3 HTML de src/panel.js,
 // y los .js externos de src/public/ que esos HTML cargan con <script src="...">) sea
 // sintácticamente válido. Los HTML son template literals gigantes — cualquier backtick

@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Perfiles de destinos — combinaciones guardadas de "qué destinos van habilitados" (ej.
 // "Solo Twitch", "Todo", "Prueba"), para no tener que prender/apagar destino por destino
 // antes de cada stream. Se guardan por NOMBRE de destino, no por índice: los destinos se

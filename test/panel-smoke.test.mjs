@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Contrato del refactor de docs/PLAN_REFACTOR_PANEL.md — este test tiene que pasar ANTES
 // y DESPUÉS de cada fase. Si pasa en ambos lados, el ruteo/servido no se rompió al mover
 // código. No valida contenido pixel a pixel, solo que cada endpoint/asset siga

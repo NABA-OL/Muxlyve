@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import { spawn, execFile } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir, homedir } from 'node:os';

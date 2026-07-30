@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // discordToTelegramMarkdown() traduce el markdown escrito para Discord (**negrita**,
 // *itálica*/_itálica_) a MarkdownV2 de Telegram, que usa sintaxis distinta (un solo
 // asterisco es negrita, no itálica) y exige escapar ~14 caracteres reservados en el

@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';

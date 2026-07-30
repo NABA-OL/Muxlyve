@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Valida config/destinations.json sin exponer las claves.
 // Uso: npm run validate
 import { loadAll, isValidUrl } from '../src/destinations.js';

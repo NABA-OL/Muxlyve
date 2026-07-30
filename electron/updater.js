@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import { createRequire } from 'node:module';
 import { shell, ipcMain } from 'electron';
 const { autoUpdater } = createRequire(import.meta.url)('electron-updater');

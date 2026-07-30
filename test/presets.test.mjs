@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // applyPresetToDestinations() es la parte pura de los perfiles de destinos (ver
 // src/presets.js) — recibe destinos + preset, devuelve un array NUEVO, sin tocar disco
 // ni relays. savePreset/deletePreset/listPresets sí tocan settings.json, se prueban por

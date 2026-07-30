@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // isValidDiscordWebhook() es el gate anti-SSRF antes de que src/notify.js llame a
 // cualquier URL pegada por el usuario — ver el comentario en src/notify.js.
 // isValidTelegramBot() es el equivalente para src/telegram.js — ahí el host es fijo

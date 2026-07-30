@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Aviso "estoy en vivo" a hasta 3 bots de Telegram — mismo patrón que src/notify.js
 // (Discord), mismo mensaje compartido (liveMessage en settings.js). A diferencia de
 // Discord, acá no hay URL que el usuario pegue: el host SIEMPRE es api.telegram.org

@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Lógica de chat compartida entre las 3 vistas (panel principal, popout de chat, overlay
 // de OBS) — antes vivía triplicada (una copia por vista), un fix en una se olvidaba en
 // las otras. Ver Fase 2 de docs/PLAN_REFACTOR_PANEL.md.

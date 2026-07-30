@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import NodeMediaServer from 'node-media-server';
 import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';

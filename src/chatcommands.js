@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Comandos de chat — hoy solo !clip: mods (o el broadcaster) escriben !clip en cualquier
 // chat conectado y se guarda un clip del buffer rodante, sin salir del juego. Reusa
 // exactamente el mismo saveClip() que el botón "Guardar clip" del panel — ver
