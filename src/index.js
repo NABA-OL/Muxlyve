@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import NodeMediaServer from 'node-media-server';
 import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
@@ -6,6 +7,7 @@ import { loadAll, isPlayable } from './destinations.js';
 import { onPublish, onUnpublish } from './relays.js';
 import { startPanel } from './panel.js';
 import { loadSettings } from './settings.js';
+import { initChatCommands } from './chatcommands.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -72,6 +74,7 @@ startPanel(PANEL_PORT, {
   httpPort: HTTP_PORT, // panel.js arma flvUrl con la clave ACTUAL (puede cambiar sin reiniciar)
   version,
 });
+initChatCommands(); // !clip desde el chat — ver src/chatcommands.js
 
 console.log('============================================');
 console.log(' Muxlyve — motor de retransmision');

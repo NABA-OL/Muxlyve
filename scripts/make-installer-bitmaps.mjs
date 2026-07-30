@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 /**
  * Genera build/installer-sidebar.bmp (164×314) y build/installer-header.bmp (150×57)
  * con la paleta visual de Muxlyve. Sin dependencias externas.

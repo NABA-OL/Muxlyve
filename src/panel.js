@@ -1,19 +1,25 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { timingSafeEqual, createHash } from 'node:crypto';
-import { loadAll, saveAll, isValidUrl, isPlayable } from './destinations.js';
-import { isLive, relayInfo, uptimeSeconds, applyChange, stopByName, retry, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip, fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording, armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir, listOrphanRecordings, convertOrphanRecording, resolveClipsDir, resolveRecordingsDir } from './relays.js';
-import { ingestInfo, audioBus } from './monitor.js';
-import { chatBus, getHistory as getChatHistory } from './chat.js';
-import { getViewerCounts } from './viewers.js';
-import { applyChatMode as applyChatModeBackend, sendChatMessage as sendChatMessageBackend, pinChatMessage as pinChatMessageBackend, unpinChatMessage as unpinChatMessageBackend, getChatPinned as getChatPinnedBackend } from './chatmod.js';
+import { isLive, relayInfo, uptimeSeconds, recorderInfo, fullRecordingInfo } from './relays.js';
+import { loadAll, isPlayable } from './destinations.js';
+import { ingestInfo } from './monitor.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
-import { loadSettings, saveSettings, isValidStreamKey } from './settings.js';
+import * as systemRoutes from './routes/system.js';
+import * as chatRoutes from './routes/chat.js';
+import * as destinationsRoutes from './routes/destinations.js';
+import * as recordingRoutes from './routes/recording.js';
+
+// Fase 3 del refactor — cada módulo de src/routes/ atiende un dominio y devuelve
+// true/false según haya manejado la request. Orden sin significado especial (los paths
+// no se pisan entre módulos).
+const ROUTE_MODULES = [systemRoutes, chatRoutes, destinationsRoutes, recordingRoutes];
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
@@ -24,15 +30,35 @@ const TMAP_KEYS_BY_LENGTH = Object.keys(tMap).sort((a, b) => b.length - a.length
 // completar esa columna en todas las entradas de i18n.js, nada más se toca.
 const SUPPORTED_LANGS = ['en', 'fr', 'pt'];
 
+function computeEtag(content) {
+  return '"' + createHash('sha256').update(content).digest('hex').slice(0, 16) + '"';
+}
+
+// Fase 4.1 (docs/PLAN_REFACTOR_PANEL.md) — sin esto, translateHtml() repetía sus 201
+// split/join sobre ~180 KB en CADA request, siempre para el mismo resultado (el HTML/CSS/
+// JS servido es estático, solo cambia con el idioma). OJO: process.env.APP_LANG SÍ puede
+// cambiar en caliente sin reiniciar la app (ver ipcMain 'app:set-language' en
+// electron/main.js, que solo hace win.reload()) — por eso el cache está indexado por
+// idioma y no asume que sea fijo por proceso. Devuelve {content, etag} para que Fase 4.2
+// (ETag/Cache-Control de abajo) no tenga que volver a hashear lo que ya se tradujo.
+const translateCache = new Map(); // langKey -> Map(original -> {content, etag})
 function translateHtml(html) {
   const lang = process.env.APP_LANG;
-  if (!SUPPORTED_LANGS.includes(lang)) return html; // 'es', sin definir, o algo no soportado -> tal cual
+  const langKey = SUPPORTED_LANGS.includes(lang) ? lang : 'es'; // 'es' cubre indefinido u otros no soportados
+  let byContent = translateCache.get(langKey);
+  if (!byContent) { byContent = new Map(); translateCache.set(langKey, byContent); }
+  const cached = byContent.get(html);
+  if (cached) return cached;
   let translated = html;
-  for (const es of TMAP_KEYS_BY_LENGTH) {
-    const val = tMap[es][lang];
-    if (val) translated = translated.split(es).join(val);
+  if (langKey !== 'es') {
+    for (const es of TMAP_KEYS_BY_LENGTH) {
+      const val = tMap[es][langKey];
+      if (val) translated = translated.split(es).join(val);
+    }
   }
-  return translated;
+  const entry = { content: translated, etag: computeEtag(translated) };
+  byContent.set(html, entry);
+  return entry;
 }
 
 function t(text) {
@@ -43,24 +69,63 @@ function t(text) {
   return (tMap[text] && tMap[text][lang]) || text;
 }
 
-const MAX_NAME = 40;
-const MAX_URL = 500;
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, 'public');
-// Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar.
-const FLV_JS = readFileSync(path.join(PUBLIC, 'flv.min.js'));
-const LOGO_SVG       = readFileSync(path.join(PUBLIC, 'logo-muxlyve.svg'));
-const LOGO_SVG_LIGHT = readFileSync(path.join(PUBLIC, 'logo-muxlyve-light.svg'));
-const ICON_SVG       = readFileSync(path.join(PUBLIC, 'icon-muxlyve.svg'));
-const CONNECTIONS_SVG = readFileSync(path.join(PUBLIC, 'connections.svg'));
-const VIDEO_OFF_SVG   = readFileSync(path.join(PUBLIC, 'video-off.svg'));
-const CHAT_SVG        = readFileSync(path.join(PUBLIC, 'chat.svg'));
+// Assets estáticos auto-hospedados (sin CDN): cargados una vez al arrancar. Fase 4.2 — el
+// contenido no cambia en la vida del proceso, así que el ETag se calcula acá una sola vez
+// (no en cada request) y se sirve junto con el archivo, ver serveWithEtag() más abajo.
+function loadStaticAsset(relPath) {
+  const content = readFileSync(path.join(PUBLIC, relPath));
+  return { content, etag: computeEtag(content) };
+}
+const FLV_JS = loadStaticAsset('flv.min.js');
+const LOGO_SVG       = loadStaticAsset('logo-muxlyve.svg');
+const LOGO_SVG_LIGHT = loadStaticAsset('logo-muxlyve-light.svg');
+const ICON_SVG       = loadStaticAsset('icon-muxlyve.svg');
+const CONNECTIONS_SVG = loadStaticAsset('connections.svg');
+const VIDEO_OFF_SVG   = loadStaticAsset('video-off.svg');
+const CHAT_SVG        = loadStaticAsset('chat.svg');
+const WEBHOOK_SVG     = loadStaticAsset('webhook.svg');
+// Fase 1 del refactor (docs/PLAN_REFACTOR_PANEL.md) — CSS de PANEL_HTML sacado de un
+// <style> inline a archivo real. utf-8 explícito (no Buffer crudo como los SVG de
+// arriba) porque este pasa por translateHtml() al servirse, que opera sobre string.
+const PANEL_CSS = readFileSync(path.join(PUBLIC, 'panel.css'), 'utf-8');
+const CHAT_WINDOW_CSS = readFileSync(path.join(PUBLIC, 'chat-window.css'), 'utf-8');
+const CHAT_OVERLAY_CSS = readFileSync(path.join(PUBLIC, 'chat-overlay.css'), 'utf-8');
+// Script clásico (sin type="module") a propósito — ver Trampa 1 en
+// docs/PLAN_REFACTOR_PANEL.md: los onclick inline del HTML resuelven contra el scope
+// global, que un módulo ES no expone.
+const CHAT_WINDOW_JS = readFileSync(path.join(PUBLIC, 'chat-window.js'), 'utf-8');
+// El script grande de PANEL_HTML — sin type="module" a propósito (ver Trampa 1 en
+// docs/PLAN_REFACTOR_PANEL.md, 100+ onclick inline dependen del scope global).
+const PANEL_CLIENT_JS = readFileSync(path.join(PUBLIC, 'panel-client.js'), 'utf-8');
+// Fase 2 del refactor — lógica de chat compartida entre las 3 vistas, ver
+// src/public/chat-render.js. Se sirve igual que los demás .js de src/public/.
+const CHAT_RENDER_JS = readFileSync(path.join(PUBLIC, 'chat-render.js'), 'utf-8');
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
+}
+
+// Fase 4.2 (docs/PLAN_REFACTOR_PANEL.md) — sirve un asset estático (SVG, flv.min.js, o el
+// resultado de translateHtml()) con ETag + Cache-Control: no-cache. "no-cache" no es "no
+// guardar" — es "guardar pero revalidar siempre con el server", que es justo lo que
+// queremos: el navegador manda If-None-Match en cada carga y recibe 304 sin body si el
+// contenido no cambió, en vez de re-descargarlo entero cada vez. No usamos max-age: el
+// idioma puede cambiar en caliente (ver comentario de translateCache arriba), así que el
+// contenido de un mismo path puede variar entre una carga y la siguiente sin recargar la
+// app — necesitamos que el navegador SIEMPRE pregunte, solo evitar mandar el body si nada
+// cambió.
+function serveWithEtag(req, res, contentType, item) {
+  if (req.headers['if-none-match'] === item.etag) {
+    res.writeHead(304, { ETag: item.etag });
+    res.end();
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': contentType, ETag: item.etag, 'Cache-Control': 'no-cache' });
+  res.end(item.content);
 }
 
 // Estado que ve el panel: emisión activa, uptime y cada destino con su estado/métricas.
@@ -113,87 +178,15 @@ function readBody(req) {
   });
 }
 
-// Valida la entrada del panel en el límite de confianza antes de tocar el archivo o ffmpeg.
-function validateDestination(input) {
-  const name = typeof input.name === 'string' ? input.name.trim() : '';
-  const url = typeof input.url === 'string' ? input.url.trim() : '';
-  const enabled = Boolean(input.enabled);
-  if (!name) return { error: t('El nombre es obligatorio.') };
-  if (name.length > MAX_NAME) return { error: t('Nombre máximo ') + MAX_NAME + t(' caracteres.') };
-  if (url.length > MAX_URL) return { error: t('URL máxima ') + MAX_URL + t(' caracteres.') };
-  // Solo exigimos URL válida si se quiere habilitar (TikTok puede quedar deshabilitado con placeholder).
-  if (enabled && !isValidUrl(url)) {
-    return { error: t('Para activar, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.') };
-  }
-  // Bitrate máximo opcional — vacío/0/inválido = sin cap, el destino sigue en -c copy
-  // (ver relays.js). No se valida un rango: si el usuario pone algo absurdo, el propio
-  // FFmpeg lo va a rechazar o el resultado se va a ver mal, no rompe nada de la app.
-  const maxBitrateRaw = Number(input.maxBitrate);
-  const maxBitrate = Number.isFinite(maxBitrateRaw) && maxBitrateRaw > 0 ? Math.round(maxBitrateRaw) : null;
-  return { dest: { name, url, enabled, maxBitrate } };
-}
-
-let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
-const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
-
-async function fetchPublicIp() {
-  if (publicIpCache && Date.now() - publicIpCache.at < PUBLIC_IP_TTL_MS) return publicIpCache.ip;
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 4000);
-  try {
-    const r = await fetch('https://api.ipify.org?format=json', { signal: ctrl.signal });
-    const { ip } = await r.json();
-    publicIpCache = { ip, at: Date.now() };
-    return ip;
-  } catch {
-    return publicIpCache?.ip || null; // sirve la última conocida si el servicio falla
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function handleApi(req, res, url) {
-  // GET /api/state
-  if (req.method === 'GET' && url.pathname === '/api/state') {
-    return json(res, 200, buildState());
-  }
-
-  // GET /api/public-ip -> IP pública (para exponer el ingest fuera de la red local vía port forwarding)
-  if (req.method === 'GET' && url.pathname === '/api/public-ip') {
-    const ip = await fetchPublicIp();
-    return json(res, 200, { ip });
-  }
-
-  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
-  if (req.method === 'GET' && url.pathname === '/api/audio') {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
-    audioBus.on('level', onLevel);
-    req.on('close', () => audioBus.off('level', onLevel));
-    return;
-  }
-
-  // GET /api/chat -> SSE: mensajes de chat unificados (Twitch por ahora).
-  if (req.method === 'GET' && url.pathname === '/api/chat') {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    for (const msg of getChatHistory()) res.write(`data: ${JSON.stringify(msg)}\n\n`);
-    const onMessage = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
-    chatBus.on('message', onMessage);
-    req.on('close', () => chatBus.off('message', onMessage));
-    return;
-  }
-
-  // GET /api/debug-log -> SSE de debugBus (ver DEBUG_LOG_ROUTES arriba) — PANEL_HTML lo
+// handleApi() recorre los módulos de src/routes/ en orden hasta que uno atienda la
+// request (devuelve true) — cada uno resuelve un dominio (system/chat/destinations/
+// recording). ctx trae lo que cada módulo necesita del servidor sin acoplarlos entre sí.
+async function handleApi(req, res, url, config) {
+  // GET /api/debug-log -> SSE de debugBus (ver DEBUG_LOG_ROUTES más abajo) — PANEL_HTML lo
   // vuelca a console.log/error para verlo en DevTools, ya que este proceso Node no
-  // comparte consola con el renderer de Electron.
+  // comparte consola con el renderer de Electron. Se queda en panel.js (no en
+  // src/routes/) junto con el resto de la infraestructura de debug-log — ver Fase 3 de
+  // docs/PLAN_REFACTOR_PANEL.md.
   if (req.method === 'GET' && url.pathname === '/api/debug-log') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -206,326 +199,10 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  // GET /api/viewers -> { twitch: {count, live}, kick: {...} } — último valor sondeado
-  // por electron/oauth.js. Lo consultan tanto el panel principal como el popout de chat.
-  if (req.method === 'GET' && url.pathname === '/api/viewers') {
-    return json(res, 200, getViewerCounts());
+  const ctx = { config, json, readBody, t, buildState, debugLog };
+  for (const mod of ROUTE_MODULES) {
+    if (await mod.handle(req, res, url, ctx)) return;
   }
-
-  // POST /api/chat-mode -> modo lento / solo emotes (solo Twitch, ver src/chatmod.js).
-  // Por HTTP y no IPC para que el popout de chat también lo pueda usar (no tiene preload).
-  if (req.method === 'POST' && url.pathname === '/api/chat-mode') {
-    const body = await readBody(req);
-    const result = await applyChatModeBackend({
-      emoteOnly: !!body.emoteOnly,
-      subscriberOnly: !!body.subscriberOnly,
-      slowSeconds: Number(body.slowSeconds) || 0,
-    });
-    return json(res, 200, result);
-  }
-
-  // POST /api/chat-send -> publica un mensaje como el streamer en Twitch + Kick (chatmod.js).
-  if (req.method === 'POST' && url.pathname === '/api/chat-send') {
-    const body = await readBody(req);
-    const text = String(body.text || '').trim().slice(0, 500);
-    if (!text) return json(res, 400, { error: t('Mensaje vacío.') });
-    const result = await sendChatMessageBackend(text);
-    return json(res, 200, result);
-  }
-
-  // POST /api/chat-pin -> fija un mensaje (solo Twitch, ver src/chatmod.js).
-  if (req.method === 'POST' && url.pathname === '/api/chat-pin') {
-    const body = await readBody(req);
-    const messageId = String(body.messageId || '').trim();
-    if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
-    const result = await pinChatMessageBackend(messageId);
-    return json(res, 200, result);
-  }
-
-  // POST /api/chat-unpin -> desfija (solo Twitch, ver src/chatmod.js).
-  if (req.method === 'POST' && url.pathname === '/api/chat-unpin') {
-    const body = await readBody(req);
-    const messageId = String(body.messageId || '').trim();
-    if (!messageId) return json(res, 400, { error: t('Falta el id del mensaje.') });
-    const result = await unpinChatMessageBackend(messageId);
-    return json(res, 200, result);
-  }
-
-  // GET /api/chat-pinned -> id del mensaje fijado ahora mismo en Twitch (o null si no hay
-  // ninguno) — para que el botón arranque sincronizado con el estado real, no a ciegas.
-  if (req.method === 'GET' && url.pathname === '/api/chat-pinned') {
-    const result = await getChatPinnedBackend();
-    return json(res, 200, result);
-  }
-
-  // POST /api/destinations  -> upsert por nombre (crear, editar URL, toggle ON/OFF, clave TikTok)
-  if (req.method === 'POST' && url.pathname === '/api/destinations') {
-    let input;
-    try { input = await readBody(req); }
-    catch (err) {
-      debugLog('error', `POST /api/destinations -> 400 leyendo el body: ${err.message}`);
-      return json(res, 400, { error: err.message });
-    }
-    debugLog('log', `POST /api/destinations body recibido: ${JSON.stringify(input)}`);
-    const { error, dest } = validateDestination(input);
-    if (error) {
-      debugLog('error', `POST /api/destinations -> 400 validateDestination: ${error}`);
-      return json(res, 400, { error });
-    }
-
-    const list = loadAll();
-    const idx = list.findIndex((d) => d.name === dest.name);
-    const next = idx >= 0
-      ? list.map((d, i) => (i === idx ? { ...d, url: dest.url, enabled: dest.enabled, maxBitrate: dest.maxBitrate } : d))
-      : [...list, dest];
-    saveAll(next);
-    applyChange(dest); // arranca/para el relay en caliente si hay emisión
-    debugLog('log', `POST /api/destinations -> 200, "${dest.name}" enabled=${dest.enabled}`);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/retry?name=X  -> reintento manual de un destino 'failed'
-  if (req.method === 'POST' && url.pathname === '/api/retry') {
-    const name = url.searchParams.get('name');
-    const dest = loadAll().find((d) => d.name === name);
-    if (!dest) return json(res, 404, { error: t('Destino no encontrado.') });
-    retry(dest);
-    return json(res, 200, buildState());
-  }
-
-  // DELETE /api/destinations?name=X
-  if (req.method === 'DELETE' && url.pathname === '/api/destinations') {
-    const name = url.searchParams.get('name');
-    if (!name) return json(res, 400, { error: t('Falta el parámetro name.') });
-    stopByName(name);
-    saveAll(loadAll().filter((d) => d.name !== name));
-    return json(res, 200, buildState());
-  }
-
-  // Duraciones del buffer rodante: 1/5/10/15 min. Ver src/relays.js — la nota sobre
-  // tmpdir()/tmpfs en Linux (RAM en vez de disco) aplica sobre todo al tope de 15 min.
-  const REC_DURATIONS = [60, 300, 600, 900];
-
-  // POST /api/record/start  { duration?: 60|300|600|900 } — sin duration, usa la última
-  // configurada (recorderInfo().duration): así un cliente que no conoce la preferencia
-  // del usuario (ej. el plugin de Stream Deck) prende el buffer con la misma duración
-  // que ya está seleccionada en Preferencias, sin tener que replicar ese ajuste aparte.
-  // Sin señal todavía: no rechaza con 409 — "arma" el buffer (queda guardado, server-side,
-  // no en el cliente) para que arranque solo apenas OBS conecte (ver onPublish en
-  // relays.js). Mismo comportamiento sea el panel o el plugin de Stream Deck quien llame.
-  if (req.method === 'POST' && url.pathname === '/api/record/start') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
-    armRecording(true, dur);
-    if (isLive()) startRecording(dur);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/record/stop — siempre desarma también (si no, la próxima vez que llegue
-  // señal volvería a arrancar solo, aunque el usuario lo haya apagado a propósito).
-  if (req.method === 'POST' && url.pathname === '/api/record/stop') {
-    stopRecording();
-    armRecording(false);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/record/duration  { duration } — persiste SOLO la duración elegida (sin
-  // armar ni reiniciar un buffer activo). Se llama apenas cambia la selección en
-  // Preferencias, para que quede lista para el próximo arranque automático sin depender
-  // de un des/re-armado manual — ver setRecDuration() en relays.js.
-  if (req.method === 'POST' && url.pathname === '/api/record/duration') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!REC_DURATIONS.includes(Number(input.duration))) return json(res, 400, { error: 'Duración inválida.' });
-    setRecDuration(Number(input.duration));
-    return json(res, 200, { ok: true });
-  }
-
-  // POST /api/record/save  { duration?: 60|300|600|900, outputDir?: string } — sin duration,
-  // usa la del buffer activo (recorderInfo().duration), mismo criterio que /api/record/start.
-  if (req.method === 'POST' && url.pathname === '/api/record/save') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    const dur = REC_DURATIONS.includes(Number(input.duration)) ? Number(input.duration) : recorderInfo().duration;
-    const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
-    // Log SIEMPRE (no gateado por ALLOW_LAN_PANEL como debugLog): a diferencia de
-    // /api/state (poll cada 2s), esto solo dispara con un click explícito de "guardar
-    // clip" — sirve para diagnosticar desde la consola si la request del Stream Deck
-    // realmente llega, con qué body, y qué resultado da, sin depender de tener LAN
-    // habilitada ni de que la ruta esté en DEBUG_LOG_ROUTES.
-    console.log(`[record/save] request desde ${req.socket.remoteAddress} — duration=${input.duration ?? '(no enviado, usa ' + dur + ')'} outputDir=${outputDir ?? '(default)'}`);
-    try {
-      const filePath = await saveClip(dur, outputDir);
-      console.log(`[record/save] OK — ${filePath}`);
-      return json(res, 200, { ok: true, path: filePath });
-    } catch (err) {
-      console.error(`[record/save] FALLÓ — ${err.message}`);
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/fullrecord/start  { outputDir? } — grabación completa (archivo único con
-  // toda la transmisión), independiente del buffer rodante de arriba. Ver relays.js.
-  // Mismo criterio que /api/record/start: sin señal, queda "armada" en vez de rechazar.
-  if (req.method === 'POST' && url.pathname === '/api/fullrecord/start') {
-    let input;
-    try { input = await readBody(req); } catch { input = {}; }
-    const outputDir = typeof input.outputDir === 'string' && input.outputDir.trim() ? input.outputDir.trim() : null;
-    armFullRecording(true);
-    if (isLive()) startFullRecording(outputDir);
-    return json(res, 200, buildState());
-  }
-
-  // POST /api/fullrecord/stop
-  if (req.method === 'POST' && url.pathname === '/api/fullrecord/stop') {
-    stopFullRecording();
-    armFullRecording(false);
-    return json(res, 200, buildState());
-  }
-
-  // GET /api/pick-folder  → abre el selector nativo de carpetas (solo Electron)
-  if (req.method === 'GET' && url.pathname === '/api/pick-folder') {
-    try {
-      const { dialog, BrowserWindow } = await import('electron');
-      const win = BrowserWindow.getFocusedWindow();
-      const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de clips' });
-      return json(res, 200, { path: result.canceled ? null : result.filePaths[0] });
-    } catch {
-      return json(res, 501, { error: t('Selector solo disponible en la app de escritorio.') });
-    }
-  }
-
-  // GET /api/clips?dir=  → últimos clips guardados en el folder configurado (o el
-  // default si no hay uno elegido) — mismo folder que usa /api/record/save.
-  if (req.method === 'GET' && url.pathname === '/api/clips') {
-    const outputDir = url.searchParams.get('dir') || null;
-    try {
-      const { dir, files, total } = listRecentClips(outputDir);
-      return json(res, 200, { dir, files, total });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // DELETE /api/clips  { path, outputDir? } — borra un clip guardado. deleteClip()
-  // valida que el path esté DENTRO de la carpeta de clips antes de borrar.
-  if (req.method === 'DELETE' && url.pathname === '/api/clips') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
-    try {
-      deleteClip(input.path, input.outputDir || null);
-      return json(res, 200, { ok: true });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/clips/set-dir  { dir } — persiste la carpeta de destino de clips
-  // (settings.json, ver setClipsDir en relays.js). Antes esto solo vivía en localStorage
-  // del panel — el plugin de Stream Deck no tiene acceso a eso, así que sus saves
-  // siempre caían en la carpeta default aunque el usuario hubiera elegido otra acá.
-  if (req.method === 'POST' && url.pathname === '/api/clips/set-dir') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    setClipsDir(typeof input.dir === 'string' ? input.dir : null);
-    return json(res, 200, { ok: true });
-  }
-
-  // GET /api/recordings?dir=  → últimas grabaciones completas (.mp4 ya remuxeadas),
-  // mismo criterio que /api/clips pero apuntando a resolveRecordingsDir().
-  if (req.method === 'GET' && url.pathname === '/api/recordings') {
-    const outputDir = url.searchParams.get('dir') || null;
-    try {
-      const { dir, files, total } = listRecentRecordings(outputDir);
-      return json(res, 200, { dir, files, total });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // DELETE /api/recordings  { path, outputDir? } — borra una grabación completa. Mismo
-  // guard de seguridad que DELETE /api/clips (path debe estar dentro del folder).
-  if (req.method === 'DELETE' && url.pathname === '/api/recordings') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
-    try {
-      deleteRecording(input.path, input.outputDir || null);
-      return json(res, 200, { ok: true });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/recordings/set-dir  { dir } — mismo criterio que /api/clips/set-dir.
-  if (req.method === 'POST' && url.pathname === '/api/recordings/set-dir') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    setRecordingsDir(typeof input.dir === 'string' ? input.dir : null);
-    return json(res, 200, { ok: true });
-  }
-
-  // GET /api/recordings/orphans?dir=  → .ts que quedaron sin remuxear a .mp4 (crash,
-  // cierre forzado de la app, o falla del remux automático). Ver listOrphanRecordings().
-  if (req.method === 'GET' && url.pathname === '/api/recordings/orphans') {
-    const outputDir = url.searchParams.get('dir') || null;
-    try {
-      const { dir, files } = listOrphanRecordings(outputDir);
-      return json(res, 200, { dir, files });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/recordings/convert  { path, outputDir? } — remuxea un .ts huérfano a .mp4
-  // a pedido del usuario. Mismo guard de seguridad que DELETE /api/recordings.
-  if (req.method === 'POST' && url.pathname === '/api/recordings/convert') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: t('Falta el parámetro path.') });
-    try {
-      const mp4Path = await convertOrphanRecording(input.path, input.outputDir || null);
-      return json(res, 200, { ok: true, path: mp4Path });
-    } catch (err) {
-      return json(res, 500, { error: err.message });
-    }
-  }
-
-  // POST /api/clips/open  { path, reveal? }  → abre una carpeta, o revela un archivo
-  // puntual en el explorador nativo (solo Electron).
-  // CN-003: a diferencia de deleteClip/deleteRecording/convertOrphanRecording, este era
-  // el único endpoint de archivos sin containment check — shell.openPath() en un path
-  // arbitrario ABRE (y para un ejecutable, corre) lo que sea. Acepta: la carpeta de clips
-  // o grabaciones exacta (para "abrir carpeta"), o un archivo DENTRO de alguna de las dos
-  // (para "revelar clip puntual") — nada fuera de esas dos carpetas.
-  if (req.method === 'POST' && url.pathname === '/api/clips/open') {
-    let input;
-    try { input = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!input.path) return json(res, 400, { error: 'Falta path.' });
-    const resolved = path.resolve(input.path);
-    const clipsDir = path.resolve(resolveClipsDir(input.outputDir));
-    const recordingsDir = path.resolve(resolveRecordingsDir(input.outputDir));
-    const isAllowedDir = resolved === clipsDir || resolved === recordingsDir;
-    const isAllowedFile = path.dirname(resolved) === clipsDir || path.dirname(resolved) === recordingsDir;
-    if (!isAllowedDir && !isAllowedFile) {
-      return json(res, 400, { error: t('Ruta fuera de la carpeta de clips.') });
-    }
-    try {
-      const { shell } = await import('electron');
-      if (input.reveal) {
-        shell.showItemInFolder(resolved);
-      } else {
-        const err = await shell.openPath(resolved);
-        if (err) return json(res, 500, { error: err });
-      }
-      return json(res, 200, { ok: true });
-    } catch {
-      return json(res, 501, { error: t('Selector solo disponible en la app de escritorio.') });
-    }
-  }
-
   return json(res, 404, { error: t('No encontrado.') });
 }
 
@@ -637,72 +314,40 @@ export function startPanel(port, config = {}) {
             : 'ruta en el allowlist público, no se exige token';
         debugLogSmart(dbgKey, false, `AUTH OMITIDO ${dbgId} — ${why}`);
       }
-      // Config del ingest (URL/clave/preview) — streamKey/flvUrl se recalculan de
-      // settings.json en cada pedido (no vienen del snapshot de arranque) para que un
-      // cambio de clave desde el panel se vea sin reiniciar la app.
-      if (req.method === 'GET' && url.pathname === '/api/config') {
-        const streamKey = loadSettings().streamKey;
-        return json(res, 200, {
-          rtmpUrl: config.rtmpUrl || '',
-          lanRtmpUrl: config.lanRtmpUrl || '',
-          lanIp: config.lanIp || null,
-          rtmpPort: config.rtmpPort || null,
-          streamKey,
-          flvUrl: config.httpPort ? `http://localhost:${config.httpPort}/live/${streamKey}.flv` : '',
-          version: config.version || '0.0.0',
-          panelToken: process.env.ALLOW_LAN_PANEL === 'true' ? getOrCreatePanelToken() : null,
-        });
+      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url, config);
+      if (url.pathname === '/flv.min.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', FLV_JS);
+      if (url.pathname === '/panel.css') {
+        // Por translateHtml() igual que el HTML — hoy este CSS no tiene texto traducible
+        // (solo glifos decorativos ▸/▾ en content:), pero si algún día se le agrega algo
+        // visible, ya queda cubierto sin acordarse de este archivo aparte.
+        return serveWithEtag(req, res, 'text/css; charset=utf-8', translateHtml(PANEL_CSS));
       }
-
-      // POST /api/stream-key { streamKey } — cambia la clave de retransmisión. El valor
-      // por defecto (env STREAM_KEY o "mistream") no se toca hasta que el usuario la
-      // edite acá — ver settings.js.
-      if (req.method === 'POST' && url.pathname === '/api/stream-key') {
-        let input;
-        try { input = await readBody(req); } catch (err) { return json(res, 400, { error: err.message }); }
-        const streamKey = typeof input.streamKey === 'string' ? input.streamKey.trim() : '';
-        if (!isValidStreamKey(streamKey)) {
-          return json(res, 400, { error: t('La clave debe tener 3-64 caracteres: letras, números, guion o guion bajo.') });
-        }
-        saveSettings({ streamKey });
-        return json(res, 200, { ok: true, streamKey });
+      if (url.pathname === '/chat-window.css' || url.pathname === '/chat-overlay.css') {
+        return serveWithEtag(req, res, 'text/css; charset=utf-8', translateHtml(url.pathname === '/chat-window.css' ? CHAT_WINDOW_CSS : CHAT_OVERLAY_CSS));
       }
-      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-      if (url.pathname === '/flv.min.js') {
-        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-        return res.end(FLV_JS);
-      }
+      if (url.pathname === '/chat-window.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_WINDOW_JS));
+      if (url.pathname === '/panel-client.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(PANEL_CLIENT_JS));
+      if (url.pathname === '/chat-render.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_RENDER_JS));
       if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/logo-muxlyve-light.svg' || url.pathname === '/icon-muxlyve.svg') {
-        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        if (url.pathname === '/icon-muxlyve.svg') return res.end(ICON_SVG);
-        return res.end(url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
+        if (url.pathname === '/icon-muxlyve.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', ICON_SVG);
+        return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
       }
-      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg' || url.pathname === '/chat.svg') {
-        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
-        if (url.pathname === '/connections.svg') return res.end(CONNECTIONS_SVG);
-        if (url.pathname === '/video-off.svg') return res.end(VIDEO_OFF_SVG);
-        return res.end(CHAT_SVG);
+      if (url.pathname === '/connections.svg' || url.pathname === '/video-off.svg' || url.pathname === '/chat.svg' || url.pathname === '/webhook.svg') {
+        if (url.pathname === '/connections.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', CONNECTIONS_SVG);
+        if (url.pathname === '/video-off.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', VIDEO_OFF_SVG);
+        if (url.pathname === '/webhook.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', WEBHOOK_SVG);
+        return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', CHAT_SVG);
       }
-      if (url.pathname === '/' || url.pathname === '/index.html') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml(PANEL_HTML));
-      }
-      if (url.pathname === '/chat-window') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml(CHAT_WINDOW_HTML));
-      }
+      if (url.pathname === '/' || url.pathname === '/index.html') return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml(PANEL_HTML));
+      if (url.pathname === '/chat-window') return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml(CHAT_WINDOW_HTML));
       // Fuente de navegador para OBS — mismo feed SSE que /chat-window, sin chrome de
       // ventana (estrellas, header, menú de moderación, caja de envío): solo mensajes,
       // fondo transparente para componer directo sobre la escena.
-      if (url.pathname === '/chat-overlay') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml(CHAT_OVERLAY_HTML));
-      }
+      if (url.pathname === '/chat-overlay') return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml(CHAT_OVERLAY_HTML));
       // GET /oauth/:platform — Electron intercepta el redirect antes de que llegue aquí
       // (will-navigate/will-redirect); esto es solo fallback visual si algo se cuela.
       if (req.method === 'GET' && url.pathname.startsWith('/oauth/')) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(translateHtml('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>'));
+        return serveWithEtag(req, res, 'text/html; charset=utf-8', translateHtml('<!doctype html><html><head><meta charset="utf-8"><title>Conectando…</title></head><body style="font-family:system-ui;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Autorización recibida — puedes cerrar esta ventana.</p></body></html>'));
       }
       res.writeHead(404).end('No encontrado');
     } catch (err) {
@@ -744,640 +389,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Muxlyve — Panel</title>
 <link rel="icon" href="/icon-muxlyve.svg">
-<style>
-  :root {
-    --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
-    --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
-    --danger: #f85149; --live: #2ea043; --warn: #f0a23a; --off: #484f58;
-    --header-h: 68px;
-    --side-bar-w: 56px;
-    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  }
-  [data-theme="light"] {
-    --bg: #f0f2f5; --surface: #ffffff; --surface-2: #e8eaef; --border: #d0d4de;
-    --text: #1a1a2e; --muted: #5a6070; --accent: #7c5cff; --accent-2: #1a8a35;
-    --danger: #cc2222; --live: #1a8a35; --warn: #b07020; --off: #a8adb8;
-  }
-  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
-  ::-webkit-scrollbar { width: 5px; height: 5px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-
-  /* ── Header ── */
-  /* Grid de 3 columnas (no flex+space-between): logo | status | placeholder vacío.
-     Los dos extremos son 1fr — reparten el sobrante en partes iguales, así el status
-     del medio queda centrado de verdad sin importar cuánto mida el logo. Con solo 2
-     hijos y space-between, el status se va pegado al borde derecho (justo el bug que
-     apareció al sacar los botones que antes ocupaban esa 3ra columna). */
-  header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-    gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
-    background: var(--surface); position: sticky; top: 0; z-index: 5;
-    height: var(--header-h); -webkit-app-region: drag; }
-  .logo-wrap { justify-self: start; }
-  .status { justify-self: center; }
-  header button, header a, header input { -webkit-app-region: no-drag; }
-  /* Barra de título fundida (hiddenInset en Mac deja los 3 botones a la izquierda;
-     titleBarOverlay en Windows deja los suyos a la derecha) — espacio para que no se
-     encimen con el logo o los botones propios de la app. El padding-right base (barra
-     lateral nueva) va aparte más abajo; en Windows los controles nativos ocupan más
-     ancho que la barra sola, así que esa regla más específica manda igual. */
-  body.platform-darwin header { padding-left: 96px; }
-  body.platform-win32 header { padding-right: 150px; }
-  /* Linux: sin traffic lights ni titleBarOverlay nativos — botones propios dibujados
-     acá, ocupan la 3ra columna del grid (antes un div vacío solo para centrar .status). */
-  .win-controls { display: none; justify-self: end; gap: .15rem; -webkit-app-region: no-drag; }
-  body.platform-linux .win-controls { display: flex; }
-  .win-controls button { background: transparent; color: var(--muted); border: none;
-    border-radius: 6px; width: 34px; height: 30px; padding: 0; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; }
-  .win-controls button:hover { background: rgba(128,128,128,.15); color: var(--text); }
-  .win-controls .win-close-btn:hover { background: #e5484d; color: #fff; }
-  /* Barra lateral fija a la derecha (ajustes/conexiones/chat) — el header y el
-     contenido principal dejan este ancho libre para que no quede nada debajo. */
-  header { padding-right: var(--side-bar-w); }
-  main { margin-right: var(--side-bar-w); }
-  .logo-wrap { display: flex; align-items: center; gap: .55rem; flex-shrink: 0; text-decoration: none; }
-  .logo-icon { height: 32px; width: 32px; object-fit: contain; }
-  .wordmark { font-size: 1.1rem; font-weight: 700; letter-spacing: -.03em; cursor: default; user-select: none; color: var(--text); }
-  .wm-ve { color: var(--accent); }
-  .wm-li {
-    display: inline-block; overflow: hidden; max-width: 0; opacity: 0;
-    transition: max-width .7s cubic-bezier(.4,0,.2,1), opacity .55s var(--ease-out);
-    vertical-align: bottom;
-  }
-  .wm-li { color: var(--accent); }
-  .wm-li.show { max-width: 2.4ch; opacity: 1; }
-  @media (prefers-reduced-motion: reduce) { .wm-li { transition: none; } }
-  .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); min-width: 0; }
-  .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); flex-shrink: 0; }
-  .stream-title-display { color: var(--text); overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; min-width: 0; padding-left: .5rem; border-left: 1px solid var(--border); }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off);
-    box-shadow: 0 0 0 0 transparent; transition: background .3s var(--ease-out), box-shadow .3s var(--ease-out); }
-  .dot.on {
-    background: var(--live);
-    box-shadow: 0 0 0 4px rgba(46,160,67,.18);
-    animation: live-pulse .5s var(--ease-out);
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .dot.on { animation: none; }
-  }
-  @keyframes live-pulse {
-    0%   { transform: scale(1); }
-    60%  { transform: scale(1.35); }
-    100% { transform: scale(1); }
-  }
-  /* Barra vertical fija a la derecha — reemplaza los 3 botones que antes vivían en el
-     header. Mismo color que la barra superior (surface), para que se vea como una sola
-     pieza de UI. El grupo de arriba arranca debajo de donde iría el botón de cerrar
-     nativo (--header-h) — en Windows ahí mismo dibuja sus controles el titleBarOverlay,
-     así que dejar ese espacio vacío evita que se encimen. Ajustes queda solo, pegado
-     a la esquina inferior. */
-  /* Arranca justo debajo del header (top: var(--header-h)), no en top:0 — así el header
-     queda de punta a punta arriba, sin que esta barra se le monte encima ni se crucen
-     bordes/z-index entre las dos. */
-  /* Sin borde ni esquina redondeada propia a propósito — mismo fondo que el header,
-     misma línea divisoria (el border-bottom del header sigue derecho por encima) para
-     que se vea como una sola pieza fundida, no como un panel aparte pegado al lado. */
-  .side-actions { position: fixed; top: var(--header-h); right: 0; bottom: 0; width: var(--side-bar-w);
-    background: var(--surface);
-    display: flex; flex-direction: column; align-items: center; z-index: 4;
-    -webkit-app-region: drag; }
-  .side-actions button { -webkit-app-region: no-drag; }
-  .side-actions-top { display: flex; flex-direction: column; gap: .35rem; padding-top: 1rem; }
-  .side-actions-bottom { margin-top: auto; padding-bottom: .85rem; }
-  /* Solo ícono, look tipo rail (WhatsApp Mac) — sin caja/borde por botón, un resaltado
-     redondeado sutil en hover/activo alcanza. */
-  .side-actions .sidebar-toggle-btn { background: transparent; border: none;
-    width: 38px; height: 38px; border-radius: 10px; color: var(--muted);
-    padding: 0; justify-content: center; position: relative; }
-  .side-actions .sidebar-toggle-btn:hover { background: var(--surface-2); color: var(--text); }
-  .side-actions .sidebar-toggle-btn.panel-open { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-  /* Aviso no invasivo de actualización — ícono discreto arriba de Ajustes, solo visible
-     si hay versión nueva (ver openUpdaterModal/pendingUpdatePayload). Nada de modal al
-     abrir la app: el usuario decide cuándo verlo, con clic. */
-  #updateBtn { color: var(--accent); }
-  #updateBtn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  #updateBtn .upd-dot { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px;
-    border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
-
-  /* ── Canvas fondo ── */
-  #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
-    pointer-events: none; z-index: 0; opacity: .55; }
-  header, main, .prefs-overlay { position: relative; z-index: 1; }
-
-  /* ── Sidebar colapsable ── */
-  html, body { height: 100%; overflow: hidden; }
-  main { padding: 0; display: flex; height: calc(100vh - var(--header-h)); overflow: hidden; }
-  .main-col { flex: 1 1 0; min-width: 0; overflow-y: auto; padding: 1.25rem 1.5rem; }
-  .sidebar-col {
-    flex: 0 0 360px; width: 360px; min-width: 0;
-    border-left: 1px solid var(--border);
-    display: flex; flex-direction: column;
-    transition: flex-basis .22s cubic-bezier(.4,0,.2,1), width .22s cubic-bezier(.4,0,.2,1);
-    overflow: hidden;
-  }
-  .sidebar-col.collapsed { flex-basis: 0; width: 0; }
-  .sidebar-inner { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; min-width: 360px;
-    display: flex; flex-direction: column; gap: 1rem; }
-  /* Más aire que el gap base — acá cada hijo directo es un bloque grande y distinto
-     (acciones / plataformas / información de conexión), no como el chat que comparte
-     esta misma clase con elementos chicos que sí quedan bien con gap:1rem. */
-  #connPanel { gap: 1.75rem; }
-  .sidebar-toggle-btn {
-    background: transparent; border: 1px solid var(--border); border-radius: 8px;
-    color: var(--muted); cursor: pointer; padding: .35rem .5rem;
-    display: flex; align-items: center; line-height: 1; font-weight: 400;
-    transition: color .15s, border-color .15s;
-  }
-  .sidebar-toggle-btn:hover { color: var(--text); border-color: var(--muted); }
-  .sidebar-toggle-btn.panel-open { border-color: var(--accent); color: var(--accent); }
-  /* SVG externo de un solo color (fill sólido, sin currentColor propio) pintado vía
-     máscara con background-color: currentColor — así hereda el color del botón (incluida
-     la transición de hover) igual que los íconos inline con stroke="currentColor". */
-  .icon-mask { display: inline-block; background-color: currentColor;
-    -webkit-mask-size: contain; mask-size: contain;
-    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-    -webkit-mask-position: center; mask-position: center; }
-  .icon-connections { width: 16px; height: 16px;
-    -webkit-mask-image: url(/connections.svg); mask-image: url(/connections.svg); }
-  .icon-chat { width: 16px; height: 16px;
-    -webkit-mask-image: url(/chat.svg); mask-image: url(/chat.svg); }
-
-  /* ── Toggle switch ── */
-  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
-  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-  .switch .thumb {
-    position: absolute; inset: 0; background: var(--off); border-radius: 12px;
-    cursor: pointer; transition: background .2s var(--ease-out);
-  }
-  .switch .thumb::before {
-    content: ''; position: absolute; width: 18px; height: 18px;
-    left: 3px; top: 3px; background: #fff; border-radius: 50%;
-    transition: transform .2s var(--ease-out);
-  }
-  .switch input:checked ~ .thumb { background: var(--accent); }
-  .switch input:checked ~ .thumb::before { transform: translateX(18px); }
-
-  /* ── Modal de Preferencias ── */
-  .prefs-overlay {
-    display: none;
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0);
-    z-index: 50;
-    align-items: center; justify-content: center;
-    backdrop-filter: blur(0px);
-    opacity: 0;
-    transition:
-      opacity 180ms var(--ease-out),
-      background 180ms var(--ease-out),
-      backdrop-filter 180ms var(--ease-out),
-      display 180ms allow-discrete;
-  }
-  .prefs-overlay.open {
-    display: flex;
-    opacity: 1;
-    background: rgba(0,0,0,.5);
-    backdrop-filter: blur(3px);
-    @starting-style {
-      opacity: 0;
-      background: rgba(0,0,0,0);
-      backdrop-filter: blur(0px);
-    }
-  }
-  .prefs-modal {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
-    padding: 1.5rem; width: 420px; max-width: 90vw;
-    max-height: 85vh; overflow-y: auto;
-    box-shadow: 0 24px 64px rgba(0,0,0,.5);
-    transform: scale(.96);
-    opacity: 0;
-    transition: transform 180ms var(--ease-out), opacity 180ms var(--ease-out);
-  }
-  .prefs-overlay.open .prefs-modal {
-    transform: scale(1);
-    opacity: 1;
-  }
-  .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
-  .prefs-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
-  .prefs-close { background: transparent; color: var(--muted); border: 1px solid transparent;
-    font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
-  .prefs-close:hover { color: var(--text); background: var(--surface-2); }
-  .prefs-modal-wide { width: 720px; }
-  .upd-progress-track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin: .25rem 0 .75rem; }
-  .upd-progress-fill { height: 100%; background: var(--accent); border-radius: 99px; width: 0%; transition: width 160ms linear; }
-  .upd-progress-text { font-size: .8rem; color: var(--muted); margin: 0 0 .75rem; }
-  .prefs-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
-  .prefs-nav { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: .15rem; }
-  .prefs-nav-item { display: flex; align-items: center; gap: .55rem; width: 100%;
-    padding: .6rem .7rem; border-radius: 9px; background: transparent; border: none;
-    color: var(--muted); font-size: .85rem; font-weight: 600; text-align: left;
-    transition: background .15s var(--ease-out), color .15s var(--ease-out); }
-  .prefs-nav-item svg:first-child { flex-shrink: 0; }
-  .prefs-nav-item span { flex: 1; }
-  .prefs-nav-chevron { flex-shrink: 0; opacity: 0; transition: opacity .15s var(--ease-out); }
-  .prefs-nav-item:hover { background: var(--surface-2); color: var(--text); }
-  .prefs-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
-  .prefs-nav-item.active .prefs-nav-chevron { opacity: 1; }
-  /* Grid con todos los paneles apilados en la misma celda (1/1): el alto de la fila
-     queda fijado por el más alto de los 4 (Sistema, normalmente) aunque esté oculto —
-     visibility:hidden sigue contando para el layout, a diferencia de display:none. Así
-     el modal no salta de tamaño al cambiar de sección, solo cambia el contenido visible. */
-  .prefs-panels { flex: 1; min-width: 0; max-height: 60vh; overflow-y: auto; padding-right: .25rem;
-    display: grid; }
-  .prefs-panel { grid-area: 1 / 1; opacity: 0; visibility: hidden; pointer-events: none; }
-  .prefs-panel.active { opacity: 1; visibility: visible; pointer-events: auto;
-    animation: prefsPanelFade .18s var(--ease-out); }
-  @keyframes prefsPanelFade { from { opacity: 0; } to { opacity: 1; } }
-  .pref-row { display: flex; align-items: center; justify-content: space-between;
-    padding: .5rem 0; border-bottom: 1px solid var(--border); }
-  .pref-row:last-child { border-bottom: none; }
-  .pref-row label:first-child { font-size: .85rem; color: var(--text); }
-  .pref-row .pref-desc { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
-  .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
-  .sys-toggle input { opacity: 0; width: 0; height: 0; }
-  .sys-toggle-track { position: absolute; inset: 0; background: var(--surface-2);
-    border-radius: 20px; border: 1px solid var(--border); transition: background .2s var(--ease-out); cursor: pointer; }
-  .sys-toggle input:checked + .sys-toggle-track { background: var(--accent); border-color: var(--accent); }
-  .sys-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px;
-    width: 14px; height: 14px; border-radius: 50%; background: #fff;
-    transition: transform .2s var(--ease-out); }
-  .sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(16px); }
-  .lang-opt-btn { padding: .3rem .65rem; font-size: .78rem; border-radius: 7px;
-    border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer;
-    transition: background .2s var(--ease-out), color .2s var(--ease-out), border-color .2s var(--ease-out); }
-  .lang-opt-btn:hover { color: var(--text); }
-  .lang-opt-btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
-
-  /* ── Modal licencia ── */
-  .lic-modal { width: 380px; }
-  .lic-row { display: flex; flex-direction: column; gap: .3rem; margin-bottom: 1rem; }
-  .lic-label { font-size: .72rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
-  .lic-value { font-size: .9rem; color: var(--text); font-family: ui-monospace, monospace; word-break: break-all; }
-  .lic-danger { margin-top: .5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-  .lic-status-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-  .lic-badge { font-size: .68rem; font-weight: 700; padding: .15rem .55rem; border-radius: 20px; text-transform: uppercase; letter-spacing: .06em; }
-  .lic-badge.active   { background: rgba(46,160,67,.15);  color: #3fb950; border: 1px solid rgba(46,160,67,.3); }
-  .lic-badge.cancelled{ background: rgba(210,153,34,.15); color: #d29922; border: 1px solid rgba(210,153,34,.3); }
-  .lic-badge.lifetime { background: rgba(124,92,255,.15); color: #7c5cff; border: 1px solid rgba(124,92,255,.3); }
-  .lic-manage-btn { width: 100%; padding: .45rem; background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; margin-bottom: .5rem; transition: background .15s; }
-  .lic-manage-btn:hover { background: var(--surface-2); }
-  .lic-danger-btn { width: 100%; padding: .5rem; background: transparent; border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; font-size: .85rem; cursor: pointer; transition: background .15s; }
-  .lic-danger-btn:hover { background: rgba(235,64,52,.12); }
-  .lic-note { font-size: .72rem; color: var(--muted); margin: .5rem 0 0; line-height: 1.4; }
-
-  /* ── Modal Acerca de ── */
-  .about-modal { width: 340px; text-align: center; }
-  .about-logo { font-size: 2rem; font-weight: 800; letter-spacing: -.03em;
-    background: linear-gradient(135deg, #7c5cff, #a78bfa); -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent; background-clip: text; margin: .5rem 0 .25rem; }
-  .about-version { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; }
-  .about-dev { font-size: .9rem; color: var(--text); margin-bottom: .25rem; }
-  .about-copy { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; line-height: 1.5; }
-  .about-link { font-size: .8rem; color: var(--accent); text-decoration: none; }
-  .about-link:hover { text-decoration: underline; }
-  .about-divider { height: 1px; background: var(--border); margin: 1rem 0; }
-  .about-btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
-  .about-close-btn { flex: 1; padding: .5rem; background: var(--surface-2); border: 1px solid var(--border);
-    color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }
-  .about-close-btn:hover { background: var(--border); }
-
-  /* ── Barra de ingest: stats + VU meter ── */
-  .ingest-bar { display: flex; align-items: center; gap: .75rem; margin-top: .6rem;
-    padding: .5rem .65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
-  .ingest-pill { font-size: .72rem; font-weight: 600; color: var(--muted); font-family: ui-monospace, monospace;
-    white-space: nowrap; letter-spacing: .02em; }
-  .vu { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-  .vu-ch { height: 7px; background: var(--bg); border-radius: 4px; overflow: hidden; }
-  .vu-fill { display: block; height: 100%; width: 0%;
-    background: linear-gradient(90deg, #2ea043 0%, #2ea043 65%, #d29922 82%, #f85149 100%);
-    border-radius: 4px; transition: width 80ms linear; }
-
-  /* ── Grabador de clips ── */
-  .rec-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-  .rec-section h3 { font-size: .75rem; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .65rem; }
-  .rec-dur { display: flex; gap: .4rem; margin-bottom: .65rem; }
-  .rec-dur button { flex: 1; padding: .3rem .4rem; border: 1px solid var(--border);
-    border-radius: 6px; background: var(--bg); color: var(--muted); font-size: .8rem; cursor: pointer; }
-  .rec-dur button.sel { border-color: var(--accent); color: var(--accent); background: rgba(124,92,255,.1); }
-  .rec-status { font-size: .78rem; color: var(--muted); margin-top: .5rem; min-height: 1.2em; }
-  .rec-status.on { color: var(--live); }
-  .rec-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
-  .rec-toggle-label { font-size: .85rem; color: var(--text); font-weight: 600; }
-  .rec-toggle-row .rec-status { margin-top: .15rem; }
-  .recent-clips { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--border); }
-  .recent-clips-head { font-size: .72rem; font-weight: 600; color: var(--muted);
-    text-transform: uppercase; letter-spacing: .06em; margin-bottom: .5rem; }
-  .recent-clip-item { display: flex; align-items: center; gap: .55rem; padding: .4rem .5rem;
-    border-radius: 8px; cursor: pointer; transition: background .15s var(--ease-out); }
-  .recent-clip-item:hover { background: var(--surface-2); }
-  .recent-clip-item svg { flex-shrink: 0; color: var(--muted); }
-  .recent-clip-info { flex: 1; min-width: 0; }
-  .recent-clip-name { font-size: .8rem; color: var(--text); overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .recent-clip-meta { font-size: .7rem; color: var(--muted); }
-  .recent-clip-del { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
-    width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center;
-    justify-content: center; cursor: pointer; }
-  .recent-clip-del:hover { background: rgba(229,72,77,.15); color: #e5484d; }
-  .recent-clips-more { font-size: .72rem; color: var(--muted); text-align: center;
-    padding: .4rem .5rem 0; cursor: pointer; }
-  .recent-clips-more:hover { color: var(--text); }
-
-  /* ── Preview ── */
-  .preview { margin-bottom: 1rem; }
-  /* Registrada como <color> para que @keyframes la interpole en vez de saltar entre valores. */
-  @property --glow-video { syntax: '<color>'; inherits: false; initial-value: #7c5cff; }
-  .video-wrap { position: relative; background: #000;
-    border: 1px solid color-mix(in srgb, var(--glow-video) 45%, var(--border));
-    border-radius: 12px; overflow: hidden; aspect-ratio: 16 / 9;
-    box-shadow:
-      0 8px 25px -8px color-mix(in srgb, var(--glow-video) 55%, transparent),
-      inset 0 0 16px -8px color-mix(in srgb, var(--glow-video) 50%, transparent);
-    animation: videoGlowOffline 4s ease-in-out infinite; }
-  /* Sin señal: rojo↔naranja, ciclo más corto (llama la atención). En vivo: morado↔azul de marca. */
-  @keyframes videoGlowOffline {
-    0%, 100% { --glow-video: #f85149; }
-    50% { --glow-video: #f0a23a; }
-  }
-  @keyframes videoGlowLive {
-    0%, 100% { --glow-video: #7c5cff; }
-    50% { --glow-video: #4da3ff; }
-  }
-  .video-wrap.live { animation: videoGlowLive 6s ease-in-out infinite; }
-  @media (prefers-reduced-motion: reduce) {
-    .video-wrap { animation: none; --glow-video: #f85149; }
-    .video-wrap.live { animation: none; --glow-video: #7c5cff; }
-  }
-  .video-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .video-ph { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .65rem;
-    align-items: center; justify-content: center; color: var(--muted); font-size: .88rem;
-    text-align: center; padding: 1rem; }
-  /* El fondo del preview es negro fijo (#000) sin importar el tema — el ícono va claro
-     siempre, no var(--muted)/var(--text) que cambian con tema claro/oscuro. */
-  .icon-video-off { width: 40px; height: 40px; background-color: #e6edf3;
-    -webkit-mask-image: url(/video-off.svg); mask-image: url(/video-off.svg);
-    animation: videoOffBlink 3s ease-in-out infinite; }
-  @keyframes videoOffBlink { 0%, 100% { opacity: .3; } 50% { opacity: .9; } }
-  @media (prefers-reduced-motion: reduce) {
-    .icon-video-off { animation: none; opacity: .6; }
-  }
-  .conn { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
-  .conn .field { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: .6rem .75rem; box-shadow: 0 1px 2px rgba(0,0,0,.15);
-    transition: border-color .15s var(--ease-out); }
-  .conn .field:hover { border-color: var(--muted); }
-  .copyrow { display: flex; gap: .4rem; align-items: center; }
-  .copyrow input[type="text"] { flex: 1; min-width: 0; }
-  .browse-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px;
-    padding: .4rem .65rem; font-size: .85rem; flex-shrink: 0; cursor: pointer; }
-  .browse-btn:hover { filter: brightness(1.1); }
-  .danger-btn { background: transparent; color: var(--danger); border: 1px solid var(--danger);
-    border-radius: 6px; padding: .4rem .85rem; cursor: pointer; }
-  .danger-btn:hover { background: rgba(248,81,73,.1); }
-
-  /* ── Chat unificado ── */
-  .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
-    gap: .3rem; padding-right: .2rem; }
-  .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
-  .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
-    color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s var(--ease-out);
-    padding: 0 2px; display: flex; align-items: center; }
-  .chat-row:hover .chat-pin-btn { opacity: 1; }
-  .chat-pin-btn:hover { color: var(--accent); }
-  .chat-pin-btn:disabled { opacity: .4; cursor: default; }
-  .chat-pin-btn.pinned { opacity: 1; color: var(--accent); }
-  .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
-  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
-  .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }
-  .chat-panel { display: flex; flex-direction: column; height: 100%; }
-  .chat-panel-head { display: flex; align-items: center; justify-content: space-between;
-    flex-shrink: 0; margin-bottom: .1rem; }
-  .chat-panel-title { font-weight: 600; font-size: .95rem; }
-  .chat-popout-btn { background: var(--surface-2); color: var(--muted); border: none;
-    border-radius: 6px; width: 28px; height: 28px; padding: 0; flex-shrink: 0; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; }
-  .chat-popout-btn:hover { color: var(--text); }
-  .chat-menu-wrap { position: relative; flex-shrink: 0; }
-  .chat-menu-dd { position: absolute; top: 34px; right: 0; z-index: 20; display: none;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-    padding: .65rem; width: 210px; box-shadow: 0 12px 28px rgba(0,0,0,.35); }
-  .chat-menu-dd.open { display: block; }
-  .chat-menu-dd .cmd-note { font-size: .68rem; color: var(--muted); margin-bottom: .5rem; line-height: 1.3; }
-  .chat-menu-dd .cmd-row { display: flex; align-items: center; justify-content: space-between; padding: .3rem 0; }
-  .chat-menu-dd .cmd-label { font-size: .8rem; }
-  .chat-menu-dd input[type=number] { width: 55px; }
-  .chat-box.chat-box-full { flex: 1; min-height: 0; max-height: none; }
-  .chat-send-row { display: flex; gap: .4rem; padding-top: .5rem; flex-shrink: 0; }
-  .chat-send-row input { flex: 1; min-width: 0; }
-  .viewer-bar { display: flex; gap: .7rem; flex-wrap: wrap; padding-top: .5rem;
-    margin-top: .3rem; border-top: 1px solid var(--border); font-size: .75rem; color: var(--muted); }
-  .viewer-bar .vb-item { display: flex; align-items: center; gap: .3rem; }
-  .conn .copyrow code { flex: 1; font-family: ui-monospace, monospace; font-size: .8rem;
-    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .conn button { background: var(--surface-2); color: var(--muted); padding: .3rem .55rem;
-    font-size: .75rem; border: none; border-radius: 6px; cursor: pointer; }
-  .conn button:hover { color: var(--text); }
-
-  /* ── Campos ocultables (claves de stream, IP pública) ── */
-  .eyerow { display: flex; gap: .4rem; align-items: center; }
-  .eyerow input { flex: 1; }
-  .eye-btn, .copy-btn { background: var(--surface-2); color: var(--muted); border: none; border-radius: 6px;
-    width: 30px; height: 30px; padding: 0; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-    cursor: pointer; }
-  .eye-btn:hover, .copy-btn:hover { color: var(--text); }
-
-  /* ── Destination cards ── */
-  .card { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 1.1rem 1.2rem; }
-  .card.tiktok { border-color: var(--accent); }
-  /* flex-wrap: la sidebar es angosta — nombre + píldora + métricas + sparkline no siempre
-     caben en una sola línea, que baje a la siguiente en vez de desbordar la tarjeta. */
-  .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin-bottom: .8rem; }
-  .card-head .name { font-weight: 600; font-size: 1rem; flex: 1; }
-  .pill { font-size: .7rem; padding: .15rem .5rem; border-radius: 999px;
-    background: var(--surface-2); color: var(--muted); white-space: nowrap; }
-  .pill.live { background: rgba(46,160,67,.15); color: var(--live); }
-  .pill.reconnecting { background: rgba(240,162,58,.15); color: var(--warn); }
-  .pill.failed { background: rgba(248,81,73,.15); color: var(--danger); }
-  .pill.lagging { background: rgba(240,162,58,.15); color: var(--warn); }
-  .pill.on { background: rgba(46,160,67,.15); color: var(--live); }
-  .pill.off { background: rgba(248,81,73,.15); color: var(--danger); }
-  /* Gráfico de salud de red por destino — sparkline de bitrate reciente (ver
-     trackMetricsHistory/sparklineSvg()). margin-left:auto la empuja al borde derecho
-     de .card-head aunque no haya un elemento flex:1 hermano (caso de .pb-rtmp). */
-  svg.spark { flex-shrink: 0; opacity: .9; margin-right: .5rem; }
-  .card-head svg.spark { margin-left: auto; }
-  .spark-slot { flex-shrink: 0; }
-  /* Mismo lugar que el sparkline (pb-head-name tiene flex:1 y lo empuja a la derecha
-     igual) — aparece en vez del gráfico mientras no hay datos de transmisión todavía. */
-  .sched-time-badge { font-size: .72rem; color: var(--muted); margin-right: .5rem; white-space: nowrap; }
-  .metrics { font-size: .72rem; color: var(--muted); margin-left: auto;
-    font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .retry { background: var(--danger); color: #fff; }
-  label { display: block; font-size: .75rem; color: var(--muted); margin: 0 0 .25rem; }
-  input[type=text], input[type=password], input[type=number], input[type=datetime-local] { width: 100%; background: var(--bg); border: 1px solid var(--border);
-    color: var(--text); border-radius: 8px; padding: .5rem .65rem; font-size: .88rem;
-    font-family: ui-monospace, monospace; }
-  input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, input[type=datetime-local]:focus { outline: none; border-color: var(--accent); }
-  /* El selector de calendario/reloj nativo de datetime-local no hereda color de texto —
-     el ícono queda negro sobre fondo oscuro si no se invierte a mano (solo en tema oscuro). */
-  input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
-  [data-theme="light"] input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: none; }
-  /* Los navegadores agregan un ícono nativo de mostrar/ocultar en type=password — ya
-     tenemos nuestro propio .eye-btn al lado, el nativo duplica y no matchea el tema. */
-  input[type=password]::-ms-reveal, input[type=password]::-ms-clear { display: none; }
-  input[type=password]::-webkit-credentials-auto-fill-button,
-  input[type=password]::-webkit-textfield-decoration-container { display: none !important; }
-  .row { display: flex; gap: .6rem; align-items: flex-end; margin-top: .75rem; }
-  .row .field { flex: 1; }
-  button { cursor: pointer; border: none; border-radius: 8px; padding: .5rem .85rem;
-    font-size: .85rem; font-weight: 600; transition: .15s; }
-  button:active { transform: translateY(1px); }
-  .toggle { min-width: 100px; background: var(--off); color: var(--text); }
-  .toggle.on { background: var(--accent-2); }
-  .auto-note { font-size: .72rem; color: var(--muted); margin-top: .45rem; }
-  .save { background: var(--accent); color: #fff; }
-  .del { background: transparent; color: var(--danger); border: 1px solid var(--border); }
-  .note { font-size: .78rem; color: var(--muted); margin-top: .6rem; }
-
-  /* ── Add form ── */
-  .add summary { list-style: none; cursor: pointer; }
-  .add summary::-webkit-details-marker { display: none; }
-  .add-card { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 1rem 1.2rem; margin-top: .5rem; }
-  /* Ajuste avanzado, no una acción principal — colapsado y discreto a propósito, para
-     que solo haga ruido si el usuario lo abre a buscarlo. */
-  .bitrate-collapse { margin-top: .75rem; }
-  .bitrate-collapse summary { list-style: none; cursor: pointer; font-size: .78rem;
-    color: var(--muted); }
-  .bitrate-collapse summary::-webkit-details-marker { display: none; }
-  .bitrate-collapse summary:hover { color: var(--text); }
-  .bitrate-collapse summary::before { content: '▸ '; }
-  .bitrate-collapse[open] summary::before { content: '▾ '; }
-  .bitrate-collapse input[type=number] { margin-top: .4rem; }
-
-  /* ── Toast ── */
-  #msg { position: fixed; bottom: 1rem; left: 50%;
-    transform: translateX(-50%) translateY(6px);
-    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
-    padding: .6rem 1rem; border-radius: 8px; opacity: 0;
-    transition: opacity .3s var(--ease-out), transform .3s var(--ease-out); pointer-events: none;
-    white-space: nowrap; z-index: 10; }
-  #msg.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  #msg.err { border-color: var(--danger); color: var(--danger); }
-
-  /* ── Cuentas OAuth ── */
-  #authSection { border-top: 1px solid var(--border); padding-top: .85rem; margin-top: .85rem; }
-  .auth-hd { font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
-    letter-spacing: .08em; margin-bottom: .55rem; }
-  .auth-row { display: flex; align-items: center; gap: .45rem; padding: .38rem 0;
-    border-bottom: 1px solid var(--border); }
-  .auth-row:last-child { border-bottom: none; }
-  .p-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .auth-name { flex: 1; font-size: .82rem; }
-  .auth-user { font-size: .72rem; color: var(--muted); font-family: ui-monospace,monospace;
-    max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .auth-soon { font-size: .68rem; color: var(--off); font-style: italic; }
-  .auth-conn { font-size: .7rem; padding: .18rem .5rem; }
-  .auth-disc { font-size: .68rem; padding: .14rem .38rem;
-    background: transparent; border-color: var(--border); color: var(--muted); }
-  .auth-disc:hover { border-color: var(--danger); color: var(--danger); }
-
-  /* ── Platform blocks ── */
-  /* flex-shrink:0 a propósito — .pb-block vive como hijo directo de contenedores flex
-     (#connPanel es flex column). overflow:hidden hace que flexbox trate su min-height
-     automático como 0 en vez de "el que pida el contenido" (así lo define la spec),
-     así que sin esto un pb-block con contenido anidado grande (ej. Información de
-     conexión con sus 3 sub-bloques) se encoge por debajo de su alto real y corta texto
-     sin avisar — ver overflow: hidden más abajo. */
-  .pb-block { border: 1px solid var(--border); border-radius: 12px; margin-bottom: .5rem; overflow: hidden; flex-shrink: 0; }
-  /* Glow por estado del toggle de reenvío (solo bloques con destino RTMP configurado) —
-     mismo patrón pulsante que .video-wrap (@property + @keyframes): verde si está
-     activada, rojo si está apagada. Sin URL configurada no se aplica pb-on/pb-off — el
-     bloque queda gris fijo, sin animar (ver stateClass en renderPlatforms()). */
-  @property --glow-pb { syntax: '<color>'; inherits: false; initial-value: #2ea043; }
-  .pb-block.pb-on, .pb-block.pb-off {
-    border-color: color-mix(in srgb, var(--glow-pb) 45%, var(--border));
-    box-shadow:
-      0 8px 25px -8px color-mix(in srgb, var(--glow-pb) 55%, transparent),
-      inset 0 0 16px -8px color-mix(in srgb, var(--glow-pb) 50%, transparent);
-    animation: pbGlowOn 5s ease-in-out infinite;
-  }
-  @keyframes pbGlowOn { 0%, 100% { --glow-pb: #2ea043; } 50% { --glow-pb: #56d364; } }
-  @keyframes pbGlowOff { 0%, 100% { --glow-pb: #f85149; } 50% { --glow-pb: #f0a23a; } }
-  .pb-block.pb-off { animation-name: pbGlowOff; }
-  @media (prefers-reduced-motion: reduce) {
-    .pb-block.pb-on { animation: none; --glow-pb: #2ea043; }
-    .pb-block.pb-off { animation: none; --glow-pb: #f85149; }
-  }
-  .pb-head { display: flex; align-items: center; gap: .45rem; padding: .55rem .9rem;
-    cursor: pointer; user-select: none; background: var(--surface); transition: background .15s var(--ease-out); }
-  .pb-head:hover { background: var(--surface-2); }
-  .pb-chevron { color: var(--muted); transition: transform .2s var(--ease-out); flex-shrink: 0;
-    font-style: normal; font-size: .6rem; display: inline-block; }
-  .pb-block.open > .pb-head .pb-chevron { transform: rotate(90deg); }
-  .pb-body {
-    display: grid;
-    grid-template-rows: 0fr;
-    border-top: 0px solid var(--border);
-    transition: grid-template-rows .2s var(--ease-out), border-top-width .2s var(--ease-out);
-  }
-  .pb-block.open > .pb-body { grid-template-rows: 1fr; border-top-width: 1px; }
-  .pb-body-inner { overflow: hidden; padding: 0 .9rem; }
-  .pb-block.open > .pb-body > .pb-body-inner { padding: .65rem .9rem; }
-
-  /* Submenú anidado (ej. Conexión servidor / Conexión del chat dentro de Información de
-     conexión): plano, sin su propia tarjeta — evita el look "caja dentro de caja dentro
-     de caja" cuando ya está adentro de un .pb-block con borde. */
-  .pb-subblock { border: none; border-radius: 0; margin-bottom: 0; background: transparent; }
-  .pb-subblock + .pb-subblock { margin-top: .35rem; padding-top: .35rem; border-top: 1px solid var(--border); }
-  .pb-subblock > .pb-head { background: transparent; padding: .3rem .1rem; }
-  .pb-subblock > .pb-head:hover { background: transparent; }
-  .pb-subblock > .pb-head:hover .pb-head-name { color: var(--text); }
-  .pb-subblock.open > .pb-body { border-top-width: 0; }
-  /* .conn en el wrapper del submenú no alcanza a los .field (quedan 2 niveles más abajo,
-     dentro de .pb-body-inner) — el gap real va acá, donde sí son hijos directos. */
-  .pb-subblock.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; padding: .5rem .1rem .15rem; }
-  .pb-head-name { flex: 1; font-size: .88rem; font-weight: 600; }
-  .pb-user { font-size: .68rem; color: var(--muted); font-family: ui-monospace,monospace;
-    max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pb-soon-tag { font-size: .65rem; color: var(--off); font-style: italic; }
-  /* Plano a propósito — iba con su propia tarjeta (bg + borde) igual que .pb-block que
-     lo contiene, mismo look "caja dentro de caja" que ya se corrigió en Información de
-     conexión (.pb-subblock). Acá no hace falta ni ese nivel intermedio. */
-  .pb-rtmp { margin-bottom: .55rem; }
-  .pb-rtmp label { font-size: .7rem; }
-  .pb-rtmp input[type=text] { font-size: .82rem; padding: .38rem .5rem; }
-  .pb-rtmp .row { margin-top: .5rem; gap: .4rem; }
-  .pb-rtmp .save { padding: .38rem .6rem; font-size: .78rem; }
-  .pb-rtmp .del { padding: .38rem .6rem; font-size: .78rem; }
-  .pb-rtmp .auto-note { font-size: .68rem; }
-  .pb-add-rtmp-btn { background: transparent; border: 1px dashed var(--border); color: var(--muted);
-    width: 100%; padding: .38rem; font-size: .76rem; border-radius: 8px; font-weight: 400; }
-  .pb-add-rtmp-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .pb-add-rtmp-form { margin-top: .45rem; }
-  .stream-info-btn { display: flex; align-items: center; justify-content: center; gap: .45rem;
-    width: 100%; margin-bottom: .5rem; padding: .6rem; border-radius: 10px;
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    color: var(--accent); font-size: .85rem; font-weight: 600;
-    transition: background .15s var(--ease-out), border-color .15s var(--ease-out); }
-  .stream-info-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent);
-    border-color: var(--accent); }
-  .custom-add-card { display: flex; align-items: center; justify-content: center; gap: .5rem;
-    width: 100%; padding: .68rem .9rem; border-radius: 12px; margin-bottom: .5rem;
-    background: transparent; border: 1px dashed var(--border); color: var(--muted);
-    font-size: .88rem; font-weight: 600;
-    transition: border-color .15s var(--ease-out), color .15s var(--ease-out); }
-  .custom-add-card:hover { border-color: var(--accent); color: var(--accent); }
-  .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }
-</style>
+<link rel="stylesheet" href="/panel.css">
 </head>
 <canvas id="bgCanvas" aria-hidden="true"></canvas>
 <header>
@@ -1410,6 +422,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     </button>
     <button class="sidebar-toggle-btn" id="connBtn" onclick="showSidebarTab('conn')" title="Conexiones">
       <span class="icon-mask icon-connections"></span>
+    </button>
+    <!-- Conserva el ícono que ya tenía este bloque cuando era un colapsable más dentro
+         del panel de Conexiones — ahora es su propia pestaña, ver #rtmpPanel. -->
+    <button class="sidebar-toggle-btn" id="rtmpBtn" onclick="showSidebarTab('rtmp')" title="Conexión RTMP">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+        <line x1="6" y1="6" x2="6.01" y2="6"/>
+        <line x1="6" y1="18" x2="6.01" y2="18"/>
+      </svg>
     </button>
   </div>
   <div class="side-actions-bottom">
@@ -1446,6 +468,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="vu-ch"><span class="vu-fill" id="vuL"></span></div>
             <div class="vu-ch"><span class="vu-fill" id="vuR"></span></div>
           </div>
+          <!-- Escuchar la transmisión. Arranca SIEMPRE silenciado (el <video> del preview
+               nace con muted): sin esto, abrir la app con los parlantes arriba y el
+               micrófono abierto es un acople directo. El estado no se recuerda entre
+               sesiones a propósito, por lo mismo. -->
+          <button class="mon-btn" id="monBtn" onclick="togglePreviewAudio()" title="Escuchar la transmisión"></button>
         </div>
         <!-- Grabador de clips -->
         <div class="rec-section">
@@ -1500,31 +527,31 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   <!-- Sidebar colapsable: destinos -->
   <aside class="sidebar-col" id="sidebarCol">
     <div class="sidebar-inner" id="connPanel" style="display:none">
-      <!-- Envueltos en su propio div a propósito: .sidebar-inner es flex con gap:1rem
-           entre CADA hijo directo — sin este wrapper, ese gap se sumaba al margin de
-           cada botón y quedaban mucho más separados entre sí de lo que se ve entre
-           tarjetas de plataforma. Adentro del wrapper, el espaciado es el margin-bottom
-           normal de .stream-info-btn — el gap del flex solo separa este grupo del resto. -->
-      <div class="stream-actions-group">
-        <button class="stream-info-btn" onclick="openStreamInfo()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Grilla 2x2, solo íconos + title nativo como tooltip (ver .stream-icon-btn). -->
+      <div class="stream-actions-grid">
+        <button class="stream-icon-btn" onclick="openStreamInfo()" title="Modificar información del stream">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/>
           </svg>
-          Modificar información del stream
         </button>
-        <button class="stream-info-btn" onclick="openPreflightCheck()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="stream-icon-btn" onclick="openPreflightCheck()" title="Comprobar antes de salir en vivo">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
             <polyline points="22 4 12 14.01 9 11.01"/>
           </svg>
-          Comprobar antes de salir en vivo
         </button>
-        <button class="stream-info-btn" style="margin-bottom:0" onclick="openScheduleModal()">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="stream-icon-btn" onclick="openScheduleModal()" title="Programar inicio">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
-          Programar inicio
+        </button>
+        <!-- Mensaje que se manda a los webhooks/bots configurados cuando arranca el
+             stream — ver src/notify.js / src/telegram.js. Vive acá, no en Preferencias
+             (donde están las URLs/tokens, pestaña Webhooks), porque es algo que se toca
+             seguido (cada stream puede querer un mensaje distinto), no un ajuste de una vez. -->
+        <button class="stream-icon-btn" onclick="openDiscordMsgModal()" title="Mensaje de aviso al iniciar">
+          <span class="icon-mask icon-webhook" style="width:17px;height:17px"></span>
         </button>
       </div>
 
@@ -1532,6 +559,18 @@ export const PANEL_HTML = /* html */ `<!doctype html>
            solo hijo directo del flex, para que TikTok y "Añadir destino personalizado"
            quedeen tan pegados como las tarjetas entre sí. -->
       <div class="dest-group">
+        <!-- Perfiles de destinos — combinaciones guardadas de "qué está prendido", ver
+             src/presets.js. Los chips se pintan en runtime, ver renderPresets(). -->
+        <div class="preset-block" id="presetBlock">
+          <div class="preset-head">
+            <span class="preset-label">Perfiles</span>
+            <button type="button" class="preset-save-btn" onclick="saveCurrentPreset()" title="Guardar como perfil">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Guardar actual
+            </button>
+          </div>
+          <div id="presetChips" class="preset-chips"></div>
+        </div>
         <div id="platformList"></div>
         <div id="customList"></div>
 
@@ -1552,99 +591,89 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </details>
       </div>
 
-      <!-- Movido acá desde debajo del preview (antes vivía en .main-col) — es
-           información de referencia, no hace falta que esté siempre a la vista. -->
-      <div class="pb-block open" id="connInfoBlock">
-        <div class="pb-head" onclick="toggleConnInfo()">
+    </div>
+
+    <!-- Pestaña propia (antes era un bloque colapsable más dentro de #connPanel, con su
+         propia caja envolvente). Al quedar sola, cada sub-bloque deja de ser .pb-subblock
+         y pasa a ser una tarjeta .pb-block normal, igual que las de plataforma. -->
+    <div class="sidebar-inner" id="rtmpPanel" style="display:none">
+      <div class="conn pb-block" id="connServerBlock">
+        <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
           <i class="pb-chevron">&#9654;</i>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">
-            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-            <line x1="6" y1="6" x2="6.01" y2="6"/>
-            <line x1="6" y1="18" x2="6.01" y2="18"/>
-          </svg>
-          <span class="pb-head-name">Información de conexión</span>
+          <span class="pb-head-name">Conexión servidor de streaming</span>
         </div>
         <div class="pb-body"><div class="pb-body-inner">
-          <div class="conn pb-block pb-subblock" id="connServerBlock">
-            <div class="pb-head" onclick="toggleConnSub('connServerBlock')">
-              <i class="pb-chevron">&#9654;</i>
-              <span class="pb-head-name">Conexión servidor de streaming</span>
-            </div>
-            <div class="pb-body"><div class="pb-body-inner">
-              <div class="field">
-                <label>Servidor RTMP (en tu software de streaming)</label>
-                <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-              </div>
-              <div class="field">
-                <label>Clave de retransmisión</label>
-                <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-                <!-- "mistream" sigue siendo el default de siempre — esto solo entra en
-                     juego si el usuario decide cambiarla, ver POST /api/stream-key. -->
-                <details class="bitrate-collapse">
-                  <summary>Cambiar clave</summary>
-                  <div class="copyrow" style="margin-top:.4rem">
-                    <input type="text" id="streamKeyEditInput" placeholder="mistream">
-                    <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
-                  </div>
-                </details>
-              </div>
-              <div class="field" id="lanField" style="display:none">
-                <label>Desde otra máquina en tu red</label>
-                <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-              </div>
-              <div class="field" id="pubField" style="display:none">
-                <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-                <div class="copyrow">
-                  <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
-                  <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                  <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                </div>
-              </div>
-            </div></div>
+          <div class="field">
+            <label>Servidor RTMP (en tu software de streaming)</label>
+            <div class="copyrow"><code id="rtmpUrl">—</code><button onclick="copy('rtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
           </div>
-          <div class="conn pb-block pb-subblock" id="connChatBlock">
-            <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
-              <i class="pb-chevron">&#9654;</i>
-              <span class="pb-head-name">Conexión del chat</span>
-            </div>
-            <div class="pb-body"><div class="pb-body-inner">
-              <div class="field">
-                <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
-                <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+          <div class="field">
+            <label>Clave de retransmisión</label>
+            <div class="copyrow"><code id="streamKey">—</code><button onclick="copy('streamKey')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+            <!-- "mistream" sigue siendo el default de siempre — esto solo entra en
+                 juego si el usuario decide cambiarla, ver POST /api/stream-key. -->
+            <details class="bitrate-collapse">
+              <summary>Cambiar clave</summary>
+              <div class="copyrow" style="margin-top:.4rem">
+                <input type="text" id="streamKeyEditInput" placeholder="mistream">
+                <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
               </div>
-              <div class="field" id="chatLanField" style="display:none">
-                <label>Desde otra máquina en tu red</label>
-                <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
-              </div>
-              <div class="field" id="chatPubField" style="display:none">
-                <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
-                <div class="copyrow">
-                  <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
-                  <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                  <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                </div>
-              </div>
-            </div></div>
+            </details>
           </div>
-          <div class="conn pb-block pb-subblock" id="connStreamDeckBlock">
-            <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
-              <i class="pb-chevron">&#9654;</i>
-              <span class="pb-head-name">Conexión plugin Stream Deck</span>
-            </div>
-            <div class="pb-body"><div class="pb-body-inner">
-              <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
-              <div class="field" id="panelTokenField" style="display:none">
-                <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
-                <div class="copyrow">
-                  <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
-                  <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
-                  <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-                </div>
-              </div>
-              <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
-            </div></div>
+          <div class="field" id="lanField" style="display:none">
+            <label>Desde otra máquina en tu red</label>
+            <div class="copyrow"><code id="lanRtmpUrl">—</code><button onclick="copy('lanRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
           </div>
+          <div class="field" id="pubField" style="display:none">
+            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+            <div class="copyrow">
+              <code id="pubRtmpUrl">rtmp://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/live</code>
+              <button onclick="togglePubIp()" id="pubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('pubRtmpUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <div class="conn pb-block" id="connChatBlock">
+        <div class="pb-head" onclick="toggleConnSub('connChatBlock')">
+          <i class="pb-chevron">&#9654;</i>
+          <span class="pb-head-name">Conexión del chat</span>
+        </div>
+        <div class="pb-body"><div class="pb-body-inner">
+          <div class="field">
+            <label>URL del chat (fuente de Navegador en OBS / Streamlabs)</label>
+            <div class="copyrow"><code id="chatLocalUrl">—</code><button onclick="copy('chatLocalUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+          </div>
+          <div class="field" id="chatLanField" style="display:none">
+            <label>Desde otra máquina en tu red</label>
+            <div class="copyrow"><code id="chatLanUrl">—</code><button onclick="copy('chatLanUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+          </div>
+          <div class="field" id="chatPubField" style="display:none">
+            <label>Desde fuera de tu red (requiere port forwarding en tu router)</label>
+            <div class="copyrow">
+              <code id="chatPubUrl">http://&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;/chat-overlay</code>
+              <button onclick="toggleChatPubIp()" id="chatPubEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('chatPubUrl')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <div class="conn pb-block" id="connStreamDeckBlock">
+        <div class="pb-head" onclick="toggleConnSub('connStreamDeckBlock')">
+          <i class="pb-chevron">&#9654;</i>
+          <span class="pb-head-name">Conexión plugin Stream Deck</span>
+        </div>
+        <div class="pb-body"><div class="pb-body-inner">
+          <p class="auto-note">Solo necesario si vas a controlar Muxlyve desde un Stream Deck en otra máquina (emisora secundaria). Si el Stream Deck está en este mismo equipo, no hace falta.</p>
+          <div class="field" id="panelTokenField" style="display:none">
+            <label>Token de acceso remoto (ALLOW_LAN_PANEL)</label>
+            <div class="copyrow">
+              <code id="panelTokenCode">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
+              <button onclick="togglePanelToken()" id="panelTokenEyeBtn" class="eye-btn" title="Mostrar/ocultar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button>
+              <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            </div>
+          </div>
+          <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
         </div></div>
       </div>
     </div>
@@ -1682,7 +711,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               </svg>
             </button>
             <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Información de conexión" → "Conexión del chat".</div>
+              <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? La URL para tu fuente de Navegador está en "Conexión RTMP" → "Conexión del chat".</div>
               <button class="browse-btn" style="width:100%" onclick="openChatConnInfo()">Ver información de conexión</button>
             </div>
           </div>
@@ -1729,6 +758,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="14" x2="15" y2="11"/><circle cx="12" cy="14" r="8"/>
           </svg>
           <span>Grabador de clips</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="prefs-nav-item" data-tab="webhooks" onclick="switchPrefsTab('webhooks')">
+          <span class="icon-mask icon-webhook"></span>
+          <span>Webhooks</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
         <button class="prefs-nav-item" data-tab="support" id="prefsNavSupport" onclick="switchPrefsTab('support')" style="display:none">
@@ -1857,8 +891,35 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                defecto — solo aparece si hay alguno. -->
           <div class="field" id="orphanRecordingsBlock" style="display:none">
             <label>Grabaciones sin convertir</label>
-            <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — convertilas a .mp4 para poder reproducirlas.</div>
+            <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — conviértelas a .mp4 para poder reproducirlas.</div>
             <div id="orphanRecordingsList"></div>
+          </div>
+          <!-- Comando !clip — ajuste del MOTOR (settings.json), no de Electron, por eso
+               vive en esta pestaña (siempre visible) y no en "Sistema" (esa se oculta sin
+               la app de escritorio, ver openPrefs()). -->
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Comando !clip en el chat</div>
+              <div class="pref-desc">Los mods y tú pueden escribir !clip para guardar un clip del buffer, sin salir del juego.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="chatCmdChk" onchange="toggleChatCommands()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+        <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">
+          <div class="field">
+            <label>Webhooks de Discord <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
+            <div class="pref-desc" style="margin-bottom:.5rem">Ajustes del canal → Integraciones → Webhooks. Avisa apenas empieza la transmisión — el mensaje se edita aparte, desde el botón de aviso en la pantalla principal.</div>
+            <div id="discordWebhooksList"></div>
+            <button type="button" class="preset-save-btn" id="addDiscordWebhookBtn" onclick="addDiscordWebhookRow()" style="margin-top:.4rem">+ Añadir webhook</button>
+          </div>
+          <div class="field" style="margin-top:1.3rem;padding-top:1.1rem;border-top:1px solid var(--border)">
+            <label>Bots de Telegram <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
+            <div class="pref-desc" style="margin-bottom:.5rem">Crea un bot con @BotFather en Telegram, copia el token, y el chat ID del canal o grupo donde quieres enviar el aviso.</div>
+            <div id="telegramBotsList"></div>
+            <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
           </div>
         </div>
         <div class="prefs-panel" id="reportSection" data-panel="support">
@@ -1868,6 +929,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="pref-desc">Envía un log de la app junto con tu descripción</div>
             </div>
             <button class="danger-btn" onclick="openReport()">Reportar</button>
+          </div>
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Enviar una idea</div>
+              <div class="pref-desc">¿Qué te gustaría ver en Muxlyve?</div>
+            </div>
+            <button class="success-btn" onclick="openFeedback()">Feedback</button>
           </div>
         </div>
         <div class="prefs-panel" id="prefsLicenseBlock" data-panel="license">
@@ -1921,6 +989,24 @@ export const PANEL_HTML = /* html */ `<!doctype html>
     <button id="reportSendBtn" onclick="sendReport()" style="width:100%">Enviar reporte</button>
   </div>
 </div>
+<div class="prefs-overlay" id="feedbackOverlay" onclick="if(event.target===this)closeFeedback()">
+  <div class="prefs-modal lic-modal">
+    <div class="prefs-head">
+      <h2>Enviar una idea</h2>
+      <button class="prefs-close" onclick="closeFeedback()">✕</button>
+    </div>
+    <div class="field">
+      <label>¿Qué te gustaría ver en Muxlyve?</label>
+      <textarea id="feedbackDesc" rows="4" placeholder="Una función, una mejora, lo que sea…"
+        style="width:100%;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></textarea>
+    </div>
+    <div class="pref-desc" style="margin:.6rem 0 .8rem">
+      Se manda con tu versión de la app — no adjunta logs ni datos de tu equipo.
+    </div>
+    <button id="feedbackSendBtn" onclick="sendFeedback()" style="width:100%">Enviar idea</button>
+  </div>
+</div>
 <div class="prefs-overlay" id="aboutOverlay" onclick="if(event.target===this)closeAbout()">
   <div class="prefs-modal about-modal">
     <div class="prefs-head">
@@ -1969,6 +1055,66 @@ export const PANEL_HTML = /* html */ `<!doctype html>
   </div>
 </div>
 
+<!-- Confirmación propia — reemplaza confirm() nativo del navegador (blanco, sin estilo
+     propio posible, se ve fuera de lugar en Mac/Windows). Contenido se llena en runtime,
+     ver showConfirm() en el script del panel. -->
+<div class="prefs-overlay" id="confirmOverlay" onclick="if(event.target===this)resolveConfirm(false)">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2 id="confirmTitle">Confirmar</h2>
+      <button class="prefs-close" onclick="resolveConfirm(false)">✕</button>
+    </div>
+    <p id="confirmMessage" style="margin:0 0 1rem;font-size:.9rem"></p>
+    <div class="about-btn-row">
+      <button class="about-close-btn" onclick="resolveConfirm(false)">Cancelar</button>
+      <button class="lic-danger-btn" id="confirmOkBtn" style="width:auto;flex:1" onclick="resolveConfirm(true)"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Prompt propio — reemplaza prompt() nativo del navegador, mismo motivo que
+     confirmOverlay arriba. Contenido se llena en runtime, ver showPrompt(). -->
+<div class="prefs-overlay" id="promptOverlay" onclick="if(event.target===this)resolvePrompt(null)">
+  <div class="prefs-modal" style="width:380px">
+    <div class="prefs-head">
+      <h2 id="promptTitle">Confirmar</h2>
+      <button class="prefs-close" onclick="resolvePrompt(null)">✕</button>
+    </div>
+    <div class="field">
+      <input type="text" id="promptInput" onkeydown="if(event.key==='Enter')resolvePrompt($('#promptInput').value)">
+    </div>
+    <div class="about-btn-row" style="margin-top:1rem">
+      <button class="about-close-btn" onclick="resolvePrompt(null)">Cancelar</button>
+      <button class="browse-btn" style="flex:1" onclick="resolvePrompt($('#promptInput').value)">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mensaje de aviso — compartido entre Discord y Telegram (los webhooks/tokens viven en
+     Preferencias → Webhooks, eso se toca una vez; esto se toca seguido, cada stream puede
+     querer un texto distinto, por eso tiene su propio botón de acceso rápido). Ver
+     src/notify.js / src/telegram.js. -->
+<div class="prefs-overlay" id="discordMsgOverlay" onclick="if(event.target===this)closeDiscordMsgModal()">
+  <div class="prefs-modal" style="width:460px">
+    <div class="prefs-head">
+      <h2>Mensaje de aviso</h2>
+      <button class="prefs-close" onclick="closeDiscordMsgModal()">✕</button>
+    </div>
+    <p class="pref-desc" style="margin:0 0 .6rem">Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.</p>
+    <div class="field">
+      <textarea id="discordMsgInput" rows="5" maxlength="2000" oninput="updateDiscordMsgCount()"
+        placeholder="🔴 ¡La transmisión empezó!"
+        style="width:100%;resize:vertical;font-family:inherit;font-size:.85rem;padding:.5rem;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></textarea>
+      <div class="pref-desc" style="text-align:right;margin-top:.25rem" id="discordMsgCount">0 / 2000</div>
+    </div>
+    <div class="about-btn-row">
+      <button class="about-close-btn" onclick="testAllChannelsUi()">Probar</button>
+      <button class="browse-btn" style="flex:1" onclick="saveDiscordMsgModal()">Guardar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Resumen post-stream — se llena en runtime con los acumuladores de sesión, ver
      showSessionSummary()/resetSessionStats() en el script del panel. -->
 <div class="prefs-overlay" id="summaryOverlay" onclick="if(event.target===this)closeSessionSummary()">
@@ -2002,7 +1148,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <h2>Programar inicio</h2>
       <button class="prefs-close" onclick="closeScheduleModal()">✕</button>
     </div>
-    <p class="pref-desc" style="margin:0 0 .75rem">Cada destino puede tener su propia hora — marcalo y elegí cuándo se activa solo, igual que si le dieras al toggle a mano. Desmarcalo para cancelar su programación. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
+    <p class="pref-desc" style="margin:0 0 .75rem">Cada destino puede tener su propia hora — márcalo y elige cuándo se activa solo, igual que si le dieras al toggle a mano. Desmárcalo para cancelar su programación. Igual esperan a que tu software de streaming se conecte para empezar a reenviar.</p>
     <div id="scheduleDestList" style="display:flex;flex-direction:column;gap:.65rem;margin-bottom:.75rem"></div>
     <button class="browse-btn" style="width:100%" onclick="confirmSchedule()">Programar</button>
   </div>
@@ -2031,2035 +1177,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 </div>
 <div id="msg"></div>
 <script src="/flv.min.js"></script>
-<script>
-  // Barra de título fundida con la UI — el padding exacto depende de qué lado ocupan
-  // los botones nativos (izquierda en Mac, derecha en Windows). Se aplica ya mismo,
-  // antes de cualquier otra cosa, para que no haya parpadeo del layout sin compensar.
-  (function () {
-    const ua = navigator.userAgent;
-    if (ua.includes('Mac')) document.body.classList.add('platform-darwin');
-    else if (ua.includes('Windows')) document.body.classList.add('platform-win32');
-    else if (ua.includes('Linux')) document.body.classList.add('platform-linux');
-  })();
-
-  window.onerror = (msg, src, line, col, err) => {
-    const d = document.createElement('div');
-    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f85149;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
-    d.textContent = '[ERROR] ' + msg + ' (' + (src || '') + ':' + line + ':' + col + ')';
-    document.body?.appendChild(d);
-  };
-  window.onunhandledrejection = (e) => {
-    const d = document.createElement('div');
-    d.style.cssText = 'position:fixed;top:40px;left:0;right:0;z-index:9999;background:#d29922;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
-    d.textContent = '[PROMISE] ' + (e.reason?.message || e.reason || 'rejected');
-    document.body?.appendChild(d);
-  };
-  const $ = (s) => document.querySelector(s);
-  const PLATFORM_IDS = ['twitch', 'youtube', 'kick', 'tiktok'];
-  const AUTH_PLATFORMS = [
-    { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
-    { id: 'youtube', name: 'YouTube', color: '#ff0000' },
-    { id: 'kick',    name: 'Kick',    color: '#53fc18' },
-    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
-  ];
-  // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
-  // producción empaquetada (en dev sigue funcionando para poder seguir probando/iterando
-  // con Google). Cuando llegue la aprobación, cambiar esto a false y listo.
-  const YOUTUBE_OAUTH_PENDING = true;
-  let lastState = null;
-  let lastAuthStatus = {};
-  // Idioma actual del cliente — el <html lang="es"> del template ya llega traducido por
-  // translateHtml() (mismo tMap del servidor), así que es una señal confiable sin duplicar
-  // el mecanismo de i18n para texto armado en runtime (fmtClipAge, botones del updater).
-  const UI_LANG = document.documentElement.lang || 'es';
-  function pick(dict) { return dict[UI_LANG] || dict.es; }
-  // Filtro de palabras del chat — declarado acá arriba porque loadChatKeywords() se llama
-  // desde el bloque de "restaura preferencias" más abajo en el archivo; si esta variable
-  // se declarara más abajo que esa llamada, revienta con TDZ (cannot access before
-  // initialization) al cargar la página.
-  let chatKeywords = [];
-  // Gráfico de salud de red por destino — solo en memoria del cliente (sin backend/DB):
-  // ventana corta de bitrate reciente, se borra en cuanto el destino deja de estar 'live'
-  // para no mezclar sesiones de transmisión distintas en la misma línea.
-  const metricsHistory = {};
-  const METRICS_HISTORY_MAX = 30; // ~1 min a ~2s por poll
-
-  // ── Resumen post-stream — acumuladores de sesión, todo en memoria del cliente ──
-  // (mismo criterio que metricsHistory: sin backend/DB nuevos). Se resetean al
-  // arrancar una sesión en vivo, se leen al terminarla (ver render()).
-  let sessionPeakViewers = { twitch: 0, kick: 0, youtube: 0 };
-  let sessionChatMsgCount = 0;
-  let sessionLastUptime = 0;
-  let sessionBitrateSum = {};
-  let sessionBitrateCount = {};
-  function resetSessionStats() {
-    sessionPeakViewers = { twitch: 0, kick: 0, youtube: 0 };
-    sessionChatMsgCount = 0;
-    sessionBitrateSum = {};
-    sessionBitrateCount = {};
-  }
-
-  function trackMetricsHistory(state) {
-    for (const d of state.destinations) {
-      if (d.status === 'live' && d.metrics && typeof d.metrics.bitrate === 'number') {
-        const hist = metricsHistory[d.name] || (metricsHistory[d.name] = []);
-        hist.push(d.metrics.bitrate);
-        if (hist.length > METRICS_HISTORY_MAX) hist.shift();
-        sessionBitrateSum[d.name] = (sessionBitrateSum[d.name] || 0) + d.metrics.bitrate;
-        sessionBitrateCount[d.name] = (sessionBitrateCount[d.name] || 0) + 1;
-      } else {
-        delete metricsHistory[d.name];
-      }
-    }
-  }
-  function sparkColor(pillCls) {
-    if (pillCls === 'live') return 'var(--live)';
-    if (pillCls === 'lagging' || pillCls === 'reconnecting') return 'var(--warn)';
-    if (pillCls === 'failed') return 'var(--danger)';
-    return 'var(--muted)';
-  }
-  function sparklineSvg(history, color) {
-    if (!history || history.length < 2) return '';
-    const w = 64, h = 20;
-    const min = Math.min(...history), max = Math.max(...history);
-    const range = (max - min) || 1;
-    const pts = history.map((v, i) => {
-      const x = (i / (history.length - 1)) * w;
-      const y = h - ((v - min) / range) * h;
-      return x.toFixed(1) + ',' + y.toFixed(1);
-    }).join(' ');
-    const last = history[history.length - 1];
-    return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h +
-      '" preserveAspectRatio="none"><title>' + last + ' kbps</title>' +
-      '<polyline points="' + pts + '" fill="none" stroke="' + color +
-      '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  }
-  // El refresh automático (cada 2s) reconstruye los bloques de plataforma desde cero —
-  // sin esto, borraría el formulario "+ Añadir servidor RTMP" abierto y lo que llevas escrito.
-  const pbAddOpen = {};
-  const pbAddDraft = {};
-  let msgTimer;
-  let flvUrl = '';
-  let player = null;
-
-  function toast(text, isErr) {
-    const m = $('#msg');
-    m.textContent = text;
-    m.className = 'show' + (isErr ? ' err' : '');
-    clearTimeout(msgTimer);
-    msgTimer = setTimeout(() => (m.className = ''), 2500);
-  }
-
-  async function api(method, path, body) {
-    const res = await fetch(path, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Error');
-    return data;
-  }
-
-  function fmtUptime(s) {
-    if (s == null) return '';
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    const p = (n) => String(n).padStart(2, '0');
-    return (h ? p(h) + ':' : '') + p(m) + ':' + p(sec);
-  }
-
-  // Ícono de ojo (SVG, no emoji) para togglear campos ocultos. abierto=mostrar, cerrado=ocultar.
-  function eyeSvg(open) {
-    return open
-      ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
-      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
-  }
-
-  // Ícono SVG (no emoji) por plataforma, con el color de marca de fondo. Devuelve '' si no matchea.
-  const PLATFORM_ICON_GLYPHS = {
-    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
-    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
-    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
-    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
-  };
-  const PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
-  // Insignia propia (no imitamos el ícono nativo de cada plataforma) para marcar "este
-  // mensaje lo escribiste vos, el streamer" — chat.js ya calcula msg.isBroadcaster.
-  const BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
-  const PIN_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
-  function platformIconSvg(id, size) {
-    const glyph = PLATFORM_ICON_GLYPHS[id];
-    if (!glyph) return '';
-    const s = size || 18;
-    return '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:6px">' +
-      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
-  }
-  // Empareja el nombre de un destino personalizado con una plataforma conocida (substring, sin distinguir mayúsculas).
-  function matchPlatformId(name) {
-    const n = (name || '').toLowerCase();
-    if (n.includes('twitch')) return 'twitch';
-    if (n.includes('youtube') || /(^|[^a-z])yt([^a-z]|$)/.test(n)) return 'youtube';
-    if (n.includes('kick')) return 'kick';
-    if (n.includes('tiktok')) return 'tiktok';
-    return null;
-  }
-
-  // Devuelve { cls, text } para la píldora de estado de un destino.
-  function pillFor(d) {
-    if (d.status === 'live') {
-      return d.lagging
-        ? { cls: 'lagging', text: '⚠ rezagado' }
-        : { cls: 'live', text: '● reenviando' };
-    }
-    if (d.status === 'connecting') return { cls: 'reconnecting', text: '⟳ conectando…' };
-    if (d.status === 'reconnecting') return { cls: 'reconnecting', text: '⟳ reconectando… intento ' + d.attempts };
-    if (d.status === 'failed') return { cls: 'failed', text: '✕ falló' };
-    return { cls: d.enabled ? 'on' : 'off', text: d.enabled ? 'activo' : 'apagado' };
-  }
-
-  function metricsFor(d) {
-    if (d.status !== 'live' || !d.metrics) return '';
-    const parts = [];
-    if (d.metrics.bitrate != null) parts.push(d.metrics.bitrate + ' kbps');
-    if (d.metrics.fps != null) parts.push(d.metrics.fps + ' fps');
-    if (d.metrics.speed != null) parts.push(d.metrics.speed + 'x');
-    return parts.join(' · ');
-  }
-
-  function fmtDur(s) {
-    if (s < 60) return s + 's';
-    const min = s / 60;
-    return (Number.isInteger(min) ? min : min.toFixed(1)) + ' min';
-  }
-
-  // El toggle nunca se deshabilita, aunque no haya señal todavía — activarlo sin señal
-  // solo "arma" la intención (localStorage, ver toggleRec/autoResumeRecorders); en cuanto
-  // llegue la señal, arranca solo. Así no hace falta acordarse de prenderlo justo cuando
-  // conectás el software de streaming.
-  function updateRecorder(state) {
-    const rec = state.recorder || { active: false, duration: 60 };
-    const toggle = $('#recToggle');
-    const saveBtn = $('#clipSaveBtn');
-    const status = $('#recStatus');
-    toggle.disabled = false;
-    if (rec.active) {
-      toggle.checked = true;
-      saveBtn.style.display = '';
-      status.className = 'rec-status on';
-      status.textContent = '● Grabando — último ' + fmtDur(rec.duration) + ' disponible';
-    } else if (!state.live) {
-      toggle.checked = !!rec.armed;
-      saveBtn.style.display = 'none';
-      status.className = rec.armed ? 'rec-status on' : 'rec-status';
-      status.textContent = rec.armed
-        ? 'Listo — arranca solo apenas conectes tu software de streaming.'
-        : 'Conecta tu software de streaming para usar el buffer.';
-    } else {
-      toggle.checked = false;
-      saveBtn.style.display = 'none';
-      status.className = 'rec-status';
-      status.textContent = 'Buffer inactivo.';
-    }
-  }
-
-  function updateFullRecorder(state) {
-    const rec = state.fullRecorder || { active: false, startedAt: null };
-    const toggle = $('#fullRecToggle');
-    const status = $('#fullRecStatus');
-    toggle.disabled = false;
-    if (rec.active) {
-      toggle.checked = true;
-      status.className = 'rec-status on';
-      const secs = rec.startedAt ? Math.floor((Date.now() - rec.startedAt) / 1000) : 0;
-      status.textContent = '● Grabando — ' + fmtDur(secs);
-    } else if (!state.live) {
-      toggle.checked = !!rec.armed;
-      status.className = rec.armed ? 'rec-status on' : 'rec-status';
-      status.textContent = rec.armed
-        ? 'Listo — arranca sola apenas conectes tu software de streaming.'
-        : 'Conecta tu software de streaming para grabar.';
-    } else {
-      toggle.checked = false;
-      status.className = 'rec-status';
-      status.textContent = 'Grabación completa inactiva.';
-    }
-  }
-
-  // ── Ingest: stats de video + VU meter de audio ──
-  // SSE setea los objetivos; un loop de suavizado (ataque rápido / caída lenta) anima las barras.
-  const vu = { tL: 0, tR: 0, dL: 0, dR: 0, live: false };
-  function applyVu(el, v) {
-    el.style.width = v + '%';
-  }
-  (function vuLoop() {
-    const ease = (d, t) => d + (t - d) * (t > d ? 0.7 : 0.12); // sube rápido, baja suave
-    vu.dL = ease(vu.dL, vu.live ? vu.tL : 0);
-    vu.dR = ease(vu.dR, vu.live ? vu.tR : 0);
-    applyVu($('#vuL'), Math.round(vu.dL));
-    applyVu($('#vuR'), Math.round(vu.dR));
-    requestAnimationFrame(vuLoop);
-  })();
-
-  (function initAudioSSE() {
-    if (typeof EventSource === 'undefined') return;
-    const es = new EventSource('/api/audio');
-    es.onmessage = (e) => {
-      try { const l = JSON.parse(e.data); vu.tL = l.l; vu.tR = l.r; } catch {}
-    };
-    // EventSource reconecta solo ante error; nada más que hacer.
-  })();
-
-  // Vuelca src/panel.js:debugLog() acá — es la única consola que el usuario puede abrir
-  // en la app empaquetada (DevTools de esta ventana). Ver LAN pairing con Stream Deck.
-  (function initDebugLogSSE() {
-    if (typeof EventSource === 'undefined') return;
-    const es = new EventSource('/api/debug-log');
-    es.onmessage = (e) => {
-      try {
-        const entry = JSON.parse(e.data);
-        (entry.level === 'error' ? console.error : console.log)('[panel-debug]', entry.line);
-      } catch {}
-    };
-  })();
-
-  function updateIngest(state) {
-    vu.live = !!state.live;
-    const bar = $('#ingestBar');
-    if (!state.live || !state.ingest) {
-      bar.style.display = 'none';
-      vu.tL = vu.tR = 0;
-      return;
-    }
-    bar.style.display = '';
-    const ing = state.ingest;
-    const parts = [];
-    if (ing.width && ing.height) parts.push(ing.width + '×' + ing.height);
-    if (ing.fps != null) parts.push(ing.fps + ' fps');
-    $('#ingestVideo').textContent = 'Entrada: ' + (parts.join(' · ') || '—');
-  }
-
-  // Alerta fuera del panel cuando un destino se cae — solo dispara en la TRANSICIÓN a
-  // 'failed' (no en cada poll de 2s mientras se queda ahí), para no repetir la misma
-  // notificación 30 veces. Silenciosa si no hay msApp.notify (navegador sin Electron).
-  const lastDestStatus = {};
-  function notifyDestinationFailures(state) {
-    for (const d of state.destinations) {
-      const prev = lastDestStatus[d.name];
-      if (d.status === 'failed' && prev !== 'failed') {
-        window.msApp?.notify?.('Muxlyve', d.name + ': se cayó la conexión.');
-      }
-      lastDestStatus[d.name] = d.status;
-    }
-  }
-
-  function render(state) {
-    const wasLive = lastState?.live;
-    lastState = state;
-    trackMetricsHistory(state);
-    notifyDestinationFailures(state);
-    if (state.live) sessionLastUptime = state.uptime;
-    if (!wasLive && state.live) {
-      resetSessionStats();
-    }
-    if (wasLive && !state.live) showSessionSummary();
-    $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
-    $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
-    $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
-    $('#videoWrap').classList.toggle('live', state.live);
-    updatePreview(state.live);
-    updateRecorder(state);
-    updateFullRecorder(state);
-    updateIngest(state);
-    renderPlatforms();
-    renderCustom(state);
-  }
-
-  function renderPlatforms() {
-    if (!lastState) return;
-    const state = lastState;
-    const authSt = lastAuthStatus;
-    const pl = $('#platformList');
-    pl.innerHTML = '';
-    for (const p of AUTH_PLATFORMS) {
-      const rtmpDest = state.destinations.find(d => d.name.toLowerCase() === p.id) || null;
-      const authS = authSt[p.id] || {};
-      const storedOpen = localStorage.getItem('ms_pb_' + p.id);
-      const isOpen = storedOpen === '1';
-      const block = document.createElement('div');
-      const stateClass = (rtmpDest && rtmpDest.url) ? (rtmpDest.enabled ? ' pb-on' : ' pb-off') : '';
-      block.className = 'pb-block' + (isOpen ? ' open' : '') + stateClass;
-      block.id = 'pb-' + p.id;
-
-      // OAuth header part
-      let oauthHtml = '';
-      if (p.soon) {
-        oauthHtml = '<span class="pb-soon-tag">OAuth próx.</span>';
-      } else if (authS.connected) {
-        const user = authS.username || 'conectado';
-        oauthHtml = '<span class="pb-user" title="' + user + '">' + user + '</span>' +
-          '<button class="auth-disc" data-id="' + p.id + '" onclick="disconnectPlatform(this.dataset.id)">&#10005;</button>';
-      } else {
-        oauthHtml = '<button class="auth-conn" data-id="' + p.id + '" onclick="connectPlatform(this.dataset.id)">Conectar</button>';
-      }
-
-      // Sparkline en la cabecera — visible con la tarjeta colapsada o no (entre el
-      // nombre y "Conectar"). La píldora ("rezagado"/"reenviando") y las métricas en
-      // texto se quedan adentro del cuerpo (pb-rtmp), solo visibles al expandir.
-      let headSparkHtml = '';
-      if (rtmpDest) {
-        const headPill = pillFor(rtmpDest);
-        headSparkHtml = sparklineSvg(metricsHistory[rtmpDest.name], sparkColor(headPill.cls));
-        // Sin datos de transmisión todavía (no hay sparkline) — si este destino tiene
-        // una hora programada pendiente, mostrarla ahí mismo en vez de dejarlo vacío.
-        if (!headSparkHtml && scheduledEntries[rtmpDest.name]) {
-          headSparkHtml = '<span class="sched-time-badge" title="Programado para activarse solo">&#8987; ' + fmtScheduledTime(scheduledEntries[rtmpDest.name].atMs) + '</span>';
-        }
-      }
-
-      // RTMP body
-      let bodyHtml = '';
-      if (rtmpDest) {
-        const d = rtmpDest;
-        const isTikTok = p.id === 'tiktok';
-        const pill = pillFor(d);
-        const metrics = metricsFor(d);
-        bodyHtml += '<div class="pb-rtmp">';
-        bodyHtml += '<div class="card-head"><span class="pill ' + pill.cls + '">' + pill.text + '</span>';
-        if (d.transcoding) bodyHtml += '<span class="pill" style="color:var(--warn);background:rgba(240,162,58,.15)" title="Bitrate máximo activo — este destino se está recodificando">&#9889; recodificando</span>';
-        if (metrics) bodyHtml += '<span class="metrics">' + metrics + '</span>';
-        bodyHtml += '</div>';
-        bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal' : '') + '</label>';
-        bodyHtml += '<div class="eyerow"><input type="password" class="pb-url" value="" autocomplete="off">';
-        bodyHtml += '<button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">' + eyeSvg(false) + '</button></div></div>';
-        bodyHtml += '<details class="bitrate-collapse">';
-        bodyHtml += '<summary>Bitrate máximo (kbps) — opcional</summary>';
-        bodyHtml += '<input type="number" class="pb-maxbitrate" min="500" step="500" placeholder="Vacio = Mismo Bitrate origen" value="' + (d.maxBitrate || '') + '"></details>';
-        bodyHtml += '<div class="row"><label class="switch">';
-        bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + d.name + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
-        bodyHtml += '<span class="thumb"></span></label>';
-        bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
-        if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
-        bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
-        if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>';
-        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
-        bodyHtml += '</div>';
-      } else {
-        const isTikTok = p.id === 'tiktok';
-        if (p.id === 'youtube' && authS.connected) {
-          bodyHtml += '<p class="auto-note">&#8505; Conectado como ' + (authS.username || 'tu cuenta') +
-            ' — no se pudo traer tu clave automáticamente (¿configuraste "Ir en vivo" en ' +
-            'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
-        }
-        if (isTikTok) {
-          bodyHtml += '<p class="auto-note">&#8505; TikTok no tiene login — consigue tu URL y clave así: ' +
-            'abre la app de TikTok &#8594; toca + &#8594; LIVE &#8594; icono de ajustes antes de salir ' +
-            'en vivo &#8594; "Transmitir desde PC/consola". Copia el Server URL y la Stream Key que te ' +
-            'muestre y pégalos abajo. Esa clave expira en unas horas — genérala justo antes de transmitir.</p>';
-        }
-        const openStyle = pbAddOpen[p.id] ? ' style="display:none"' : '';
-        const formStyle = pbAddOpen[p.id] ? '' : ' style="display:none"';
-        bodyHtml += '<button class="pb-add-rtmp-btn" data-pid="' + p.id + '" onclick="showAddPlatformRtmp(this.dataset.pid)"' + openStyle + '>+ Añadir servidor RTMP</button>';
-        bodyHtml += '<div class="pb-add-rtmp-form" id="pb-add-form-' + p.id + '"' + formStyle + '>';
-        bodyHtml += '<div class="field"><label>URL RTMP' + (isTikTok ? ' &#8212; clave temporal TikTok' : '') + '</label>';
-        bodyHtml += '<input type="text" id="pb-new-url-' + p.id + '" placeholder="rtmp://servidor/app/CLAVE" oninput="onPbDraftInput(this)"></div>';
-        bodyHtml += '<div class="row" style="margin-top:.5rem">';
-        bodyHtml += '<button class="save" data-pid="' + p.id + '" onclick="addPlatformRtmp(this.dataset.pid)">Añadir</button>';
-        bodyHtml += '<button class="del" data-pid="' + p.id + '" onclick="cancelAddPlatformRtmp(this.dataset.pid)">Cancelar</button>';
-        bodyHtml += '</div></div>';
-      }
-
-      block.innerHTML =
-        '<div class="pb-head" data-pid="' + p.id + '" onclick="togglePlatformBlock(this.dataset.pid)">' +
-        '<i class="pb-chevron">&#9654;</i>' +
-        (platformIconSvg(p.id) || '<span class="p-dot" style="background:' + p.color + '"></span>') +
-        '<span class="pb-head-name">' + p.name + '</span>' +
-        headSparkHtml +
-        oauthHtml +
-        '</div>' +
-        '<div class="pb-body"><div class="pb-body-inner">' + bodyHtml + '</div></div>';
-
-      if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
-      if (pbAddDraft[p.id]) {
-        const draftInput = block.querySelector('#pb-new-url-' + p.id);
-        if (draftInput) draftInput.value = pbAddDraft[p.id];
-      }
-      pl.appendChild(block);
-    }
-  }
-
-  // El input de "+ Añadir servidor RTMP" solo existe cuando rtmpDest es null (else branch),
-  // así que su id siempre trae el pid — se guarda para sobrevivir el refresh cada 2s.
-  function onPbDraftInput(input) {
-    const pid = input.id.replace('pb-new-url-', '');
-    pbAddDraft[pid] = input.value;
-  }
-
-  function renderCustom(state) {
-    const cl = $('#customList');
-    const custom = state.destinations.filter(d => !PLATFORM_IDS.includes(d.name.toLowerCase()));
-    cl.innerHTML = '';
-    if (custom.length === 0) return;
-    cl.appendChild(Object.assign(document.createElement('div'), { className: 'custom-sep' }));
-    for (const d of custom) {
-      const isTikTok = /tiktok/i.test(d.name);
-      const pill = pillFor(d);
-      const metrics = metricsFor(d);
-      const matchedId = matchPlatformId(d.name);
-      const icon = matchedId ? platformIconSvg(matchedId, 16) : '';
-      const card = document.createElement('div');
-      card.className = 'card' + (isTikTok ? ' tiktok' : '');
-      card.innerHTML = \`
-        <div class="card-head">
-          \${icon}
-          <span class="name"></span>
-          <span class="pill \${pill.cls}"></span>
-          \${d.transcoding ? '<span class="pill" style="color:var(--warn);background:rgba(240,162,58,.15)" title="Bitrate máximo activo — este destino se está recodificando">&#9889; recodificando</span>' : ''}
-          <span class="metrics"></span>
-          <span class="spark-slot"></span>
-        </div>
-        <div class="field">
-          <label>URL RTMP\${isTikTok ? ' &#8212; clave temporal TikTok' : ''}</label>
-          <div class="eyerow">
-            <input type="password" class="url" value="" autocomplete="off">
-            <button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">\${eyeSvg(false)}</button>
-          </div>
-        </div>
-        <details class="bitrate-collapse">
-          <summary>Bitrate máximo (kbps) — opcional</summary>
-          <input type="number" class="max-bitrate" min="500" step="500" placeholder="Vacio = Mismo Bitrate origen">
-        </details>
-        <div class="row">
-          <label class="switch" title="\${d.enabled ? 'Desactivar' : 'Activar'}">
-            <input type="checkbox" class="toggle-cb"\${d.enabled ? ' checked' : ''}>
-            <span class="thumb"></span>
-          </label>
-          <button class="save">Guardar</button>
-          \${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
-          <button class="del">Borrar</button>
-        </div>
-        \${d.enabled && !state.live ? '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>' : ''}
-        \${d.note ? '<p class="note"></p>' : ''}
-      \`;
-      card.querySelector('.name').textContent = d.name;
-      card.querySelector('.pill').textContent = pill.text;
-      card.querySelector('.metrics').textContent = metrics;
-      card.querySelector('.spark-slot').innerHTML = sparklineSvg(metricsHistory[d.name], sparkColor(pill.cls));
-      const urlInput = card.querySelector('.url');
-      urlInput.value = d.url;
-      const bitrateInput = card.querySelector('.max-bitrate');
-      bitrateInput.value = d.maxBitrate || '';
-      if (d.note) card.querySelector('.note').textContent = '&#9651; ' + d.note;
-      card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked, bitrateInput.value);
-      card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled, bitrateInput.value);
-      card.querySelector('.del').onclick = () => del(d.name);
-      const retryBtn = card.querySelector('.retry');
-      if (retryBtn) retryBtn.onclick = () => doRetry(d.name);
-      cl.appendChild(card);
-    }
-  }
-
-  function togglePlatformBlock(pid) {
-    const block = $('#pb-' + pid);
-    if (!block) return;
-    const isOpen = block.classList.toggle('open');
-    localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
-  }
-
-  function toggleConnInfo() {
-    const block = $('#connInfoBlock');
-    const isOpen = block.classList.toggle('open');
-    localStorage.setItem('ms_pb_conninfo', isOpen ? '1' : '0');
-  }
-  if (localStorage.getItem('ms_pb_conninfo') === '0') $('#connInfoBlock').classList.remove('open');
-
-  function showAddPlatformRtmp(pid) {
-    pbAddOpen[pid] = true;
-    const form = $('#pb-add-form-' + pid);
-    if (!form) return;
-    form.previousElementSibling.style.display = 'none';
-    form.style.display = '';
-  }
-
-  function cancelAddPlatformRtmp(pid) {
-    pbAddOpen[pid] = false;
-    delete pbAddDraft[pid];
-    const form = $('#pb-add-form-' + pid);
-    if (!form) return;
-    form.style.display = 'none';
-    form.previousElementSibling.style.display = '';
-    const inp = $('#pb-new-url-' + pid);
-    if (inp) inp.value = '';
-  }
-
-  // Evita que el poll de refresh() (cada 2s) pise una mutación en curso o
-  // los campos que el usuario está llenando — root cause de que el formulario
-  // "añadir servidor" se borrara solo, clics se perdieran, o un borrado se
-  // revirtiera por una respuesta de refresh() llegando después.
-  let destBusy = false;
-  async function withDestBusy(fn) {
-    destBusy = true;
-    try { await fn(); } finally { destBusy = false; }
-  }
-
-  async function addPlatformRtmp(pid) {
-    const inp = $('#pb-new-url-' + pid);
-    const url = inp ? inp.value.trim() : '';
-    if (!url) { toast('Pon una URL', true); return; }
-    const name = (AUTH_PLATFORMS.find(p => p.id === pid) || {}).name || pid;
-    try {
-      await withDestBusy(async () => {
-        pbAddOpen[pid] = false;
-        delete pbAddDraft[pid];
-        render(await api('POST', '/api/destinations', { name, url, enabled: false }));
-      });
-      toast(name + ' RTMP añadido');
-    } catch (e) { toast(e.message, true); }
-  }
-
-  function savePbRtmp(btn) {
-    const name = btn.dataset.name;
-    const card = btn.closest('.pb-rtmp');
-    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked, card.querySelector('.pb-maxbitrate').value);
-  }
-
-  function delPbRtmp(btn) { del(btn.dataset.name); }
-  function retryPbRtmp(btn) { doRetry(btn.dataset.name); }
-
-  function togglePbRtmp(cb) {
-    const card = cb.closest('.pb-rtmp');
-    save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked, card.querySelector('.pb-maxbitrate').value);
-  }
-
-  async function doRetry(name) {
-    try {
-      await withDestBusy(async () => { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name))); });
-      toast('Reintentando ' + name);
-    } catch (e) { toast(e.message, true); }
-  }
-
-  async function save(name, url, enabled, maxBitrate) {
-    try {
-      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled, maxBitrate })); });
-      toast(enabled ? name + ' activado' : name + ' guardado');
-    } catch (e) { toast(e.message, true); refresh(); }
-  }
-  async function del(name) {
-    if (!confirm('¿Borrar ' + name + '?')) return;
-    try {
-      await withDestBusy(async () => { render(await api('DELETE', '/api/destinations?name=' + encodeURIComponent(name))); });
-      toast(name + ' borrado');
-    } catch (e) { toast(e.message, true); }
-  }
-  async function addDest() {
-    const name = $('#newName').value.trim();
-    const url = $('#newUrl').value.trim();
-    if (!name) return toast('Pon un nombre', true);
-    try {
-      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled: false })); });
-      $('#newName').value = ''; $('#newUrl').value = ''; toast(name + ' añadido');
-    } catch (e) { toast(e.message, true); }
-  }
-  async function applyStreamTitle(btn) {
-    const title = $('#titleInput').value.trim();
-    const category = $('#categoryInput').value.trim();
-    if (!title && !category) return toast('Escribe un título o una categoría primero', true);
-    if (!window.msOAuth?.setTitle) return toast('No disponible en esta versión.', true);
-    if (btn) btn.disabled = true;
-    try {
-      const results = await window.msOAuth.setTitle(title, category);
-      const entries = Object.entries(results || {});
-      if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
-      const failed = entries.filter(([, r]) => !r.ok);
-      if (!failed.length) {
-        if (title) localStorage.setItem('ms_stream_title', title);
-        if (category) localStorage.setItem('ms_stream_category', category);
-        updateStreamTitleDisplay();
-        closeStreamInfo();
-        toast('Actualizado en ' + entries.map(([p]) => p).join(' + '));
-      } else {
-        const [, firstErr] = failed[0];
-        toast((firstErr.error || ('Falló en ' + failed.map(([p]) => p).join(', '))), true);
-      }
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  }
-
-  function toggleChatMenu(e) {
-    e.stopPropagation();
-    $('#chatMenuDd').classList.toggle('open');
-  }
-  function toggleOverlayInfo(e) {
-    e.stopPropagation();
-    $('#overlayInfoDd').classList.toggle('open');
-  }
-  function openChatConnInfo() {
-    $('#overlayInfoDd').classList.remove('open');
-    // "Información de conexión" vive en el sidebar de Conexiones, no en este tab de
-    // chat — hay que cambiar de pestaña antes de abrir/scrollear o quedaría oculto.
-    if (activeSidebarTab !== 'conn') showSidebarTab('conn');
-    openSubBlock('connInfoBlock');
-    openSubBlock('connChatBlock');
-    $('#connChatBlock').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-  function openSubBlock(id) {
-    const block = $('#' + id);
-    if (!block) return;
-    block.classList.add('open');
-    localStorage.setItem('ms_pb_' + id, '1');
-  }
-  function toggleConnSub(id) {
-    const block = $('#' + id);
-    const isOpen = block.classList.toggle('open');
-    localStorage.setItem('ms_pb_' + id, isOpen ? '1' : '0');
-  }
-  if (localStorage.getItem('ms_pb_connServerBlock') === '1') $('#connServerBlock').classList.add('open');
-  if (localStorage.getItem('ms_pb_connChatBlock') === '1') $('#connChatBlock').classList.add('open');
-  if (localStorage.getItem('ms_pb_connStreamDeckBlock') === '1') $('#connStreamDeckBlock').classList.add('open');
-  document.addEventListener('click', () => {
-    const dd = $('#chatMenuDd');
-    if (dd) dd.classList.remove('open');
-    const infoDd = $('#overlayInfoDd');
-    if (infoDd) infoDd.classList.remove('open');
-  });
-
-  async function applyChatMode(btn) {
-    const emoteOnly = $('#emoteOnlyChk').checked;
-    const subscriberOnly = $('#subOnlyChk').checked;
-    const slowOn = $('#slowModeChk').checked;
-    const slowSeconds = slowOn ? Math.max(1, Number($('#slowSecondsInput').value) || 30) : 0;
-    if (btn) btn.disabled = true;
-    try {
-      const r = await api('POST', '/api/chat-mode', { emoteOnly, subscriberOnly, slowSeconds });
-      if (r.ok) toast('Chat de Twitch actualizado');
-      else toast(r.error || 'No se pudo aplicar — ¿Twitch conectado?', true);
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  }
-
-  async function sendChatMessageUi(btn) {
-    const input = $('#chatSendInput');
-    const text = input.value.trim();
-    if (!text) return;
-    if (btn) btn.disabled = true;
-    try {
-      const results = await api('POST', '/api/chat-send', { text });
-      const entries = Object.entries(results || {});
-      if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
-      const failed = entries.filter(([, r]) => !r.ok);
-      if (!failed.length) { input.value = ''; }
-      else toast('Falló en ' + failed.map(([p]) => p).join(', '), true);
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  }
-  $('#chatSendInput')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendChatMessageUi($('.chat-send-row .chat-popout-btn'));
-  });
-
-  async function refresh() {
-    if (destBusy) return;
-    const activeTag = document.activeElement?.tagName;
-    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
-    // El ojito de "mostrar clave" solo cambia el type=password/text del <input> existente —
-    // pero el poll reconstruye esas tarjetas desde cero (innerHTML) cada 2s, y el input nuevo
-    // siempre nace en password. Si hay alguno revelado ahora mismo, no reconstruyas todavía.
-    if (document.querySelector('.url[type="text"], .pb-url[type="text"]')) return;
-    try { render(await api('GET', '/api/state')); } catch (e) { console.error('[refresh]', e); }
-  }
-
-  function copy(id) {
-    const el = $('#' + id);
-    const text = el.dataset.real || el.textContent;
-    if (!text || text === '—') return;
-    navigator.clipboard.writeText(text).then(() => toast('Copiado'), () => toast('No se pudo copiar', true));
-  }
-
-  let pubIpVisible = false;
-  async function togglePubIp() {
-    const el = $('#pubRtmpUrl');
-    const btn = $('#pubEyeBtn');
-    pubIpVisible = !pubIpVisible;
-    if (pubIpVisible) {
-      if (!el.dataset.real) {
-        try {
-          const { ip } = await api('GET', '/api/public-ip');
-          if (ip && window._rtmpPort) el.dataset.real = 'rtmp://' + ip + ':' + window._rtmpPort + '/live';
-        } catch {}
-      }
-      el.textContent = el.dataset.real || 'No disponible';
-    } else {
-      el.textContent = 'rtmp://' + '•'.repeat(12) + '/live';
-    }
-    if (btn) btn.innerHTML = eyeSvg(pubIpVisible);
-  }
-
-  let panelTokenVisible = false;
-  function togglePanelToken() {
-    const el = $('#panelTokenCode');
-    const btn = $('#panelTokenEyeBtn');
-    panelTokenVisible = !panelTokenVisible;
-    el.textContent = panelTokenVisible ? (el.dataset.real || '—') : '•'.repeat(12);
-    if (btn) btn.innerHTML = eyeSvg(panelTokenVisible);
-  }
-
-  let chatPubIpVisible = false;
-  async function toggleChatPubIp() {
-    const el = $('#chatPubUrl');
-    const btn = $('#chatPubEyeBtn');
-    chatPubIpVisible = !chatPubIpVisible;
-    if (chatPubIpVisible) {
-      if (!el.dataset.real) {
-        try {
-          const { ip } = await api('GET', '/api/public-ip');
-          if (ip) el.dataset.real = 'http://' + ip + ':' + location.port + '/chat-overlay';
-        } catch {}
-      }
-      el.textContent = el.dataset.real || 'No disponible';
-    } else {
-      el.textContent = 'http://' + '•'.repeat(12) + '/chat-overlay';
-    }
-    if (btn) btn.innerHTML = eyeSvg(chatPubIpVisible);
-  }
-
-  // Alterna type=password/text de cualquier <input> junto a un botón .eye-btn dentro de .eyerow.
-  function toggleFieldEye(btn) {
-    const input = btn.previousElementSibling;
-    if (!input) return;
-    const show = input.type === 'password';
-    input.type = show ? 'text' : 'password';
-    btn.innerHTML = eyeSvg(show);
-  }
-
-  // Arranca/para el reproductor flv.js según haya emisión. Solo crea el player
-  // cuando OBS publica (si no, el FLV no existe y daría error). También se
-  // destruye mientras la ventana está oculta/tapada (Espacios en Mac, minimizada
-  // o detrás de otra app en Windows) — si no, el preview queda congelado en el
-  // frame de cuando se ocultó y al volver parece un delay real de transmisión,
-  // cuando en realidad el relay real (procesos FFmpeg aparte) nunca se detuvo.
-  function updatePreview(live) {
-    const ph = $('#videoPh');
-    const shouldPlay = live && !document.hidden;
-    if (shouldPlay && !player) {
-      if (!(flvUrl && window.flvjs && flvjs.isSupported())) return;
-      const video = $('#player');
-      player = flvjs.createPlayer({ type: 'flv', url: flvUrl, isLive: true });
-      player.attachMediaElement(video);
-      player.load();
-      player.play().catch(() => {});
-      ph.style.display = 'none';
-    } else if (!shouldPlay) {
-      if (player) { player.destroy(); player = null; }
-      // Sin señal: el ícono parpadeando alcanza — decirlo en texto además es redundante
-      // con "esperando señal" que ya está en la barra superior. En pausa (ventana en
-      // segundo plano) sí es información nueva, esa se queda como texto.
-      $('#videoOffIcon').style.display = document.hidden ? 'none' : '';
-      $('#videoPhText').textContent = document.hidden ? 'Vista en pausa (ventana en segundo plano)…' : '';
-      ph.style.display = 'flex';
-    }
-  }
-  document.addEventListener('visibilitychange', () => {
-    updatePreview(lastState ? lastState.live : false);
-  });
-
-  async function loadConfig() {
-    try {
-      const c = await api('GET', '/api/config');
-      flvUrl = c.flvUrl || '';
-      $('#rtmpUrl').textContent = c.rtmpUrl || '—';
-      $('#streamKey').textContent = c.streamKey || '—';
-      $('#streamKeyEditInput').value = c.streamKey || '';
-      if (c.lanRtmpUrl) {
-        $('#lanRtmpUrl').textContent = c.lanRtmpUrl;
-        $('#lanField').style.display = '';
-      }
-      if (c.rtmpPort) {
-        window._rtmpPort = c.rtmpPort;
-        $('#pubField').style.display = '';
-      }
-      $('#chatLocalUrl').textContent = location.origin + '/chat-overlay';
-      if (c.lanIp) {
-        $('#chatLanUrl').textContent = 'http://' + c.lanIp + ':' + location.port + '/chat-overlay';
-        $('#chatLanField').style.display = '';
-      }
-      $('#chatPubField').style.display = '';
-      if (c.panelToken) {
-        $('#panelTokenCode').dataset.real = c.panelToken;
-        $('#panelTokenField').style.display = '';
-        $('#panelTokenHint').style.display = 'none';
-      }
-      if (c.version) window._appVersion = c.version;
-    } catch {}
-  }
-
-  let recDurSel = 60;
-  function setRecDur(dur) {
-    recDurSel = dur;
-    localStorage.setItem('ms_rec_dur', dur);
-    document.querySelectorAll('.rec-dur button').forEach(b =>
-      b.classList.toggle('sel', Number(b.dataset.dur) === dur));
-    // Persiste server-side ya mismo (no espera a que se arme/desarme el buffer) — así
-    // el próximo arranque automático por onPublish() usa esta duración aunque el buffer
-    // ya estuviera armado desde antes. Fire-and-forget: si falla, sigue siendo válida
-    // la de la sesión anterior, no vale la pena bloquear la UI por esto.
-    api('POST', '/api/record/duration', { duration: dur }).catch(() => {});
-  }
-
-  // Ajuste persistente server-side (settings.json, ver relays.js armRecording()) — sin
-  // señal el backend "arma" en vez de arrancar de una, y lo arranca solo apenas OBS
-  // conecte (onPublish). Mismo endpoint sea el panel o el plugin de Stream Deck quien
-  // lo llame, así que se comportan siempre igual.
-  async function toggleRec() {
-    const wantActive = $('#recToggle').checked;
-    try {
-      await api('POST', wantActive ? '/api/record/start' : '/api/record/stop', { duration: recDurSel });
-      if (wantActive && !lastState?.live) toast('Arrancará solo apenas conectes tu software de streaming');
-      refresh();
-    } catch (e) { toast(e.message, true); }
-  }
-
-  async function toggleFullRec() {
-    const wantActive = $('#fullRecToggle').checked;
-    try {
-      const outputDir = $('#recordingsDir').value.trim() || undefined;
-      await api('POST', wantActive ? '/api/fullrecord/start' : '/api/fullrecord/stop', { outputDir });
-      if (wantActive && !lastState?.live) toast('Arrancará sola apenas conectes tu software de streaming');
-      refresh();
-    } catch (e) { toast(e.message, true); }
-  }
-
-  async function saveStreamKey() {
-    const val = $('#streamKeyEditInput').value.trim();
-    if (!val) { toast('La clave no puede quedar vacía', true); return; }
-    try {
-      await api('POST', '/api/stream-key', { streamKey: val });
-      toast('Clave actualizada — usá la nueva en tu software de streaming');
-      loadConfig();
-    } catch (e) { toast(e.message, true); }
-  }
-
-  async function browseFolder() {
-    try {
-      const r = await api('GET', '/api/pick-folder');
-      if (r.path) {
-        $('#clipsDir').value = r.path;
-        localStorage.setItem('ms_clips_dir', r.path);
-        setClipsDirServer(r.path);
-      }
-    } catch (e) {
-      // No es Electron: oculta el botón y deja que el usuario escriba a mano
-      $('#browseBtn').style.display = 'none';
-    }
-  }
-
-  async function browseRecordingsFolder() {
-    try {
-      const r = await api('GET', '/api/pick-folder');
-      if (r.path) {
-        $('#recordingsDir').value = r.path;
-        localStorage.setItem('ms_recordings_dir', r.path);
-        setRecordingsDirServer(r.path);
-      }
-    } catch (e) {
-      $('#browseRecordingsBtn').style.display = 'none';
-    }
-  }
-
-  // Fire-and-forget, igual que setRecDur() — persisten la carpeta elegida en
-  // settings.json (ver setClipsDir/setRecordingsDir en relays.js) para que el plugin de
-  // Stream Deck (que nunca manda outputDir) guarde en la MISMA carpeta que el panel,
-  // en vez de siempre caer en la carpeta default.
-  function setClipsDirServer(dir) {
-    api('POST', '/api/clips/set-dir', { dir }).catch(() => {});
-  }
-  function setRecordingsDirServer(dir) {
-    api('POST', '/api/recordings/set-dir', { dir }).catch(() => {});
-  }
-
-  // Nombres ya anunciados por ESTE panel (guardado propio) — el poll de loadRecentClips()
-  // los ignora al detectar "nuevos", para no duplicar el toast de este mismo guardado.
-  const announcedClipNames = new Set();
-
-  async function doSaveClip() {
-    const btn = $('#clipSaveBtn');
-    const outputDir = $('#clipsDir').value.trim() || null;
-    btn.disabled = true; btn.textContent = 'Guardando…';
-    try {
-      const r = await api('POST', '/api/record/save', { duration: recDurSel, outputDir });
-      const name = r.path ? r.path.split(/[\\/]/).pop() : '';
-      if (name) announcedClipNames.add(name);
-      toast('✓ Clip guardado' + (name ? ': ' + name : ''));
-      loadRecentClips();
-    } catch (e) { toast(e.message, true); }
-    finally { btn.disabled = false; btn.textContent = 'Guardar clip'; }
-  }
-
-  async function openClipsFolder() {
-    if (!window.msApp) return;
-    try {
-      const outputDir = $('#clipsDir').value.trim() || null;
-      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { dir } = await api('GET', '/api/clips' + q);
-      await api('POST', '/api/clips/open', { path: dir });
-    } catch (e) {
-      toast(e.message, true);
-    }
-  }
-
-  function fmtClipSize(bytes) {
-    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  }
-  // Construido en el cliente en tiempo de ejecución — translateHtml() traduce el HTML
-  // servido una sola vez, no puede alcanzar texto armado después con JS. document.documentElement.lang
-  // sí queda en 'en'/'es' correcto (ese <html lang="es"> es el primer key de tMap), así
-  // que sirve como señal confiable del idioma actual sin duplicar todo el mecanismo de i18n.
-  function fmtClipAge(mtime) {
-    const mins = Math.floor((Date.now() - mtime) / 60000);
-    if (mins < 1) return pick({ es: 'ahora mismo', en: 'just now', fr: "à l'instant", pt: 'agora mesmo' });
-    if (mins < 60) return pick({ es: 'hace ' + mins + ' min', en: mins + ' min ago', fr: 'il y a ' + mins + ' min', pt: 'há ' + mins + ' min' });
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return pick({ es: 'hace ' + hrs + 'h', en: hrs + 'h ago', fr: 'il y a ' + hrs + 'h', pt: 'há ' + hrs + 'h' });
-    const days = Math.floor(hrs / 24);
-    return pick({ es: 'hace ' + days + 'd', en: days + 'd ago', fr: 'il y a ' + days + 'j', pt: 'há ' + days + 'd' });
-  }
-  const CLIP_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>';
-
-  const CLIP_DEL_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
-
-  // null = todavía no cargó ninguna vez (recién abrió el panel) — no hay que anunciar
-  // como "nuevos" clips que ya existían de antes, solo los que aparecen DESPUÉS del
-  // primer load. Distinto de announcedClipNames: esto es "qué vi la última vez",
-  // aquello es "cuáles ya avisé yo mismo" (para no duplicar el toast del guardado local).
-  let seenClipNames = null;
-
-  async function loadRecentClips() {
-    if (!window.msApp) return;
-    try {
-      const outputDir = $('#clipsDir').value.trim() || null;
-      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { files, total } = await api('GET', '/api/clips' + q);
-      // Guardado desde OTRO cliente (ej. Stream Deck) — el panel no tiene forma de
-      // saberlo salvo comparando con la última lista que vio. Sin esto, un clip
-      // guardado por el plugin no daba ninguna señal en la app hasta que el usuario
-      // notaba que apareció solo en la lista (o ni eso, si no la tenía abierta).
-      if (seenClipNames) {
-        for (const f of files) {
-          if (seenClipNames.has(f.name)) continue;
-          if (announcedClipNames.delete(f.name)) continue; // ya avisado por doSaveClip()
-          toast('✓ Clip guardado: ' + f.name);
-        }
-      }
-      seenClipNames = new Set(files.map((f) => f.name));
-      const box = $('#recentClips');
-      const list = $('#recentClipsList');
-      if (!files.length) { box.style.display = 'none'; return; }
-      box.style.display = '';
-      list.innerHTML = '';
-      for (const f of files) {
-        const item = document.createElement('div');
-        item.className = 'recent-clip-item';
-        item.innerHTML = CLIP_ICON_SVG +
-          '<div class="recent-clip-info">' +
-          '<div class="recent-clip-name"></div>' +
-          '<div class="recent-clip-meta"></div>' +
-          '</div>' +
-          '<button class="recent-clip-del" title="Borrar">' + CLIP_DEL_ICON_SVG + '</button>';
-        item.querySelector('.recent-clip-name').textContent = f.name;
-        item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
-        item.addEventListener('click', () => revealClip(f.path));
-        item.querySelector('.recent-clip-del').addEventListener('click', (e) => {
-          e.stopPropagation();
-          deleteClip(f.path);
-        });
-        list.appendChild(item);
-      }
-      if (total > files.length) {
-        const more = document.createElement('div');
-        more.className = 'recent-clips-more';
-        const moreN = total - files.length;
-        more.textContent = pick({
-          es: 'y ' + moreN + ' más — abrir carpeta',
-          en: 'and ' + moreN + ' more — open folder',
-          fr: 'et ' + moreN + ' de plus — ouvrir le dossier',
-          pt: 'e mais ' + moreN + ' — abrir pasta',
-        });
-        more.addEventListener('click', openClipsFolder);
-        list.appendChild(more);
-      }
-    } catch {}
-  }
-
-  async function revealClip(clipPath) {
-    try { await api('POST', '/api/clips/open', { path: clipPath, reveal: true }); }
-    catch (e) { toast(e.message, true); }
-  }
-
-  async function deleteClip(clipPath) {
-    try {
-      const outputDir = $('#clipsDir').value.trim() || null;
-      await api('DELETE', '/api/clips', { path: clipPath, outputDir });
-      loadRecentClips();
-    } catch (e) { toast(e.message, true); }
-  }
-
-  async function openRecordingsFolder() {
-    if (!window.msApp) return;
-    try {
-      const outputDir = $('#recordingsDir').value.trim() || null;
-      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { dir } = await api('GET', '/api/recordings' + q);
-      await api('POST', '/api/clips/open', { path: dir }); // ruta genérica, sirve para cualquier carpeta
-    } catch (e) {
-      toast(e.message, true);
-    }
-  }
-
-  async function loadRecentRecordings() {
-    if (!window.msApp) return;
-    try {
-      const outputDir = $('#recordingsDir').value.trim() || null;
-      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { files, total } = await api('GET', '/api/recordings' + q);
-      const box = $('#recentRecordings');
-      const list = $('#recentRecordingsList');
-      if (!files.length) { box.style.display = 'none'; return; }
-      box.style.display = '';
-      list.innerHTML = '';
-      for (const f of files) {
-        const item = document.createElement('div');
-        item.className = 'recent-clip-item';
-        item.innerHTML = CLIP_ICON_SVG +
-          '<div class="recent-clip-info">' +
-          '<div class="recent-clip-name"></div>' +
-          '<div class="recent-clip-meta"></div>' +
-          '</div>' +
-          '<button class="recent-clip-del" title="Borrar">' + CLIP_DEL_ICON_SVG + '</button>';
-        item.querySelector('.recent-clip-name').textContent = f.name;
-        item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
-        item.addEventListener('click', () => revealRecording(f.path));
-        item.querySelector('.recent-clip-del').addEventListener('click', (e) => {
-          e.stopPropagation();
-          deleteRecording(f.path);
-        });
-        list.appendChild(item);
-      }
-      if (total > files.length) {
-        const more = document.createElement('div');
-        more.className = 'recent-clips-more';
-        const moreN = total - files.length;
-        more.textContent = pick({
-          es: 'y ' + moreN + ' más — abrir carpeta',
-          en: 'and ' + moreN + ' more — open folder',
-          fr: 'et ' + moreN + ' de plus — ouvrir le dossier',
-          pt: 'e mais ' + moreN + ' — abrir pasta',
-        });
-        more.addEventListener('click', openRecordingsFolder);
-        list.appendChild(more);
-      }
-    } catch {}
-  }
-
-  async function revealRecording(recordingPath) {
-    try { await api('POST', '/api/clips/open', { path: recordingPath, reveal: true }); }
-    catch (e) { toast(e.message, true); }
-  }
-
-  async function deleteRecording(recordingPath) {
-    try {
-      const outputDir = $('#recordingsDir').value.trim() || null;
-      await api('DELETE', '/api/recordings', { path: recordingPath, outputDir });
-      loadRecentRecordings();
-    } catch (e) { toast(e.message, true); }
-  }
-
-  async function loadOrphanRecordings() {
-    if (!window.msApp) return;
-    try {
-      const outputDir = $('#recordingsDir').value.trim() || null;
-      const q = outputDir ? '?dir=' + encodeURIComponent(outputDir) : '';
-      const { files } = await api('GET', '/api/recordings/orphans' + q);
-      const box = $('#orphanRecordingsBlock');
-      const list = $('#orphanRecordingsList');
-      if (!files.length) { box.style.display = 'none'; return; }
-      box.style.display = '';
-      list.innerHTML = '';
-      for (const f of files) {
-        const item = document.createElement('div');
-        item.className = 'recent-clip-item';
-        item.style.cursor = 'default';
-        item.innerHTML = CLIP_ICON_SVG +
-          '<div class="recent-clip-info">' +
-          '<div class="recent-clip-name"></div>' +
-          '<div class="recent-clip-meta"></div>' +
-          '</div>' +
-          '<button class="browse-btn orphan-convert-btn" style="width:auto;padding:.35rem .7rem;font-size:.75rem">Convertir a MP4</button>';
-        item.querySelector('.recent-clip-name').textContent = f.name;
-        item.querySelector('.recent-clip-meta').textContent = fmtClipAge(f.mtime) + ' · ' + fmtClipSize(f.size);
-        item.querySelector('.orphan-convert-btn').addEventListener('click', (e) => convertOrphan(f.path, e.currentTarget));
-        list.appendChild(item);
-      }
-    } catch {}
-  }
-
-  async function convertOrphan(tsPath, btn) {
-    const outputDir = $('#recordingsDir').value.trim() || null;
-    btn.disabled = true;
-    const original = btn.textContent;
-    btn.textContent = 'Convirtiendo…';
-    try {
-      const r = await api('POST', '/api/recordings/convert', { path: tsPath, outputDir });
-      const name = r.path ? r.path.split(/[\\/]/).pop() : '';
-      toast('✓ Convertido: ' + name);
-      loadOrphanRecordings();
-      loadRecentRecordings();
-    } catch (e) {
-      toast(e.message, true);
-      btn.disabled = false;
-      btn.textContent = original;
-    }
-  }
-
-  // Restaura preferencias guardadas en sesiones anteriores — y las re-sincroniza al
-  // servidor ya mismo (fire-and-forget). Necesario para quien ya tenía una carpeta/
-  // duración elegida en localStorage de ANTES de que existiera la persistencia
-  // server-side: sin este push, settings.json se queda en null/default para siempre,
-  // porque el onchange/setRecDur() normal solo dispara con una edición NUEVA, no por
-  // tener ya un valor cargado desde localStorage.
-  const savedDir = localStorage.getItem('ms_clips_dir');
-  if (savedDir) { $('#clipsDir').value = savedDir; setClipsDirServer(savedDir); }
-  const savedRecordingsDir = localStorage.getItem('ms_recordings_dir');
-  if (savedRecordingsDir) { $('#recordingsDir').value = savedRecordingsDir; setRecordingsDirServer(savedRecordingsDir); }
-  const savedDur = Number(localStorage.getItem('ms_rec_dur'));
-  if ([60, 300, 600, 900].includes(savedDur)) setRecDur(savedDur);
-  loadChatKeywords();
-
-  if (window.msApp) {
-    loadRecentClips();
-    loadRecentRecordings();
-    setInterval(loadRecentClips, 20000);
-    setInterval(loadRecentRecordings, 20000);
-  } else {
-    $('#openClipsFolderBtn').style.display = 'none';
-    $('#openRecordingsFolderBtn').style.display = 'none';
-  }
-
-  // ── Canvas fondo: nodos conectados ──
-  (function initBg() {
-    const canvas = document.getElementById('bgCanvas');
-    const ctx = canvas.getContext('2d');
-    const N = 18, D = 170, FPS = 15, MS = 1000 / FPS;
-    let nodes = [], last = 0;
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    function resize() {
-      canvas.width = innerWidth; canvas.height = innerHeight;
-      nodes = Array.from({length: N}, () => ({
-        x: Math.random() * canvas.width, y: Math.random() * canvas.height,
-        vx: (Math.random() - .5) * .35, vy: (Math.random() - .5) * .35,
-      }));
-    }
-    function draw(ts) {
-      if (!reduceMotion) requestAnimationFrame(draw);
-      if (ts - last < MS) return;
-      last = ts;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const light = document.documentElement.dataset.theme === 'light';
-      const nodeColor = light ? 'rgba(124,92,255,.45)' : 'rgba(124,92,255,.55)';
-      for (let i = 0; i < N; i++) {
-        const a = nodes[i];
-        a.x += a.vx; a.y += a.vy;
-        if (a.x < 0 || a.x > canvas.width) a.vx *= -1;
-        if (a.y < 0 || a.y > canvas.height) a.vy *= -1;
-        for (let j = i + 1; j < N; j++) {
-          const b = nodes[j], dx = a.x - b.x, dy = a.y - b.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist < D) {
-            const alpha = (.12 * (1 - dist / D)).toFixed(3);
-            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-            ctx.strokeStyle = 'rgba(124,92,255,' + alpha + ')'; ctx.lineWidth = .8; ctx.stroke();
-          }
-        }
-        ctx.beginPath(); ctx.arc(a.x, a.y, 1.8, 0, Math.PI * 2);
-        ctx.fillStyle = nodeColor; ctx.fill();
-      }
-    }
-    resize();
-    window.addEventListener('resize', resize);
-    if (reduceMotion) draw(0); else requestAnimationFrame(draw);
-  })();
-
-  // ── Tema claro/oscuro ──
-  // En Windows, la barra de título fundida (titleBarOverlay) tiene su color fijado por
-  // Electron al crear la ventana — hay que avisarle cada vez que cambia el tema, si no
-  // se queda desincronizada (justo el problema original: la barra no seguía el tema).
-  function syncTitleBarTheme() {
-    if (window.msApp && window.msApp.setTitleBarTheme) {
-      window.msApp.setTitleBarTheme(document.documentElement.dataset.theme !== 'light');
-    }
-  }
-  // Mismo origen (http://localhost:19080) que la ventana de chat flotante — le avisa
-  // el tema en vivo sin necesitar una vuelta por Electron IPC.
-  let themeChannel = null;
-  try { themeChannel = new BroadcastChannel('muxlyve-theme'); } catch {}
-
-  function toggleTheme() {
-    const dark = $('#themeChk').checked;
-    const next = dark ? 'dark' : 'light';
-    document.documentElement.dataset.theme = dark ? '' : 'light';
-    localStorage.setItem('ms_theme', next);
-    syncTitleBarTheme();
-    if (themeChannel) themeChannel.postMessage(next);
-  }
-  const savedTheme = localStorage.getItem('ms_theme');
-  if (savedTheme === 'light') {
-    document.documentElement.dataset.theme = 'light';
-  }
-  syncTitleBarTheme();
-  const savedTitle = localStorage.getItem('ms_stream_title');
-  if (savedTitle) $('#titleInput').value = savedTitle;
-  const savedCategory = localStorage.getItem('ms_stream_category');
-  if (savedCategory) $('#categoryInput').value = savedCategory;
-  updateStreamTitleDisplay();
-
-  // ── Wordmark animation: Muxlyve → Muxly Live ──
-  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    (function() {
-      const li = document.getElementById('wmLi');
-      if (!li) return;
-      function cycle() {
-        li.classList.toggle('show');
-        setTimeout(cycle, li.classList.contains('show')
-          ? 2500 + Math.random() * 2000
-          : 5000 + Math.random() * 5000);
-      }
-      setTimeout(cycle, 2500 + Math.random() * 1500);
-    })();
-  }
-
-  function closeConnInfoAndOpenPrefs(e) {
-    e.preventDefault();
-    openPrefs();
-  }
-  async function openPrefs() {
-    $('#prefsOverlay').classList.add('open');
-    $('#themeChk').checked = document.documentElement.dataset.theme !== 'light';
-    loadLicenseInfo();
-    loadOrphanRecordings();
-    const hasElectron = !!window.msApp;
-    $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
-    $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'support', 'license'] : ['clips', 'license'];
-    const stored = localStorage.getItem('ms_prefs_tab');
-    switchPrefsTab(available.includes(stored) ? stored : available[0]);
-    if (hasElectron) {
-      try {
-        const s = await window.msApp.getLoginItem();
-        $('#loginItemChk').checked = s.openAtLogin;
-        $('#startMinChk').checked = s.startMinimized;
-        $('#startMinRow').style.display = s.openAtLogin ? '' : 'none';
-        $('#closeToTrayChk').checked = await window.msApp.getCloseToTray();
-        $('#allowLanChk').checked = await window.msApp.getAllowLanPanel();
-        markActiveLanguageBtn(await window.msApp.getLanguage());
-      } catch {}
-    }
-  }
-  function switchPrefsTab(tab) {
-    document.querySelectorAll('.prefs-nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
-    document.querySelectorAll('.prefs-panel').forEach(el => el.classList.toggle('active', el.dataset.panel === tab));
-    localStorage.setItem('ms_prefs_tab', tab);
-  }
-  function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
-  function markActiveLanguageBtn(lang) {
-    $('#langEsBtn')?.classList.toggle('sel', lang === 'es');
-    $('#langEnBtn')?.classList.toggle('sel', lang === 'en');
-    $('#langFrBtn')?.classList.toggle('sel', lang === 'fr');
-    $('#langPtBtn')?.classList.toggle('sel', lang === 'pt');
-  }
-  async function setAppLanguage(lang) {
-    if (!window.msApp?.setLanguage) return;
-    markActiveLanguageBtn(lang); // feedback inmediato — la recarga real la dispara main.js
-    await window.msApp.setLanguage(lang);
-  }
-  async function toggleLoginItem() {
-    if (!window.msApp) return;
-    const openAtLogin = $('#loginItemChk').checked;
-    const startMinimized = $('#startMinChk').checked;
-    $('#startMinRow').style.display = openAtLogin ? '' : 'none';
-    try { await window.msApp.setLoginItem(openAtLogin, startMinimized); } catch {}
-  }
-  async function toggleCloseToTray() {
-    if (!window.msApp) return;
-    try { await window.msApp.setCloseToTray($('#closeToTrayChk').checked); } catch {}
-  }
-  async function toggleAllowLan() {
-    if (!window.msApp) return;
-    try {
-      await window.msApp.setAllowLanPanel($('#allowLanChk').checked);
-      $('#allowLanRestartRow').style.display = '';
-    } catch {}
-  }
-  async function relaunchApp() {
-    if (!window.msApp) return;
-    try { await window.msApp.relaunchApp(); } catch {}
-  }
-
-  async function checkForUpdates() {
-    if (!window.msApp) return;
-    const btn = $('#updateCheckBtn');
-    btn.disabled = true;
-    btn.textContent = 'Buscando…';
-    try {
-      const r = await window.msApp.checkForUpdates();
-      if (!r.ok) { toast(r.error, true); }
-      // Si sí hay algo que buscar, el resultado (hay/no hay actualización) llega vía un
-      // diálogo nativo del proceso principal, no por aquí — este solo confirma el disparo.
-    } catch (e) {
-      toast(e.message, true);
-    }
-    btn.disabled = false;
-    btn.textContent = 'Buscar';
-  }
-
-  function openReport() { $('#reportOverlay').classList.add('open'); }
-  function closeReport() { $('#reportOverlay').classList.remove('open'); }
-
-  async function sendReport() {
-    if (!window.msApp) return;
-    const btn = $('#reportSendBtn');
-    const desc = $('#reportDesc').value.trim();
-    btn.disabled = true;
-    btn.textContent = 'Enviando…';
-    try {
-      const r = await window.msApp.sendReport(desc);
-      if (r.ok) {
-        toast('✓ Reporte enviado — gracias');
-        $('#reportDesc').value = '';
-        closeReport();
-      } else {
-        toast(r.error || 'No se pudo enviar el reporte', true);
-      }
-    } catch (e) {
-      toast(e.message, true);
-    }
-    btn.disabled = false;
-    btn.textContent = 'Enviar reporte';
-  }
-
-  async function loadLicenseInfo() {
-    $('#licEmail').textContent = '…';
-    const info = await window.msLicense?.getStatus().catch(() => window.msLicense?.getInfo());
-    if (!info) { $('#licEmail').textContent = '—'; return; }
-
-    $('#licEmail').textContent = info.email || '—';
-
-    const planLabels = { monthly: 'Mensual', annual: 'Anual', lifetime: 'Vitalicio' };
-    $('#licPlan').textContent = planLabels[info.plan] || info.plan || 'Vitalicio';
-
-    const badge = $('#licBadge');
-    if (info.plan === 'lifetime') {
-      badge.textContent = 'Vitalicio'; badge.className = 'lic-badge lifetime';
-    } else if (info.status === 'cancelled') {
-      badge.textContent = 'Cancelada'; badge.className = 'lic-badge cancelled';
-    } else {
-      badge.textContent = 'Activa'; badge.className = 'lic-badge active';
-    }
-
-    const renewRow = $('#licRenewRow');
-    if (info.plan === 'lifetime') {
-      renewRow.style.display = 'none';
-    } else {
-      renewRow.style.display = '';
-      const ts = info.status === 'cancelled' ? info.expiresAt : info.renewsAt;
-      $('#licRenewLabel').textContent = info.status === 'cancelled' ? 'Se cancela el' : 'Se renueva el';
-      $('#licRenewDate').textContent = ts
-        ? new Date(ts).toLocaleDateString('es', { year: 'numeric', month: 'long', day: 'numeric' })
-        : '—';
-    }
-
-    $('#licDate').textContent = info.activatedAt
-      ? new Date(info.activatedAt).toLocaleDateString('es', { year: 'numeric', month: 'long', day: 'numeric' })
-      : '—';
-
-    $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
-  }
-
-  function openAbout() {
-    // Versión ya cargada en init (appVersion global); año dinámico
-    $('#aboutVersion').textContent = 'v' + (window._appVersion || '—');
-    $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
-    $('#aboutOverlay').classList.add('open');
-  }
-  function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
-
-  // Botón secundario, estilo bordeado (mismo que "Acerca de Muxlyve"/"Gestionar
-  // suscripción" en Licencia) — .lic-manage-btn. Primario: .browse-btn (morado sólido).
-  function updaterBtn(label, primary, onClick) {
-    const btn = document.createElement('button');
-    btn.textContent = label;
-    btn.className = primary ? 'browse-btn' : 'lic-manage-btn';
-    btn.style.width = '100%';
-    btn.onclick = onClick;
-    return btn;
-  }
-  // 'available' no abre el modal solo — queda pendiente y solo se ve un ícono discreto
-  // sobre Ajustes (ver #updateBtn). El usuario decide cuándo ver el aviso completo.
-  let pendingUpdatePayload = null;
-  function openUpdaterModal() {
-    if (!pendingUpdatePayload) return;
-    $('#updateBtn').style.display = 'none';
-    handleUpdaterEvent(pendingUpdatePayload);
-  }
-  function closeUpdaterModal() {
-    $('#updaterOverlay').classList.remove('open');
-    // Si cerró sin descargar (p.ej. "Ahora no"), la actualización sigue pendiente —
-    // el ícono vuelve para que pueda retomarlo cuando quiera.
-    if (pendingUpdatePayload) $('#updateBtn').style.display = 'flex';
-  }
-  function fmtMBs(bytesPerSecond) {
-    return (bytesPerSecond / (1024 * 1024)).toFixed(1) + ' MB/s';
-  }
-
-  const VIEWER_PLATFORM_LABELS = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
-  function summaryRow(label, value) {
-    const row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.justifyContent = 'space-between';
-    row.style.gap = '1rem';
-    const l = document.createElement('span');
-    l.style.color = 'var(--muted)';
-    l.textContent = label;
-    const v = document.createElement('strong');
-    v.textContent = value;
-    row.appendChild(l);
-    row.appendChild(v);
-    return row;
-  }
-  function closeSessionSummary() { $('#summaryOverlay').classList.remove('open'); }
-  function showSessionSummary() {
-    const body = $('#summaryBody');
-    body.innerHTML = '';
-    body.appendChild(summaryRow('Duración', fmtUptime(sessionLastUptime)));
-    for (const p of ['twitch', 'kick', 'youtube']) {
-      if (sessionPeakViewers[p] > 0) {
-        body.appendChild(summaryRow('Pico ' + VIEWER_PLATFORM_LABELS[p], sessionPeakViewers[p].toLocaleString('es')));
-      }
-    }
-    body.appendChild(summaryRow('Mensajes de chat', String(sessionChatMsgCount)));
-    for (const name of Object.keys(sessionBitrateSum)) {
-      const avg = Math.round(sessionBitrateSum[name] / sessionBitrateCount[name]);
-      body.appendChild(summaryRow('Bitrate prom. ' + name, avg + ' kbps'));
-    }
-    $('#summaryOverlay').classList.add('open');
-  }
-
-  // ── Comprobación previa a salir en vivo ──
-  // Valores de referencia ampliamente citados para cada plataforma — no se leen en vivo
-  // de su documentación (no existe un endpoint para eso). Si alguna cambia su límite
-  // recomendado, actualizar acá a mano.
-  const PLATFORM_BITRATE_MAX = { twitch: 6000, kick: 8000, tiktok: 6000, youtube: 51000 };
-  function preflightRow(status, label) {
-    const row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.alignItems = 'center';
-    row.style.gap = '.5rem';
-    const dot = document.createElement('span');
-    dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex-shrink:0';
-    dot.style.background = status === true ? 'var(--live)' : status === false ? 'var(--warn)' : 'var(--muted)';
-    const text = document.createElement('span');
-    text.textContent = label;
-    row.appendChild(dot);
-    row.appendChild(text);
-    return row;
-  }
-  function closePreflight() { $('#preflightOverlay').classList.remove('open'); }
-  async function openPreflightCheck() {
-    const body = $('#preflightBody');
-    body.innerHTML = '';
-    const state = lastState;
-    if (!state || !state.live) {
-      body.appendChild(preflightRow(null, 'Conecta tu software de streaming para revisar audio y bitrate.'));
-    } else {
-      const hasAudio = vu.tL > 1 || vu.tR > 1;
-      body.appendChild(preflightRow(hasAudio, hasAudio
-        ? 'Señal de audio detectada.'
-        : 'Sin señal de audio — revisa el mic en tu software de streaming.'));
-
-      const liveDest = state.destinations.find((d) => d.status === 'live' && d.metrics && d.metrics.bitrate);
-      if (liveDest) {
-        const bitrate = liveDest.metrics.bitrate;
-        const enabledIds = state.destinations.filter((d) => d.enabled && d.url).map((d) => d.name.toLowerCase());
-        const caps = enabledIds.map((id) => PLATFORM_BITRATE_MAX[id]).filter(Boolean);
-        const tightestCap = caps.length ? Math.min(...caps) : null;
-        if (tightestCap) {
-          const withinCap = bitrate <= tightestCap;
-          body.appendChild(preflightRow(withinCap, withinCap
-            ? ('Bitrate ' + bitrate + ' kbps dentro de lo recomendado.')
-            : ('Bitrate ' + bitrate + ' kbps supera lo recomendado (~' + tightestCap + ' kbps) para alguno de tus destinos.')));
-        }
-      } else {
-        body.appendChild(preflightRow(null, 'Bitrate: esperando datos de algún destino activo.'));
-      }
-    }
-
-    if (window.msOAuth?.checkLiveTokens) {
-      try {
-        const tokens = await window.msOAuth.checkLiveTokens();
-        const entries = Object.entries(tokens);
-        if (!entries.length) {
-          body.appendChild(preflightRow(null, 'No hay cuentas conectadas por OAuth.'));
-        } else {
-          for (const [platform, ok] of entries) {
-            body.appendChild(preflightRow(ok, ok
-              ? ('Sesión de ' + platform + ' activa.')
-              : ('Sesión de ' + platform + ' vencida — reconéctala en el panel.')));
-          }
-        }
-      } catch {
-        body.appendChild(preflightRow(null, 'No se pudo comprobar el estado de las cuentas conectadas.'));
-      }
-    }
-
-    $('#preflightOverlay').classList.add('open');
-  }
-
-  // ── Programar inicio ──
-  // Cada destino tiene su propia hora, independiente de los demás (ej. Kick a las 12:08,
-  // Twitch a otra hora) — name -> { atMs, timerId }. Solo vive en esta sesión del panel
-  // (setTimeout en el navegador) — no persiste si cerrás la app entera antes de que
-  // llegue la hora.
-  const scheduledEntries = {};
-
-  function toLocalInputValue(ms) {
-    const d = new Date(ms);
-    const pad = (n) => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-  }
-  function fmtScheduledTime(ms) {
-    const d = new Date(ms);
-    const pad = (n) => String(n).padStart(2, '0');
-    return pad(d.getHours()) + ':' + pad(d.getMinutes());
-  }
-
-  function closeScheduleModal() { $('#scheduleOverlay').classList.remove('open'); }
-
-  function openScheduleModal() {
-    const list = $('#scheduleDestList');
-    list.innerHTML = '';
-    const state = lastState;
-    const dests = (state?.destinations || []).filter((d) => d.url);
-    if (!dests.length) {
-      list.appendChild(preflightRow(null, 'No hay destinos con URL configurada todavía.'));
-    } else {
-      for (const d of dests) {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;flex-direction:column;gap:.3rem';
-        const head = document.createElement('label');
-        head.style.cssText = 'display:flex;align-items:center;gap:.5rem;font-size:.85rem;cursor:pointer';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.dataset.name = d.name;
-        cb.checked = !!scheduledEntries[d.name] || !d.enabled; // por defecto marca los que hoy están apagados
-        head.appendChild(cb);
-        head.appendChild(document.createTextNode(d.name));
-        row.appendChild(head);
-        const timeInput = document.createElement('input');
-        timeInput.type = 'datetime-local';
-        timeInput.dataset.name = d.name;
-        if (scheduledEntries[d.name]) timeInput.value = toLocalInputValue(scheduledEntries[d.name].atMs);
-        row.appendChild(timeInput);
-        list.appendChild(row);
-      }
-    }
-    $('#scheduleOverlay').classList.add('open');
-  }
-
-  function scheduleFor(name, atMs) {
-    if (scheduledEntries[name]) clearTimeout(scheduledEntries[name].timerId);
-    const timerId = setTimeout(() => runScheduledStart(name), atMs - Date.now());
-    scheduledEntries[name] = { atMs, timerId };
-  }
-  function cancelScheduleFor(name) {
-    if (!scheduledEntries[name]) return;
-    clearTimeout(scheduledEntries[name].timerId);
-    delete scheduledEntries[name];
-  }
-
-  async function runScheduledStart(name) {
-    delete scheduledEntries[name];
-    const state = lastState;
-    const d = state?.destinations.find((x) => x.name === name);
-    if (!d) return;
-    try { await api('POST', '/api/destinations', { name: d.name, url: d.url, enabled: true, maxBitrate: d.maxBitrate }); } catch {}
-    toast(name + ' activado (programado)');
-    refresh();
-  }
-
-  function confirmSchedule() {
-    const names = [...document.querySelectorAll('#scheduleDestList [data-name]')].map((el) => el.dataset.name);
-    const uniqueNames = [...new Set(names)];
-    let changed = 0;
-    for (const name of uniqueNames) {
-      const cb = document.querySelector('#scheduleDestList input[type=checkbox][data-name="' + name.replace(/"/g, '') + '"]');
-      const timeInput = document.querySelector('#scheduleDestList input[type=datetime-local][data-name="' + name.replace(/"/g, '') + '"]');
-      if (!cb || !timeInput) continue;
-      if (!cb.checked) { cancelScheduleFor(name); continue; }
-      const atMs = new Date(timeInput.value).getTime();
-      if (!timeInput.value || Number.isNaN(atMs) || atMs <= Date.now()) continue; // sin hora válida, no lo toca
-      scheduleFor(name, atMs);
-      changed++;
-    }
-    toast(changed ? 'Programación guardada' : 'Sin cambios — revisá que las horas marcadas sean futuras');
-    closeScheduleModal();
-  }
-
-  function showUpdaterProgress(percent, speedText) {
-    $('#updaterButtons').style.display = 'none';
-    const progBox = $('#updaterProgressBox');
-    progBox.style.display = '';
-    $('#updaterProgressFill').style.width = Math.max(0, Math.min(100, percent)) + '%';
-    $('#updaterProgressText').textContent = Math.round(percent) + '%' + (speedText ? ' · ' + speedText : '');
-  }
-  function toggleUpdaterNotes() {
-    $('#updaterNotesBlock').classList.toggle('open');
-  }
-
-  function handleUpdaterEvent(payload) {
-    const { type, title, message, detail, percent, bytesPerSecond, releaseNotes } = payload || {};
-    if (type === 'progress') {
-      // Solo actualiza la barra — no toca título/mensaje ya mostrados por el evento 'available'.
-      showUpdaterProgress(percent, fmtMBs(bytesPerSecond));
-      $('#updaterOverlay').classList.add('open');
-      return;
-    }
-    $('#updaterTitle').textContent = title || 'Muxlyve';
-    $('#updaterMessage').textContent = message || '';
-    $('#updaterDetail').textContent = detail || '';
-    $('#updaterDetail').style.display = detail ? '' : 'none';
-    const notesBlock = $('#updaterNotesBlock');
-    if (type === 'available' && releaseNotes) {
-      $('#updaterNotesText').textContent = releaseNotes;
-      notesBlock.classList.remove('open'); // colapsado por defecto, no invasivo
-      notesBlock.style.display = '';
-    } else {
-      notesBlock.style.display = 'none';
-    }
-    $('#updaterProgressBox').style.display = 'none';
-    const box = $('#updaterButtons');
-    box.style.display = 'flex';
-    box.innerHTML = '';
-    if (type === 'available') {
-      // En Mac el auto-update no aplica sin firma Developer ID real (Squirrel.Mac
-      // rechaza el paquete en silencio) — mientras no haya certificado, solo se ofrece
-      // el dmg manual. Ver electron/updater.js.
-      const isMac = document.body.classList.contains('platform-darwin');
-      if (!isMac) {
-        box.appendChild(updaterBtn(pick({ es: 'Descargar', en: 'Download', fr: 'Télécharger', pt: 'Baixar' }), true, () => {
-          pendingUpdatePayload = null; // ya en curso — que no vuelva el ícono al cerrar
-          showUpdaterProgress(0, pick({ es: 'Iniciando…', en: 'Starting…', fr: 'Démarrage…', pt: 'Iniciando…' }));
-          window.msApp.downloadUpdate();
-        }));
-      }
-      box.appendChild(updaterBtn(pick({ es: 'Descargar desde la web', en: 'Download from the web', fr: 'Télécharger depuis le web', pt: 'Baixar da web' }), isMac, async () => {
-        await window.msApp.openUpdateWeb();
-        closeUpdaterModal();
-      }));
-      box.appendChild(updaterBtn(pick({ es: 'Ahora no', en: 'Not now', fr: 'Pas maintenant', pt: 'Agora não' }), false, closeUpdaterModal));
-    } else if (type === 'downloaded') {
-      box.appendChild(updaterBtn(pick({ es: 'Reiniciar ahora', en: 'Restart now', fr: 'Redémarrer maintenant', pt: 'Reiniciar agora' }), true, () => window.msApp.installUpdate()));
-      box.appendChild(updaterBtn(pick({ es: 'Después', en: 'Later', fr: 'Plus tard', pt: 'Depois' }), false, closeUpdaterModal));
-    } else if (type === 'error') {
-      box.appendChild(updaterBtn(pick({ es: 'Descargar desde la web', en: 'Download from the web', fr: 'Télécharger depuis le web', pt: 'Baixar da web' }), true, async () => {
-        await window.msApp.openUpdateWeb();
-        closeUpdaterModal();
-      }));
-      box.appendChild(updaterBtn(pick({ es: 'Cerrar', en: 'Close', fr: 'Fermer', pt: 'Fechar' }), false, closeUpdaterModal));
-    } else {
-      box.appendChild(updaterBtn('OK', true, closeUpdaterModal));
-    }
-    $('#updaterOverlay').classList.add('open');
-  }
-  function routeUpdaterEvent(payload) {
-    if (payload && payload.type === 'available') {
-      pendingUpdatePayload = payload;
-      $('#updateBtn').style.display = 'flex';
-      return;
-    }
-    handleUpdaterEvent(payload);
-  }
-  if (window.msApp?.onUpdaterEvent) window.msApp.onUpdaterEvent(routeUpdaterEvent);
-
-  function openStreamInfo() { $('#streamInfoOverlay').classList.add('open'); }
-  function closeStreamInfo() { $('#streamInfoOverlay').classList.remove('open'); }
-  function updateStreamTitleDisplay() {
-    const title = localStorage.getItem('ms_stream_title') || '';
-    const el = $('#streamTitleDisplay');
-    el.textContent = title;
-    el.style.display = title ? '' : 'none';
-    el.title = title;
-  }
-
-  async function releaseLic() {
-    if (!confirm('¿Liberar este equipo? La app se cerrará y necesitarás tu clave para volver a activarla.')) return;
-    await window.msLicense?.release();
-  }
-
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closePrefs(); closeAbout(); closeReport(); } });
-
-  // Pestañas del sidebar: Conexiones y Chat son mutuamente excluyentes. Click en la
-  // pestaña activa colapsa todo el sidebar (mismo gesto que el botón único de antes).
-  let activeSidebarTab = null;
-  function showSidebarTab(tab) {
-    const col = $('#sidebarCol');
-    const isOpen = !col.classList.contains('collapsed');
-    if (isOpen && activeSidebarTab === tab) {
-      col.classList.add('collapsed');
-      activeSidebarTab = null;
-    } else {
-      activeSidebarTab = tab;
-      col.classList.remove('collapsed');
-      $('#connPanel').style.display = tab === 'conn' ? '' : 'none';
-      $('#chatPanel').style.display = tab === 'chat' ? '' : 'none';
-    }
-    $('#connBtn').classList.toggle('panel-open', activeSidebarTab === 'conn');
-    $('#chatBtn').classList.toggle('panel-open', activeSidebarTab === 'chat');
-  }
-
-  function openChatWindow() {
-    if (window.msApp && window.msApp.openChatWindow) {
-      window.msApp.openChatWindow(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
-    } else {
-      toast('Solo disponible en la app de escritorio', true);
-    }
-  }
-
-  // ── Cuentas OAuth (solo Electron) ──
-  async function loadAuthStatus() {
-    if (!window.msOAuth) return;
-    try {
-      lastAuthStatus = await window.msOAuth.status();
-      renderPlatforms();
-    } catch {}
-  }
-
-  async function connectPlatform(platform) {
-    if (platform === 'youtube' && YOUTUBE_OAUTH_PENDING && window._isPackaged) {
-      toast('YouTube: esta funcionalidad estará disponible en una próxima versión (en espera de aprobación de Google).', true);
-      return;
-    }
-    const btn = $('#pb-' + platform + ' .auth-conn');
-    if (btn) { btn.disabled = true; btn.textContent = '...'; }
-    try {
-      const r = await window.msOAuth.connect(platform);
-      if (r.ok) {
-        const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
-        toast('✓ ' + label + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
-        // Trae la clave de stream lista (p.ej. Twitch) — evita que el usuario tenga que
-        // ir a buscarla y pegarla a mano tras conectar.
-        if (r.rtmpUrl) {
-          try { render(await api('POST', '/api/destinations', { name: label, url: r.rtmpUrl, enabled: false })); }
-          catch { /* el destino se puede añadir a mano si esto falla */ }
-        }
-      } else { toast(r.error || 'Error al conectar', true); }
-    } catch (e) { toast(e.message, true); }
-    loadAuthStatus();
-  }
-
-  async function disconnectPlatform(platform) {
-    try { await window.msOAuth.disconnect(platform); } catch {}
-    loadAuthStatus();
-  }
-
-  // ── Chat unificado (fase 1: Twitch) ──
-  // Intercala texto e imágenes de emote dentro de container, usando los rangos ya
-  // normalizados por chat.js (mismo shape sea Twitch o Kick — ver parseTwitchEmotes/
-  // parseKickEmotes ahí). Compartido conceptualmente con el de CHAT_WINDOW_HTML — no se
-  // puede importar entre los dos documentos (ventanas separadas), así que está duplicado.
-  function renderMessageBody(container, text, emotes) {
-    if (!emotes || !emotes.length) { container.appendChild(document.createTextNode(text)); return; }
-    let cursor = 0;
-    for (const e of emotes) {
-      if (e.start > cursor) container.appendChild(document.createTextNode(text.slice(cursor, e.start)));
-      const img = document.createElement('img');
-      img.className = 'chat-emote';
-      img.src = e.url;
-      img.alt = '';
-      container.appendChild(img);
-      cursor = e.end;
-    }
-    if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
-  }
-
-  // Filtro de palabras — mini auto-mod client-side: oculta mensajes por keyword sin
-  // depender de la API de cada plataforma (Kick no expone modo lento/solo-emotes por API,
-  // esto sí funciona igual en Twitch y Kick porque corre acá, no allá).
-  function loadChatKeywords() {
-    try { chatKeywords = JSON.parse(localStorage.getItem('ms_chat_keywords') || '[]'); } catch { chatKeywords = []; }
-    const input = $('#chatKeywordFilterInput');
-    if (input) input.value = chatKeywords.join(', ');
-  }
-  function applyChatKeywordFilter() {
-    const raw = $('#chatKeywordFilterInput').value;
-    chatKeywords = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    localStorage.setItem('ms_chat_keywords', JSON.stringify(chatKeywords));
-    toast('Filtro de palabras actualizado');
-  }
-  function isChatMessageBlocked(text) {
-    if (!chatKeywords.length || !text) return false;
-    const low = text.toLowerCase();
-    return chatKeywords.some((k) => low.includes(k));
-  }
-
-  function appendChatMessage(msg) {
-    if (isChatMessageBlocked(msg.message)) return;
-    const box = $('#chatMessages');
-    if (!box) return;
-    const empty = box.querySelector('.chat-empty');
-    if (empty) empty.remove();
-    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
-    const row = document.createElement('div');
-    row.className = 'chat-row';
-    const iconHtml = platformIconSvg(msg.platform, 14);
-    if (iconHtml) {
-      const iconWrap = document.createElement('span');
-      iconWrap.className = 'chat-icon';
-      iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
-      row.appendChild(iconWrap);
-    }
-    if (msg.isBroadcaster) {
-      const badge = document.createElement('span');
-      badge.className = 'chat-icon';
-      badge.title = 'Vos (streamer)';
-      badge.innerHTML = BROADCASTER_BADGE_SVG;
-      row.appendChild(badge);
-    }
-    const textWrap = document.createElement('span');
-    const nameEl = document.createElement('strong');
-    nameEl.style.color = msg.color || '#9147ff';
-    nameEl.textContent = msg.username || '???';
-    textWrap.appendChild(nameEl);
-    textWrap.appendChild(document.createTextNode(': '));
-    renderMessageBody(textWrap, msg.message || '', msg.emotes);
-    row.appendChild(textWrap);
-    // Fijar: solo Twitch tiene API pública real para esto — Kick lo tiene en su dashboard
-    // pero es un endpoint interno no expuesto a apps de terceros; YouTube no lo tiene.
-    if (msg.platform === 'twitch' && msg.id) {
-      const pinBtn = document.createElement('button');
-      pinBtn.className = 'chat-pin-btn';
-      pinBtn.dataset.messageId = msg.id;
-      updatePinBtnState(pinBtn, msg.id === pinnedMessageId);
-      pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
-      row.appendChild(pinBtn);
-    }
-    box.appendChild(row);
-    while (box.children.length > 200) box.removeChild(box.firstChild);
-    if (atBottom) box.scrollTop = box.scrollHeight;
-  }
-  // pinChatMessageUi() es un TOGGLE: si el botón que tocaron es el del mensaje YA fijado,
-  // desfija; si no, fija ese (Twitch reemplaza el anterior solo). Antes siempre llamaba a
-  // fijar sin importar el estado — por eso tocar de nuevo el mismo mensaje daba 409 "ya
-  // está fijado" en vez de desfijarlo.
-  let pinnedMessageId = null;
-  function updatePinBtnState(btn, isPinned) {
-    btn.classList.toggle('pinned', isPinned);
-    btn.title = isPinned ? 'Desfijar este mensaje' : 'Fijar este mensaje en Twitch';
-    btn.innerHTML = PIN_ICON_SVG;
-  }
-  async function pinChatMessageUi(btn, messageId) {
-    const wasPinned = messageId === pinnedMessageId;
-    btn.disabled = true;
-    try {
-      const r = wasPinned
-        ? await api('POST', '/api/chat-unpin', { messageId })
-        : await api('POST', '/api/chat-pin', { messageId });
-      if (r.ok) {
-        // Solo puede haber UN mensaje fijado a la vez en Twitch — si se fijó uno nuevo,
-        // el botón del que estaba fijado antes (si sigue visible en la lista) deja de
-        // marcarse como tal.
-        if (!wasPinned && pinnedMessageId) {
-          const prevBtn = $(\`.chat-pin-btn[data-message-id="\${pinnedMessageId}"]\`);
-          if (prevBtn) updatePinBtnState(prevBtn, false);
-        }
-        pinnedMessageId = wasPinned ? null : messageId;
-        updatePinBtnState(btn, !wasPinned);
-        toast(wasPinned ? 'Mensaje desfijado' : 'Mensaje fijado en Twitch');
-      } else {
-        toast(r.error || (wasPinned ? 'No se pudo desfijar' : 'No se pudo fijar'), true);
-      }
-    } catch (e) {
-      toast(e.message, true);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  // Sincroniza con el estado real de Twitch al conectar — si algo quedó fijado de antes
-  // (ej. la app se reinició, o se fijó/desfijó desde el dashboard de Twitch en vez de
-  // acá), el próximo botón que se dibuje ya sabe si es el mensaje fijado o no.
-  async function syncPinnedMessage() {
-    try {
-      const r = await api('GET', '/api/chat-pinned');
-      if (r.ok) pinnedMessageId = r.messageId || null;
-    } catch {}
-  }
-  function connectChatStream() {
-    if (!window.EventSource) return;
-    const box = $('#chatMessages');
-    if (box) box.innerHTML = '<div class="chat-empty">Esperando mensajes…</div>';
-    syncPinnedMessage();
-    const es = new EventSource('/api/chat');
-    es.onmessage = (e) => {
-      try {
-        sessionChatMsgCount++; // cuenta todo lo recibido, filtrado o no (ver isChatMessageBlocked)
-        appendChatMessage(JSON.parse(e.data));
-      } catch {}
-    };
-  }
-
-  function renderViewerBar(counts) {
-    const bar = $('#viewerBar');
-    if (!bar) return;
-    bar.innerHTML = '';
-    let any = false;
-    for (const p of ['twitch', 'kick', 'youtube']) {
-      const v = counts[p];
-      if (!v || !v.live) continue;
-      any = true;
-      if (v.count > (sessionPeakViewers[p] || 0)) sessionPeakViewers[p] = v.count;
-      const item = document.createElement('span');
-      item.className = 'vb-item';
-      item.innerHTML = platformIconSvg(p, 12);
-      item.appendChild(document.createTextNode(v.count.toLocaleString('es')));
-      bar.appendChild(item);
-    }
-    bar.style.display = any ? 'flex' : 'none';
-  }
-  async function pollViewers() {
-    try { renderViewerBar(await api('GET', '/api/viewers')); } catch {}
-  }
-
-  if (window.msApp) { window.msApp.isPackaged().then(v => { window._isPackaged = v; }).catch(() => {}); }
-
-  loadConfig();
-  refresh();
-  loadAuthStatus();
-  showSidebarTab('chat'); // arranca siempre mostrando el chat
-  connectChatStream();
-  pollViewers();
-  setInterval(refresh, 2000); // refleja estado en vivo y reenvíos activos
-  setInterval(pollViewers, 20000); // el backend sondea Twitch/Kick/YouTube cada 30s, no hace falta más seguido
-</script>
+<script src="/chat-render.js"></script>
+<script src="/panel-client.js"></script>
 </body>
 </html>`;
 
 // Página independiente y minimalista para la ventana de chat "flotante" — separada de
 // PANEL_HTML a propósito para no meter otro backtick dentro de ese template gigante.
-const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
+export const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -4067,89 +1192,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
      no necesita el localhost:* extra. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <title>Muxlyve — Chat</title>
-<style>
-  :root { --bg: #0d1117; --text: #e6edf3; --muted: #8b949e; }
-  [data-theme="light"] { --bg: #f0f2f5; --text: #1a1a2e; --muted: #5a6070; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: var(--bg); color: var(--text);
-    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; overflow: hidden; }
-  #stars { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
-  .star { position: absolute; background: var(--text); border-radius: 50%;
-    animation: twinkle 3.5s ease-in-out infinite; }
-  @keyframes twinkle {
-    0%, 100% { opacity: .15; } 50% { opacity: .9; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .star { animation: none; opacity: .5; }
-  }
-  #chatHeader { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 3;
-    -webkit-app-region: drag; display: flex; align-items: center; justify-content: flex-end;
-    padding: 0 8px; }
-  #chatHeader button, #chatHeader .chat-menu-dd { -webkit-app-region: no-drag; }
-  /* Botones nativos: Mac los deja a la izquierda (traffic lights), Windows a la derecha
-     (titleBarOverlay) — el menú siempre va a la derecha del header, así que solo Windows
-     necesita espacio extra para no quedar debajo de esos botones. */
-  body.platform-win32 #chatHeader { padding-right: 150px; }
-  /* Linux: mismo caso que el panel principal — sin controles nativos, dibuja los
-     propios al final del header (a la derecha del todo, después del menú). */
-  .chat-win-controls { display: none; gap: .15rem; margin-left: 4px; -webkit-app-region: no-drag; }
-  body.platform-linux .chat-win-controls { display: flex; }
-  .chat-win-controls button { background: transparent; color: var(--muted); border: none;
-    border-radius: 6px; width: 28px; height: 26px; padding: 0; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; }
-  .chat-win-controls button:hover { background: rgba(128,128,128,.15); color: var(--text); }
-  .chat-win-controls .win-close-btn:hover { background: #e5484d; color: #fff; }
-  .chat-menu-wrap { position: relative; }
-  .chat-menu-btn { background: transparent; color: var(--muted); border: none;
-    border-radius: 6px; width: 26px; height: 26px; padding: 0; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; }
-  .chat-menu-btn:hover { color: var(--text); background: rgba(128,128,128,.15); }
-  .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
-  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-  .switch .thumb { position: absolute; inset: 0; background: rgba(128,128,128,.4);
-    border-radius: 10px; cursor: pointer; transition: background .2s ease; }
-  .switch .thumb::before { content: ''; position: absolute; width: 14px; height: 14px;
-    left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s ease; }
-  .switch input:checked ~ .thumb { background: #7c5cff; }
-  .switch input:checked ~ .thumb::before { transform: translateX(16px); }
-  .chat-menu-dd { position: absolute; top: 30px; right: 0; z-index: 20; display: none;
-    background: var(--bg); border: 1px solid rgba(128,128,128,.25); border-radius: 10px;
-    padding: .6rem; width: 200px; box-shadow: 0 12px 28px rgba(0,0,0,.4); }
-  .chat-menu-dd.open { display: block; }
-  .chat-menu-dd .cmd-note { font-size: .66rem; color: var(--muted); margin-bottom: .5rem; line-height: 1.3; }
-  .chat-menu-dd .cmd-row { display: flex; align-items: center; justify-content: space-between; padding: .25rem 0; font-size: .78rem; }
-  .chat-menu-dd input[type=number] { width: 50px; background: var(--bg); border: 1px solid rgba(128,128,128,.25);
-    color: var(--text); border-radius: 6px; padding: .25rem .35rem; font-size: .78rem; }
-  .chat-menu-dd input[type=number]:focus { outline: none; border-color: var(--accent); }
-  .chat-menu-dd button.apply { width: 100%; margin-top: .4rem; padding: .35rem; border-radius: 6px;
-    border: none; background: var(--accent, #7c5cff); color: #fff; cursor: pointer; font-size: .78rem; }
-  .cmd-status { font-size: .68rem; margin-top: .35rem; min-height: 1em; }
-  #box { position: relative; z-index: 1; height: 100vh; overflow-y: auto; padding: .75rem;
-    padding-top: 44px; padding-bottom: 74px; display: flex; flex-direction: column; gap: .3rem; }
-  .row { font-size: .85rem; line-height: 1.4; overflow-wrap: break-word;
-    display: flex; gap: .35rem; align-items: flex-start; }
-  .row .chat-icon { flex-shrink: 0; margin-top: .15rem; }
-  .row strong { margin-right: .3rem; }
-  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
-  .empty { color: var(--muted); font-size: .8rem; }
-  .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
-    color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s ease; padding: 0 2px;
-    display: flex; align-items: center; }
-  .row:hover .chat-pin-btn { opacity: 1; }
-  .chat-pin-btn:hover { color: #7c5cff; }
-  .chat-pin-btn:disabled { opacity: .4; cursor: default; }
-  .chat-pin-btn.pinned { opacity: 1; color: #7c5cff; }
-  #chatFooter { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; background: var(--bg); }
-  #chatSendRow { display: flex; gap: .4rem; padding: .4rem .75rem; border-top: 1px solid rgba(128,128,128,.2); }
-  #chatSendRow input { flex: 1; min-width: 0; background: rgba(128,128,128,.12);
-    border: 1px solid rgba(128,128,128,.25); border-radius: 6px; color: var(--text);
-    padding: .3rem .5rem; font-size: .8rem; }
-  #chatSendRow button { background: #7c5cff; border: none; border-radius: 6px; width: 30px;
-    color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  #viewerBar { display: none; gap: .7rem; padding: .3rem .75rem .5rem;
-    border-top: 1px solid rgba(128,128,128,.2); font-size: .72rem; color: var(--muted); }
-  #viewerBar .vb-item { display: flex; align-items: center; gap: .3rem; }
-</style>
+<link rel="stylesheet" href="/chat-window.css">
 </head>
 <body>
 <div id="chatHeader">
@@ -4176,7 +1219,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
       </svg>
     </button>
     <div class="chat-menu-dd" id="overlayInfoDd" onclick="event.stopPropagation()">
-      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → ícono "Conexiones" → "Información de conexión" → "Conexión del chat" para copiar la URL.</div>
+      <div class="cmd-note">¿Quieres mostrar el chat en tu programa de transmisión (OBS, Streamlabs, etc.)? Abre el panel principal de Muxlyve → "Conexión RTMP" → "Conexión del chat" para copiar la URL.</div>
     </div>
   </div>
   <div class="chat-win-controls">
@@ -4202,248 +1245,8 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
   <div class="cmd-status" id="chatSendStatus" style="padding:0 .75rem"></div>
   <div id="viewerBar"></div>
 </div>
-<script>
-  var ua = navigator.userAgent;
-  if (ua.includes('Mac')) document.body.classList.add('platform-darwin');
-  else if (ua.includes('Windows')) document.body.classList.add('platform-win32');
-  else if (ua.includes('Linux')) document.body.classList.add('platform-linux');
-
-  function toggleChatMenu(e) {
-    e.stopPropagation();
-    document.getElementById('chatMenuDd').classList.toggle('open');
-  }
-  function toggleOverlayInfo(e) {
-    e.stopPropagation();
-    document.getElementById('overlayInfoDd').classList.toggle('open');
-  }
-  document.addEventListener('click', function () {
-    var dd = document.getElementById('chatMenuDd');
-    if (dd) dd.classList.remove('open');
-    var infoDd = document.getElementById('overlayInfoDd');
-    if (infoDd) infoDd.classList.remove('open');
-  });
-  function applyChatMode(btn) {
-    var emoteOnly = document.getElementById('emoteOnlyChk').checked;
-    var subscriberOnly = document.getElementById('subOnlyChk').checked;
-    var slowOn = document.getElementById('slowModeChk').checked;
-    var slowSeconds = slowOn ? Math.max(1, Number(document.getElementById('slowSecondsInput').value) || 30) : 0;
-    var status = document.getElementById('chatModeStatus');
-    btn.disabled = true;
-    if (status) { status.textContent = 'Aplicando…'; status.style.color = ''; }
-    fetch('/api/chat-mode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emoteOnly: emoteOnly, subscriberOnly: subscriberOnly, slowSeconds: slowSeconds }),
-    }).then(function (r) { return r.json(); }).then(function (r) {
-      btn.disabled = false;
-      if (!status) return;
-      if (r && r.ok) { status.textContent = 'Aplicado ✓'; status.style.color = '#3fb950'; }
-      else { status.textContent = (r && r.error) || 'No se pudo aplicar — ¿Twitch conectado?'; status.style.color = '#f85149'; }
-    }).catch(function () {
-      btn.disabled = false;
-      if (status) { status.textContent = 'Error de conexión.'; status.style.color = '#f85149'; }
-    });
-  }
-
-  function sendChatMessageUi(btn) {
-    var input = document.getElementById('chatSendInput');
-    var status = document.getElementById('chatSendStatus');
-    var text = input.value.trim();
-    if (!text) return;
-    btn.disabled = true;
-    fetch('/api/chat-send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text }),
-    }).then(function (r) { return r.json(); }).then(function (results) {
-      btn.disabled = false;
-      var entries = Object.keys(results || {});
-      if (!entries.length) {
-        if (status) { status.textContent = 'Conecta Twitch o Kick primero.'; status.style.color = '#f85149'; }
-        return;
-      }
-      var failed = entries.filter(function (p) { return !results[p].ok; });
-      if (!failed.length) {
-        input.value = '';
-        if (status) { status.textContent = ''; }
-      } else if (status) {
-        status.textContent = 'Falló en ' + failed.join(', ');
-        status.style.color = '#f85149';
-      }
-    }).catch(function () {
-      btn.disabled = false;
-      if (status) { status.textContent = 'Error de conexión.'; status.style.color = '#f85149'; }
-    });
-  }
-  document.getElementById('chatSendInput').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') sendChatMessageUi(document.querySelector('#chatSendRow button'));
-  });
-
-  // Tema inicial: viene por query string al abrir la ventana. Se mantiene sincronizado
-  // en vivo con la app principal vía BroadcastChannel (mismo origen http://localhost).
-  document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : '';
-  try {
-    var themeChannel = new BroadcastChannel('muxlyve-theme');
-    themeChannel.onmessage = function (e) {
-      document.documentElement.dataset.theme = e.data === 'light' ? 'light' : '';
-    };
-  } catch (err) {}
-
-  (function () {
-    var field = document.getElementById('stars');
-    var n = 50;
-    for (var i = 0; i < n; i++) {
-      var s = document.createElement('div');
-      s.className = 'star';
-      var size = (Math.random() * 1.6 + .6).toFixed(1);
-      s.style.width = size + 'px';
-      s.style.height = size + 'px';
-      s.style.left = (Math.random() * 100) + '%';
-      s.style.top = (Math.random() * 100) + '%';
-      s.style.animationDelay = (Math.random() * 3.5).toFixed(2) + 's';
-      field.appendChild(s);
-    }
-  })();
-
-  // Subset de platformIconSvg() del panel principal — este documento es una ventana
-  // aparte (popout), no comparte script con el panel, así que va duplicado a propósito.
-  var PLATFORM_ICON_GLYPHS = {
-    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
-    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
-    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
-    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
-  };
-  var PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
-  function platformIconSvg(id) {
-    var glyph = PLATFORM_ICON_GLYPHS[id];
-    if (!glyph) return '';
-    return '<svg width="14" height="14" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:4px">' +
-      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
-  }
-  var BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
-  var PIN_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
-
-  // TOGGLE: si el botón es del mensaje YA fijado, desfija en vez de re-fijar (Twitch
-  // devuelve 409 si se intenta fijar el mismo mensaje dos veces — ver src/panel.js
-  // pinChatMessageUi en PANEL_HTML, mismo patrón).
-  var pinnedMessageId = null;
-  function updatePinBtnState(btn, isPinned) {
-    btn.classList.toggle('pinned', isPinned);
-    btn.title = isPinned ? 'Desfijar este mensaje' : 'Fijar este mensaje en Twitch';
-  }
-  function pinChatMessageUi(btn, messageId) {
-    var wasPinned = messageId === pinnedMessageId;
-    var url = wasPinned ? '/api/chat-unpin' : '/api/chat-pin';
-    btn.disabled = true;
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId: messageId }),
-    }).then(function (r) { return r.json(); }).then(function (r) {
-      if (r.ok) {
-        if (!wasPinned && pinnedMessageId) {
-          var prevBtn = document.querySelector('.chat-pin-btn[data-message-id="' + pinnedMessageId + '"]');
-          if (prevBtn) updatePinBtnState(prevBtn, false);
-        }
-        pinnedMessageId = wasPinned ? null : messageId;
-        updatePinBtnState(btn, !wasPinned);
-      }
-      btn.disabled = false;
-    }).catch(function () { btn.disabled = false; });
-  }
-  function syncPinnedMessage() {
-    fetch('/api/chat-pinned').then(function (r) { return r.json(); }).then(function (r) {
-      if (r.ok) pinnedMessageId = r.messageId || null;
-    }).catch(function () {});
-  }
-
-  // Mismo shape normalizado {start, end, url} que arma chat.js sea Twitch o Kick.
-  function renderMessageBody(container, text, emotes) {
-    if (!emotes || !emotes.length) { container.appendChild(document.createTextNode(text)); return; }
-    var cursor = 0;
-    for (var i = 0; i < emotes.length; i++) {
-      var e = emotes[i];
-      if (e.start > cursor) container.appendChild(document.createTextNode(text.slice(cursor, e.start)));
-      var img = document.createElement('img');
-      img.className = 'chat-emote';
-      img.src = e.url;
-      img.alt = '';
-      container.appendChild(img);
-      cursor = e.end;
-    }
-    if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
-  }
-
-  function append(msg) {
-    var box = document.getElementById('box');
-    var empty = box.querySelector('.empty');
-    if (empty) empty.remove();
-    var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
-    var row = document.createElement('div');
-    row.className = 'row';
-    var iconHtml = platformIconSvg(msg.platform);
-    if (iconHtml) {
-      var iconWrap = document.createElement('span');
-      iconWrap.className = 'chat-icon';
-      iconWrap.innerHTML = iconHtml; // SVG generado por nosotros — no viene del chat externo
-      row.appendChild(iconWrap);
-    }
-    if (msg.isBroadcaster) {
-      var badge = document.createElement('span');
-      badge.className = 'chat-icon';
-      badge.title = 'Vos (streamer)';
-      badge.innerHTML = BROADCASTER_BADGE_SVG;
-      row.appendChild(badge);
-    }
-    var textWrap = document.createElement('span');
-    var strong = document.createElement('strong');
-    strong.style.color = msg.color || '#9147ff';
-    strong.textContent = msg.username || '???';
-    textWrap.appendChild(strong);
-    renderMessageBody(textWrap, msg.message || '', msg.emotes);
-    row.appendChild(textWrap);
-    if (msg.platform === 'twitch' && msg.id) {
-      var pinBtn = document.createElement('button');
-      pinBtn.className = 'chat-pin-btn';
-      pinBtn.dataset.messageId = msg.id;
-      pinBtn.innerHTML = PIN_ICON_SVG;
-      updatePinBtnState(pinBtn, msg.id === pinnedMessageId);
-      pinBtn.onclick = (function (id) { return function () { pinChatMessageUi(pinBtn, id); }; })(msg.id);
-      row.appendChild(pinBtn);
-    }
-    box.appendChild(row);
-    while (box.children.length > 300) box.removeChild(box.firstChild);
-    if (atBottom) box.scrollTop = box.scrollHeight;
-  }
-  syncPinnedMessage();
-  var es = new EventSource('/api/chat');
-  es.onmessage = function (e) {
-    try { append(JSON.parse(e.data)); } catch (err) {}
-  };
-
-  function renderViewerBar(counts) {
-    var bar = document.getElementById('viewerBar');
-    if (!bar) return;
-    bar.innerHTML = '';
-    var any = false;
-    ['twitch', 'kick', 'youtube'].forEach(function (p) {
-      var v = counts[p];
-      if (!v || !v.live) return;
-      any = true;
-      var item = document.createElement('span');
-      item.className = 'vb-item';
-      item.innerHTML = platformIconSvg(p);
-      item.appendChild(document.createTextNode(v.count.toLocaleString('es')));
-      bar.appendChild(item);
-    });
-    bar.style.display = any ? 'flex' : 'none';
-  }
-  function pollViewers() {
-    fetch('/api/viewers').then(function (r) { return r.json(); }).then(renderViewerBar).catch(function () {});
-  }
-  pollViewers();
-  setInterval(pollViewers, 20000);
-</script>
+<script src="/chat-render.js"></script>
+<script src="/chat-window.js"></script>
 </body>
 </html>`;
 
@@ -4451,7 +1254,7 @@ const CHAT_WINDOW_HTML = /* html */ `<!doctype html>
 // embebido de OBS, así que solo puede depender de HTTP/SSE, igual que CHAT_WINDOW_HTML.
 // Duplica el render de mensajes a propósito (mismo motivo que ese: documento aparte, sin
 // script compartido) pero recorta todo lo interactivo — es solo para mostrar en escena.
-const CHAT_OVERLAY_HTML = /* html */ `<!doctype html>
+export const CHAT_OVERLAY_HTML = /* html */ `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -4460,59 +1263,19 @@ const CHAT_OVERLAY_HTML = /* html */ `<!doctype html>
      de defensa en profundidad aplica igual. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <title>Muxlyve — Chat overlay</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: transparent; overflow: hidden;
-    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
-  #box { height: 100vh; overflow-y: hidden; padding: .6rem; display: flex;
-    flex-direction: column; gap: .3rem; justify-content: flex-end; }
-  .row { font-size: 1.05rem; line-height: 1.4; overflow-wrap: break-word;
-    display: flex; gap: .35rem; align-items: flex-start; color: #fff;
-    text-shadow: 0 1px 3px rgba(0,0,0,.9), 0 0 6px rgba(0,0,0,.6); }
-  .row .chat-icon { flex-shrink: 0; margin-top: .15rem; }
-  .row strong { margin-right: .3rem; }
-  .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
-</style>
+<link rel="stylesheet" href="/chat-overlay.css">
 </head>
 <body>
 <div id="box"></div>
+<script src="/chat-render.js"></script>
 <script>
-  var PLATFORM_ICON_GLYPHS = {
-    twitch: '<path fill="#fff" d="M5 3 3 6.5v12H7V21l3-2.5h3l5.5-5V3H5zm10 9-3 3h-3l-2.5 2.5V15H5V5h13v7z"/><path fill="#fff" d="M14.5 7h1.8v4h-1.8zM10.3 7h1.8v4h-1.8z"/>',
-    youtube: '<path fill="#fff" d="M21 8s-.2-1.4-.8-2c-.7-.8-1.5-.8-1.9-.9C15.9 5 12 5 12 5s-3.9 0-6.3.1c-.4.1-1.2.1-1.9.9C3.2 6.6 3 8 3 8s-.2 1.6-.2 3.2v1.2c0 1.6.2 3.2.2 3.2s.2 1.4.8 2c.7.8 1.7.7 2.1.8C7.5 18.6 12 18.6 12 18.6s3.9 0 6.3-.2c.4 0 1.2-.1 1.9-.8.6-.6.8-2 .8-2s.2-1.6.2-3.2v-1.2C21.2 9.6 21 8 21 8zM9.9 14.2V9l5.4 2.6z"/>',
-    kick: '<path fill="#0a0a0a" d="M4 4h4v4.2L11.8 4H16l-5.4 6L16 16h-4.2L8 11.8V16H4z"/>',
-    tiktok: '<path fill="#fff" d="M15.5 3h-3v11.6a2.4 2.4 0 1 1-1.7-2.3v-3.1a5.5 5.5 0 1 0 4.7 5.4V9.1c1 .7 2.2 1.1 3.5 1.1V7.2c-1.9 0-3.5-1.6-3.5-3.6z"/>',
-  };
-  var PLATFORM_ICON_COLORS = { twitch: '#9147ff', youtube: '#ff0000', kick: '#53fc18', tiktok: '#010101' };
-  function platformIconSvg(id) {
-    var glyph = PLATFORM_ICON_GLYPHS[id];
-    if (!glyph) return '';
-    return '<svg width="14" height="14" viewBox="0 0 24 24" style="flex-shrink:0;border-radius:4px">' +
-      '<rect width="24" height="24" rx="6" fill="' + PLATFORM_ICON_COLORS[id] + '"/>' + glyph + '</svg>';
-  }
-  var BROADCASTER_BADGE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a23a"><path d="M5 18h14l1.3-8-4.8 3-3.5-6-3.5 6-4.8-3z"/></svg>';
-
-  function renderMessageBody(container, text, emotes) {
-    if (!emotes || !emotes.length) { container.appendChild(document.createTextNode(text)); return; }
-    var cursor = 0;
-    for (var i = 0; i < emotes.length; i++) {
-      var e = emotes[i];
-      if (e.start > cursor) container.appendChild(document.createTextNode(text.slice(cursor, e.start)));
-      var img = document.createElement('img');
-      img.className = 'chat-emote';
-      img.src = e.url;
-      img.alt = '';
-      container.appendChild(img);
-      cursor = e.end;
-    }
-    if (cursor < text.length) container.appendChild(document.createTextNode(text.slice(cursor)));
-  }
-
+  // PLATFORM_ICON_GLYPHS/COLORS, platformIconSvg, BROADCASTER_BADGE_SVG,
+  // renderMessageBody vienen de /chat-render.js (compartido con el panel y el popout).
   function append(msg) {
     var box = document.getElementById('box');
     var row = document.createElement('div');
     row.className = 'row';
-    var iconHtml = platformIconSvg(msg.platform);
+    var iconHtml = platformIconSvg(msg.platform, 14, 4);
     if (iconHtml) {
       var iconWrap = document.createElement('span');
       iconWrap.className = 'chat-icon';

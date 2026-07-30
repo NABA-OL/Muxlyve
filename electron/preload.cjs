@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Preload CJS: puente seguro entre el renderer (activate.html) y el main process.
 // contextIsolation=true + nodeIntegration=false → solo lo expuesto aquí llega al renderer.
 'use strict';
@@ -21,6 +22,7 @@ contextBridge.exposeInMainWorld('msApp', {
   getLoginItem: () => ipcRenderer.invoke('app:get-login-item'),
   setLoginItem: (openAtLogin, startMinimized) => ipcRenderer.invoke('app:set-login-item', openAtLogin, startMinimized),
   sendReport: (description) => ipcRenderer.invoke('report:send', description),
+  sendFeedback: (description) => ipcRenderer.invoke('feedback:send', description),
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
   setTitleBarTheme: (isDark) => ipcRenderer.invoke('app:set-titlebar-theme', isDark),

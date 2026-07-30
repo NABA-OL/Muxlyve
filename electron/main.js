@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -96,7 +97,7 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG } });
+  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG, version: app.getVersion() } });
 }
 
 function closeSplash() {
@@ -258,7 +259,7 @@ function showActivationWindow() {
   return new Promise((resolve) => {
     activationResolve = resolve;
     activationWin = new BrowserWindow({
-      width: 520, height: 500,
+      width: 620, height: 600,
       resizable: false,
       center: true,
       backgroundColor: '#0d1117',
@@ -303,8 +304,16 @@ ipcMain.handle('license:activate', async (_, key) => {
 
 ipcMain.handle('license:release', async () => {
   const result = await releaseLicense();
-  // Reiniciar la app para volver a mostrar la pantalla de activación.
-  if (result.ok) { app.relaunch(); app.quit(); }
+  // Reiniciar la app para volver a mostrar la pantalla de activación. app.quit() NO sirve
+  // acá: la ventana principal intercepta 'close' para minimizar a bandeja si closeToTray
+  // está activo (ver win.on('close') arriba), así que quit() se queda pegado con la app
+  // abierta. app.exit() salta ese interceptor — mismo patrón que "Salir" del menú de
+  // bandeja. setImmediate da tiempo a que la respuesta de este IPC llegue al renderer
+  // antes de matar el proceso.
+  if (result.ok) {
+    app.relaunch();
+    setImmediate(() => app.exit(0));
+  }
   return result;
 });
 
@@ -471,6 +480,33 @@ ipcMain.handle('report:send', async (_, description) => {
       log: getRecentLog(),
     });
     const res = await fetch('https://muxlyve.com/api/support/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Feedback/ideas — mismo patrón que report:send de arriba, pero sin el log adjunto: esto
+// no es diagnóstico de un bug puntual, es "se me ocurrió esto", no hace falta el estado
+// interno de la app para leerlo. Backend separado (/api/support/feedback, tabla propia
+// en la web) — ver docs/WEBSITE_HELP_CENTER.md o el prompt que arma el chat de la app
+// para el repo web.
+ipcMain.handle('feedback:send', async (_, description) => {
+  try {
+    const license = getLicenseInfo();
+    const body = JSON.stringify({
+      email: license?.email || '',
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      description: description || '',
+    });
+    const res = await fetch('https://muxlyve.com/api/support/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,

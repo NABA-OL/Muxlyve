@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Captura console.log/error/warn en un buffer en memoria + archivo rotativo en userData,
 // para poder adjuntar las últimas líneas a un reporte de error sin que el usuario tenga
 // que abrir una terminal (la app empaquetada no muestra consola).

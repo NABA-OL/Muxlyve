@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Store en memoria de espectadores por plataforma — electron/oauth.js hace el polling real
 // contra Twitch/Kick (necesita los tokens OAuth, que viven ahí) y empuja acá con
 // setViewerCounts(); panel.js sirve el último valor por HTTP (GET /api/viewers) para que

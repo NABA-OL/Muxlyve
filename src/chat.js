@@ -1,4 +1,5 @@
-// Desarrollado por BlacKraken Solutions (NABA-OL)
+// Propiedad de BlacKraken Solutions
+// Desarrollado por NABA-OL
 // Chat unificado — fase 1: solo Twitch. Lee el chat vía IRC-WebSocket con un nick anónimo
 // (justinfanNNNNN) — Twitch permite lectura pública sin autenticación, no requiere el
 // OAuth del usuario para esto en absoluto, solo su channel login para saber a qué unirse.
@@ -80,10 +81,21 @@ function handleLine(line) {
     // El nick de IRC de Twitch siempre es el login en minúsculas (aunque el display-name
     // tenga mayúsculas/acentos) — currentLogin viene de la misma fuente (Helix), comparación exacta.
     isBroadcaster: !!currentLogin && nick.toLowerCase() === currentLogin.toLowerCase(),
+    // Twitch manda el tag "mod" (1/0) y además el badge moderator/broadcaster en tags.badges
+    // — se acepta cualquiera de las dos formas, por si algún cliente IRC viejo no manda una.
+    isMod: isModFromTwitchTags(tags),
     // id: UUID del mensaje (tag IRCv3) — lo exige /helix/chat/messages/pin como message_id.
     id: tags.id || null,
     timestamp: Date.now(),
   });
+}
+
+// Ver comentario en handleLine — moderador si el tag "mod" lo dice, o si el badge de
+// moderador/broadcaster está en la lista de badges del mensaje.
+function isModFromTwitchTags(tags) {
+  if (tags.mod === '1') return true;
+  const badges = tags.badges || '';
+  return badges.includes('moderator/') || badges.includes('broadcaster/');
 }
 
 function connect() {
@@ -201,6 +213,10 @@ async function ytPollLoop() {
         username: item.authorDetails?.displayName || '???',
         message: item.snippet?.displayMessage || '',
         color: null,
+        // El `part=snippet,authorDetails` de arriba ya trae isChatModerator/isChatOwner
+        // sin ampliar ningún scope — a diferencia de Twitch/Kick no hace falta un helper
+        // aparte, YouTube ya entrega el booleano listo.
+        isMod: !!(item.authorDetails?.isChatModerator || item.authorDetails?.isChatOwner),
         timestamp: Date.now(),
       });
     }
@@ -320,8 +336,16 @@ function handleKickPusherEvent(raw) {
     color: payload.sender?.identity?.color || null,
     emotes: parseKickEmotes(text),
     isBroadcaster: !!kickBroadcasterName && username.toLowerCase() === kickBroadcasterName.toLowerCase(),
+    isMod: isModFromKickBadges(payload.sender?.identity?.badges),
     timestamp: Date.now(),
   });
+}
+
+// Kick manda los badges como array de objetos { type, ... } — defensivo porque no siempre
+// viene (mensajes de sistema, formatos alternativos vistos en la comunidad).
+function isModFromKickBadges(badges) {
+  if (!Array.isArray(badges)) return false;
+  return badges.some((b) => b?.type === 'moderator' || b?.type === 'broadcaster');
 }
 
 async function connectKick() {
