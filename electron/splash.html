@@ -30,27 +30,44 @@
     from { opacity: 0; transform: scale(.7); }
     to   { opacity: 1; transform: scale(1); }
   }
+  /* Wordmark letra por letra — "Muxlyve" aparece de a una en vez de un solo fade del
+     bloque completo. Cada <span> anima con su propio delay (ver estilos inline abajo);
+     el color acento arranca en la "v" de "ve", igual que en el resto de la app. */
   .wordmark {
+    display: flex;
     font-size: 1.3rem; font-weight: 700; letter-spacing: -.03em;
     margin-bottom: 28px;
-    animation: fade-in .5s .2s ease both;
   }
-  @keyframes fade-in {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
+  .letter {
+    display: inline-block;
+    opacity: 0;
+    animation: letter-pop .5s cubic-bezier(.22,1,.36,1) both;
+  }
+  @keyframes letter-pop {
+    from { opacity: 0; transform: translateY(6px) scale(.75); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
   }
   .accent { color: #7c5cff; }
   .track {
     width: 160px; height: 2px;
     background: #1e2635; border-radius: 1px;
     overflow: hidden; margin-bottom: 14px;
-    animation: fade-in .4s .35s ease both;
+    animation: fade-in .4s 1.05s ease both;
+  }
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
   .bar {
     height: 100%; width: 0;
     background: linear-gradient(90deg, #7c5cff, #4da3ff);
     border-radius: 1px;
-    animation: load-init 2s cubic-bezier(.4,0,.2,1) forwards;
+    /* Arranca junto con .track (mismo delay) — sin esto la barra ya viene corriendo
+       tiempo invisible mientras .track todavía está en fade-in, y se ve "adelantada"
+       apenas se hace visible. Duración estirada (2s -> 3.2s): se sentía apurada —
+       window.finishLoad() la corta a 100% igual apenas el motor real avisa que está
+       listo, así que estirarla no atrasa un arranque rápido. */
+    animation: load-init 3.2s 1.05s cubic-bezier(.4,0,.2,1) forwards;
   }
   @keyframes load-init {
     0%   { width: 0%; }
@@ -61,16 +78,31 @@
   .status {
     font-size: .68rem; color: #8b949e; letter-spacing: .05em;
     text-transform: uppercase;
-    animation: fade-in .4s .4s ease both;
+    animation: fade-in .4s 1.1s ease both;
+  }
+  .version {
+    font-size: .62rem; color: #4d5563; letter-spacing: .03em;
+    margin-top: 8px;
+    font-family: ui-monospace, monospace;
+    animation: fade-in .4s 1.15s ease both;
   }
 </style>
 </head>
 <body>
 <div class="container">
   <img src="../src/public/icon-muxlyve.svg" class="icon" alt="">
-  <div class="wordmark">Muxly<span class="accent">ve</span></div>
+  <div class="wordmark" aria-label="Muxlyve">
+    <span class="letter" style="animation-delay:.00s">M</span>
+    <span class="letter" style="animation-delay:.09s">u</span>
+    <span class="letter" style="animation-delay:.18s">x</span>
+    <span class="letter" style="animation-delay:.27s">l</span>
+    <span class="letter" style="animation-delay:.36s">y</span>
+    <span class="letter accent" style="animation-delay:.45s">v</span>
+    <span class="letter accent" style="animation-delay:.54s">e</span>
+  </div>
   <div class="track"><div class="bar" id="bar"></div></div>
   <div class="status" id="status">Iniciando motor…</div>
+  <div class="version" id="version"></div>
 </div>
 <script>
 window.finishLoad = function() {
@@ -87,21 +119,24 @@ window.finishLoad = function() {
       bar.style.width = '100%';
     });
   });
-  
+
   var urlParams = new URLSearchParams(window.location.search);
   var lang = urlParams.get('lang') || 'en';
   if (status) status.textContent = lang === 'es' ? 'Listo' : 'Ready';
-  
+
   // Fade body after bar completes + brief hold
   setTimeout(function() { document.body.style.opacity = '0'; }, 650);
 };
 
-// Auto-translate initial text
+// Auto-translate initial text + versión (electron/main.js pasa ?version= con app.getVersion())
 (function() {
   var urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('lang') === 'en') {
     document.getElementById('status').textContent = 'Starting engine…';
   }
+  var version = urlParams.get('version');
+  var versionEl = document.getElementById('version');
+  if (version && versionEl) versionEl.textContent = 'v' + version;
 })();
 </script>
 </body>

@@ -96,7 +96,7 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG } });
+  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG, version: app.getVersion() } });
 }
 
 function closeSplash() {
