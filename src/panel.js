@@ -15,11 +15,12 @@ import * as systemRoutes from './routes/system.js';
 import * as chatRoutes from './routes/chat.js';
 import * as destinationsRoutes from './routes/destinations.js';
 import * as recordingRoutes from './routes/recording.js';
+import * as sessionsRoutes from './routes/sessions.js';
 
 // Fase 3 del refactor — cada módulo de src/routes/ atiende un dominio y devuelve
 // true/false según haya manejado la request. Orden sin significado especial (los paths
 // no se pisan entre módulos).
-const ROUTE_MODULES = [systemRoutes, chatRoutes, destinationsRoutes, recordingRoutes];
+const ROUTE_MODULES = [systemRoutes, chatRoutes, destinationsRoutes, recordingRoutes, sessionsRoutes];
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
@@ -765,6 +766,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Webhooks</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="history" onclick="switchPrefsTab('history')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>
+          </svg>
+          <span>Historial</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="support" id="prefsNavSupport" onclick="switchPrefsTab('support')" style="display:none">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
@@ -920,6 +928,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <span class="sys-toggle-track"></span>
             </label>
           </div>
+          <!-- Exportar/importar configuración (Fase 1 del lote 2,
+               docs/PLAN_FEATURES_LOTE2.md) — mismo criterio que las dos de arriba: ajuste
+               del MOTOR, no de Electron, por eso vive acá. El chequeo de "¿es tu cuenta?"
+               al importar sí es Electron-only (window.msLicense) — ver importConfig() en
+               panel-client.js, se salta solo si no hay app de escritorio. -->
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Exportar/importar configuración</div>
+              <div class="pref-desc">Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.</div>
+            </div>
+            <div style="display:flex;gap:.4rem;flex-shrink:0">
+              <button type="button" class="preset-save-btn" onclick="exportConfig()">Exportar</button>
+              <button type="button" class="preset-save-btn" onclick="$('#importConfigInput').click()">Importar</button>
+              <input type="file" id="importConfigInput" accept="application/json" style="display:none" onchange="importConfig(this.files[0])">
+            </div>
+          </div>
         </div>
         <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">
           <div class="field">
@@ -934,6 +958,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div id="telegramBotsList"></div>
             <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
           </div>
+        </div>
+        <!-- Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) — tabla simple,
+             sin gráficos a propósito. Se carga bajo demanda (loadSessionHistory(), llamada
+             desde openPrefs()) — GET /api/sessions, ver src/routes/sessions.js. -->
+        <div class="prefs-panel" id="prefsHistoryBlock" data-panel="history">
+          <div id="sessionHistoryList"></div>
         </div>
         <div class="prefs-panel" id="reportSection" data-panel="support">
           <div class="pref-row">

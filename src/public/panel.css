@@ -348,6 +348,15 @@
   .preset-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
   .preset-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
   .preset-chips-empty { font-size: .78rem; color: var(--muted); font-style: italic; }
+  /* Historial de sesiones (Preferencias → Historial) — tabla simple, sin gráficos a
+     propósito (ver docs/PLAN_FEATURES_LOTE2.md Fase 6). white-space:nowrap en Fecha y
+     Duración porque son valores cortos de ancho fijo — Plataformas/Pico sí pueden
+     envolver, son texto libre de largo variable. */
+  .history-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+  .history-table th { text-align: left; font-size: .7rem; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--muted); font-weight: 600; padding: 0 .6rem .5rem 0; }
+  .history-table td { padding: .5rem .6rem .5rem 0; border-top: 1px solid var(--border); vertical-align: top; }
+  .history-table td:first-child, .history-table td:nth-child(2) { white-space: nowrap; }
   .preset-chip { display: flex; align-items: center; gap: .35rem; padding: .3rem .55rem; border-radius: 999px;
     border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: .78rem;
     cursor: pointer; transition: border-color .15s, color .15s; max-width: 100%; }

@@ -17,6 +17,20 @@ import {
 } from '../settings.js';
 import { testDiscordWebhook } from '../notify.js';
 import { testTelegramBot } from '../telegram.js';
+import { loadAll, saveAll } from '../destinations.js';
+import { applyChange } from '../relays.js';
+import { validateDestination } from './destinations.js';
+
+// Fase 1 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — exportar/importar configuración.
+// Whitelist explícita: cualquier otra clave del archivo importado se ignora en silencio,
+// nunca se escribe tal cual a disco. Los valores DENTRO de cada campo aceptado igual
+// pasan por el saneado normal de loadSettings() (ver el comentario en el endpoint de
+// abajo) — esto solo decide QUÉ campos se consideran, no valida su contenido.
+const IMPORTABLE_SETTINGS_FIELDS = [
+  'streamKey', 'recArmed', 'fullRecArmed', 'recDuration', 'clipsDir', 'recordingsDir',
+  'chatCommandsEnabled', 'discordWebhooks', 'telegramBots', 'liveMessage', 'endMessage',
+  'destinationPresets', 'audioSilenceAlertEnabled',
+];
 
 let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
 const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
@@ -66,6 +80,70 @@ export async function handle(req, res, url, ctx) {
       endMessage: settings.endMessage || '',
       audioSilenceAlertEnabled: settings.audioSilenceAlertEnabled,
     });
+    return true;
+  }
+
+  // GET /api/config/export -> destinations.json + settings.json juntos, para
+  // backup/migración de máquina (Fase 1 del lote 2, docs/PLAN_FEATURES_LOTE2.md). Va en
+  // texto plano a propósito — loadAll() ya devuelve las URLs DESENCRIPTADAS aunque haya
+  // MASTER_KEY (las claves de retransmisión viajan en la URL misma), así que el archivo
+  // resultante es tan sensible como el destinations.json/settings.json de origen. El
+  // aviso de "guardalo con cuidado" vive del lado del cliente (botón de exportar), acá
+  // solo se arma el JSON — este endpoint no decide UI.
+  if (req.method === 'GET' && url.pathname === '/api/config/export') {
+    json(res, 200, {
+      exportedAt: Date.now(),
+      destinations: loadAll(),
+      settings: loadSettings(),
+    });
+    return true;
+  }
+
+  // POST /api/config/import  { destinations: [...], settings: {...} } -> reemplaza
+  // destinos + ajustes del motor con los del archivo. Nada de importar parcial en
+  // silencio: si UN destino es inválido, se rechaza el archivo completo antes de tocar
+  // nada (mismo validateDestination que ya usa POST /api/destinations, ver
+  // src/routes/destinations.js).
+  //
+  // Nota sobre el chequeo de "¿es tu propia cuenta?": ESTE endpoint no sabe nada de
+  // licencias — Freemius/license.js vive en electron/, y src/ tiene que poder correr
+  // headless/Docker sin Electron. Por eso esa comparación (correo de la licencia que
+  // exportó vs. la de esta máquina) la hace el CLIENTE antes de mandar el POST acá (ver
+  // importConfig() en panel-client.js) — acá solo llega la data ya confirmada por el
+  // usuario, sea cual sea el resultado de esa comparación.
+  if (req.method === 'POST' && url.pathname === '/api/config/import') {
+    let input;
+    try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
+    if (!Array.isArray(input.destinations) || !input.settings || typeof input.settings !== 'object') {
+      json(res, 400, { error: t('Archivo de configuración inválido — falta destinations o settings.') });
+      return true;
+    }
+    const validated = [];
+    for (const raw of input.destinations) {
+      const { error, dest } = validateDestination(raw || {}, t);
+      if (error) {
+        json(res, 400, { error: t('Destino inválido en el archivo ("') + (raw?.name || '?') + t('"): ') + error });
+        return true;
+      }
+      validated.push(dest);
+    }
+    const settingsPatch = {};
+    for (const field of IMPORTABLE_SETTINGS_FIELDS) {
+      if (field in input.settings) settingsPatch[field] = input.settings[field];
+    }
+    saveSettings(settingsPatch);
+    // loadSettings() ya sanea cada campo al leer (isValidStreamKey, validDiscordWebhooks,
+    // validTelegramBots, etc. — ver settings.js) — volver a guardar lo recién leído
+    // reescribe la versión LIMPIA sobre el archivo, sin tener que duplicar acá ninguna de
+    // esas validaciones. El archivo importado es "no confiable" por definición (puede
+    // venir de cualquier lado), este paso lo trata igual que cualquier settings.json
+    // editado a mano.
+    saveSettings(loadSettings());
+    // Aplica los destinos como si fuera un guardado manual uno por uno — applyChange no
+    // interrumpe un relay activo si ese destino puntual no cambió de estado.
+    saveAll(validated);
+    validated.forEach(applyChange);
+    json(res, 200, buildState());
     return true;
   }
 

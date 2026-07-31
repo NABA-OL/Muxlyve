@@ -10,6 +10,8 @@ import { startMonitor, stopMonitor } from './monitor.js';
 import { loadSettings, saveSettings } from './settings.js';
 import { notifyDiscord } from './notify.js';
 import { notifyTelegram } from './telegram.js';
+import { getSessionPeaks, resetSessionPeaks } from './viewers.js';
+import { recordSession } from './sessions.js';
 
 // Gestor de procesos FFmpeg con reconexión automática.
 // Cada destino: name -> { proc, status, attempts, timer, stopping, startedAt, metrics }
@@ -25,6 +27,11 @@ let liveSince = null; // timestamp del inicio del directo (uptime).
 // Esta bandera asegura que se mande una sola vez por sesión, no una vez por destino que
 // llegue a 'live'.
 let liveNotified = false;
+// Nombres de los destinos reproducibles al arrancar la sesión — para el registro de
+// historial (Fase 6, docs/PLAN_FEATURES_LOTE2.md). Es una foto del arranque, no se
+// actualiza si el streamer prende/apaga destinos a mitad de la transmisión — alcanza para
+// un resumen simple ("con qué arrancaste"), no hace falta rastrear cada cambio en vivo.
+let sessionDestNames = [];
 
 const MAX_ATTEMPTS = 6;
 const BASE_DELAY = 2000; // ms
@@ -242,6 +249,8 @@ function stopRelay(name) {
 export function onPublish(url, destinations) {
   sourceUrl = url;
   liveSince = Date.now();
+  sessionDestNames = destinations.filter(isPlayable).map((d) => d.name);
+  resetSessionPeaks(); // nueva sesión = nuevo pico de espectadores desde cero
   destinations.filter(isPlayable).forEach(startRelay);
   startMonitor(url); // métricas del ingest + niveles de audio
   // Buffer/grabación completa "armados" (prendidos sin señal, ver arm*() más abajo) —
@@ -258,9 +267,16 @@ export function onPublish(url, destinations) {
 // OBS dejó de publicar: para todo y olvida el origen.
 export function onUnpublish() {
   // Si nunca se avisó "estoy en vivo" (ningún destino llegó a conectar de verdad — ver
-  // liveNotified/parseProgress arriba), tampoco se avisa "terminó": sería un aviso de
-  // cierre sin apertura, más confuso que no avisar nada.
+  // liveNotified/parseProgress arriba), tampoco se avisa "terminó" NI se guarda un
+  // registro de historial: sería una entrada de "transmitiste" para algo que nunca llegó
+  // a conectar con ninguna plataforma, más ruido que información.
   const wasNotified = liveNotified;
+  // Capturados ANTES de resetear el estado de abajo — uptimeSeconds()/getSessionPeaks()
+  // leen liveSince/los picos actuales, que se pierden apenas se limpian.
+  const startedAt = liveSince;
+  const durationSeconds = uptimeSeconds() || 0;
+  const peakViewers = getSessionPeaks();
+  const destNames = sessionDestNames;
   for (const name of [...relays.keys()]) stopRelay(name);
   stopRecording();
   stopFullRecording();
@@ -268,12 +284,20 @@ export function onUnpublish() {
   sourceUrl = null;
   liveSince = null;
   liveNotified = false; // próxima sesión vuelve a poder avisar cuando algún destino conecte
+  sessionDestNames = [];
   // Nueva sesión = nueva evaluación de bitrate desde cero (el bitrate de OBS pudo cambiar).
   transcodingDecided.clear();
   bitrateSamples.clear();
   if (wasNotified) {
     notifyDiscord('end'); // aviso a Discord (hasta 3 webhooks) si hay configurados — no-op si no
     notifyTelegram('end'); // ídem Telegram (hasta 3 bots) — ver src/notify.js / src/telegram.js
+    recordSession({
+      startedAt: startedAt || Date.now(),
+      endedAt: Date.now(),
+      durationSeconds,
+      destinations: destNames,
+      peakViewers,
+    });
   }
 }
 

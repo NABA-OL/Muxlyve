@@ -325,4 +325,31 @@ export const tMap = {
   'Timeout aplicado': { en: 'Timeout applied', fr: 'Timeout applique', pt: 'Timeout aplicado' },
   'Usuario baneado': { en: 'User banned', fr: 'Utilisateur banni', pt: 'Usuário banido' },
   'No se pudo moderar': { en: 'Could not moderate', fr: 'Moderation impossible', pt: 'Não foi possível moderar' },
+
+  // Fase 6 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — historial de sesiones.
+  'Historial': { en: 'History', fr: 'Historique', pt: 'Histórico' },
+  'Fecha': { en: 'Date', fr: 'Date', pt: 'Data' },
+  'Plataformas': { en: 'Platforms', fr: 'Plateformes', pt: 'Plataformas' },
+  'Pico de espectadores': { en: 'Peak viewers', fr: 'Pic de spectateurs', pt: 'Pico de espectadores' },
+  'No se pudo cargar el historial.': { en: 'Could not load the history.', fr: 'Impossible de charger historique.', pt: 'Não foi possível carregar o histórico.' },
+  'Todavía no hay sesiones registradas — se guardan solas cada vez que sales en vivo de verdad (al menos una plataforma conectada).': { en: 'No sessions recorded yet — they save automatically every time you actually go live (at least one platform connected).', fr: 'Aucune session enregistree pour le moment — elles se sauvegardent automatiquement chaque fois que tu es vraiment en direct (au moins une plateforme connectee).', pt: 'Ainda não há sessões registradas — elas são salvas automaticamente sempre que você fica ao vivo de verdade (pelo menos uma plataforma conectada).' },
+
+  // Fase 1 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — exportar/importar configuración.
+  // Las entradas que aparecen dentro de panel-client.js (toasts, confirm) NO llevan
+  // apóstrofo en ningún idioma — translateHtml() las pega tal cual sobre el JS servido, y
+  // un apóstrofo ahí rompería el string de una comilla simple. Las que solo viven en el
+  // HTML de panel.js (botones/descripción) no tienen esa restricción, pero se dejan igual
+  // de limpias por consistencia.
+  'Exportar/importar configuración': { en: 'Export/import configuration', fr: 'Exporter/importer la configuration', pt: 'Exportar/importar configuração' },
+  'Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.': { en: 'Destinations and settings in a single file — for backup or migrating machines. Contains your stream keys in plain text, keep it safe.', fr: 'Destinations et reglages dans un seul fichier — pour sauvegarde ou migration de machine. Contient tes cles de diffusion en texte brut, garde-le en lieu sur.', pt: 'Destinos e configurações em um único arquivo — para backup ou migração de máquina. Contém suas chaves de retransmissão em texto simples, guarde-o com cuidado.' },
+  'Exportar': { en: 'Export', fr: 'Exporter', pt: 'Exportar' },
+  'Importar': { en: 'Import', fr: 'Importer', pt: 'Importar' },
+  'Configuración exportada': { en: 'Configuration exported', fr: 'Configuration exportee', pt: 'Configuração exportada' },
+  'Configuración importada': { en: 'Configuration imported', fr: 'Configuration importee', pt: 'Configuração importada' },
+  'El archivo no es un JSON válido.': { en: 'The file is not valid JSON.', fr: 'Fichier JSON invalide.', pt: 'O arquivo não é um JSON válido.' },
+  'El archivo no tiene el formato esperado (¿es un export de Muxlyve?).': { en: 'The file does not have the expected format (is it a Muxlyve export?).', fr: 'Format de fichier inattendu (export Muxlyve ?).', pt: 'O arquivo não tem o formato esperado (é uma exportação do Muxlyve?).' },
+  'Este archivo fue exportado desde otra cuenta (': { en: 'This file was exported from another account (', fr: 'Ce fichier a ete exporte depuis un autre compte (', pt: 'Este arquivo foi exportado de outra conta (' },
+  '), no la que está activa en este equipo (': { en: '), not the one active on this machine (', fr: '), et non celle active sur cette machine (', pt: '), não a que está ativa neste computador (' },
+  '). ¿Importar igual?': { en: '). Import anyway?', fr: '). Importer quand meme ?', pt: '). Importar mesmo assim?' },
+  'Importar de todas formas': { en: 'Import anyway', fr: 'Importer quand meme', pt: 'Importar mesmo assim' },
 };

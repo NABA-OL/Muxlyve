@@ -1445,10 +1445,11 @@
     $('#themeChk').checked = document.documentElement.dataset.theme !== 'light';
     loadLicenseInfo();
     loadOrphanRecordings();
+    loadSessionHistory();
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'support', 'license'] : ['clips', 'webhooks', 'license'];
+    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'history', 'support', 'license'] : ['clips', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -1512,6 +1513,69 @@
   async function toggleAudioSilenceAlert() {
     try { await api('POST', '/api/settings', { audioSilenceAlertEnabled: $('#audioSilenceChk').checked }); }
     catch (e) { toast(e.message, true); }
+  }
+
+  // Exportar/importar configuración (Fase 1 del lote 2, docs/PLAN_FEATURES_LOTE2.md).
+  // Descarga un archivo con destinos + ajustes — GET /api/config/export ya arma el JSON
+  // del motor; acá solo se le agrega quién lo exportó (correo de la licencia, si hay
+  // Electron) y se dispara la descarga vía Blob (sin pedirle nada especial al servidor).
+  async function exportConfig() {
+    try {
+      const data = await api('GET', '/api/config/export');
+      const info = await window.msLicense?.getInfo().catch(() => null);
+      data.license = { email: info?.email || null };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'muxlyve-config-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Configuración exportada');
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  // Antes de mandar el archivo al servidor, compara el correo de licencia con el que
+  // quedó guardado adentro del archivo (ver exportConfig arriba) — si las dos existen y
+  // NO coinciden, es casi seguro que este archivo es de otra persona (alguien más lo
+  // exportó, o lo compartieron sin querer). No lo bloquea del todo — migrar entre tus
+  // propias máquinas es exactamente el caso de uso que esto existe para resolver — pero
+  // ya no puede pasar en silencio: hace falta confirmar explícitamente el mismatch.
+  // Sin Electron (panel servido a un navegador cualquiera) no hay con qué comparar, se
+  // salta el chequeo — mismo criterio que cualquier otra función Electron-only.
+  async function importConfig(file) {
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      toast('El archivo no es un JSON válido.', true);
+      return;
+    }
+    if (!Array.isArray(parsed.destinations) || !parsed.settings) {
+      toast('El archivo no tiene el formato esperado (¿es un export de Muxlyve?).', true);
+      return;
+    }
+    const fileEmail = parsed.license?.email || null;
+    const info = await window.msLicense?.getInfo().catch(() => null);
+    const currentEmail = info?.email || null;
+    if (fileEmail && currentEmail && fileEmail !== currentEmail) {
+      const ok = await showConfirm(
+        'Este archivo fue exportado desde otra cuenta (' + fileEmail + '), no la que está activa en este equipo (' + currentEmail + '). ¿Importar igual?',
+        'Importar de todas formas',
+      );
+      if (!ok) return;
+    }
+    try {
+      await api('POST', '/api/config/import', { destinations: parsed.destinations, settings: parsed.settings });
+      toast('Configuración importada');
+      $('#importConfigInput').value = ''; // permite volver a elegir el mismo archivo despues
+      refresh();
+      loadConfig();
+    } catch (e) {
+      toast(e.message, true);
+    }
   }
   // Webhooks de Discord (hasta 3) y bots de Telegram (hasta 3) — Preferencias → Webhooks.
   // Arrays en memoria, poblados por loadConfig()/render*() al abrir el panel; cada cambio
@@ -1863,6 +1927,72 @@
       body.appendChild(summaryRow('Bitrate prom. ' + name, avg + ' kbps'));
     }
     $('#summaryOverlay').classList.add('open');
+  }
+
+  // ── Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) ──────────────────────
+  // A diferencia del resumen de arriba (sessionPeakViewers y demás, todo en memoria del
+  // cliente, se pierde al cerrar la ventana), esto persiste server-side en sessions.json
+  // — ver src/sessions.js / src/routes/sessions.js. Preferencias → Historial, se carga
+  // bajo demanda (openPrefs), no hace falta pollearlo.
+  function fmtSessionDate(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString(UI_LANG, { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString(UI_LANG, { hour: '2-digit', minute: '2-digit' });
+  }
+  async function loadSessionHistory() {
+    const box = $('#sessionHistoryList');
+    if (!box) return;
+    try {
+      const { sessions } = await api('GET', '/api/sessions');
+      renderSessionHistory(sessions);
+    } catch {
+      box.innerHTML = '';
+      const err = document.createElement('div');
+      err.className = 'preset-chips-empty';
+      err.textContent = 'No se pudo cargar el historial.';
+      box.appendChild(err);
+    }
+  }
+  function renderSessionHistory(sessions) {
+    const box = $('#sessionHistoryList');
+    box.innerHTML = '';
+    if (!sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'preset-chips-empty';
+      empty.textContent = 'Todavía no hay sesiones registradas — se guardan solas cada vez que sales en vivo de verdad (al menos una plataforma conectada).';
+      box.appendChild(empty);
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'history-table';
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const label of ['Fecha', 'Duración', 'Plataformas', 'Pico de espectadores']) {
+      const th = document.createElement('th');
+      th.textContent = label;
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const s of sessions) {
+      const tr = document.createElement('tr');
+      const tdDate = document.createElement('td');
+      tdDate.textContent = fmtSessionDate(s.startedAt);
+      const tdDur = document.createElement('td');
+      tdDur.textContent = fmtUptime(s.durationSeconds);
+      const tdDest = document.createElement('td');
+      tdDest.textContent = s.destinations.length ? s.destinations.join(', ') : '—';
+      const tdPeak = document.createElement('td');
+      const peakEntries = Object.entries(s.peakViewers || {}).filter(([, v]) => v > 0);
+      tdPeak.textContent = peakEntries.length
+        ? peakEntries.map(([p, v]) => (VIEWER_PLATFORM_LABELS[p] || p) + ' ' + v.toLocaleString(UI_LANG)).join(', ')
+        : '—';
+      tr.append(tdDate, tdDur, tdDest, tdPeak);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
   }
 
   // ── Comprobación previa a salir en vivo ──
