@@ -804,12 +804,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div>
               <div>Idioma / Language</div>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:.4rem;max-width:220px;justify-content:flex-end">
-              <button type="button" class="lang-opt-btn" id="langEsBtn" onclick="setAppLanguage('es')">Español</button>
-              <button type="button" class="lang-opt-btn" id="langEnBtn" onclick="setAppLanguage('en')">English</button>
-              <button type="button" class="lang-opt-btn" id="langFrBtn" onclick="setAppLanguage('fr')">Français</button>
-              <button type="button" class="lang-opt-btn" id="langPtBtn" onclick="setAppLanguage('pt')">Português</button>
-            </div>
+            <select id="langSelect" class="lang-select" onchange="setAppLanguage(this.value)">
+              <option value="es">Español</option>
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+              <option value="pt">Português</option>
+            </select>
           </div>
           <div class="pref-row">
             <div>
@@ -861,6 +861,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div class="pref-row" id="allowLanRestartRow" style="display:none">
             <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
             <button onclick="relaunchApp()">Reiniciar ahora</button>
+          </div>
+          <!-- Exportar/importar configuración (Fase 1 del lote 2,
+               docs/PLAN_FEATURES_LOTE2.md). El chequeo de "¿es tu cuenta?" al importar es
+               Electron-only (window.msLicense) — ver importConfig() en panel-client.js. -->
+          <div class="pref-row">
+            <div>
+              <div>Exportar/importar configuración</div>
+              <div class="pref-desc">Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.</div>
+            </div>
+            <div style="display:flex;gap:.4rem;flex-shrink:0">
+              <button type="button" class="preset-save-btn" onclick="exportConfig()">Exportar</button>
+              <button type="button" class="preset-save-btn" onclick="$('#importConfigInput').click()">Importar</button>
+              <input type="file" id="importConfigInput" accept="application/json" style="display:none" onchange="importConfig(this.files[0])">
+            </div>
           </div>
         </div>
         <div class="prefs-panel" id="prefsClipsBlock" data-panel="clips">
@@ -927,22 +941,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <input type="checkbox" id="audioSilenceChk" onchange="toggleAudioSilenceAlert()">
               <span class="sys-toggle-track"></span>
             </label>
-          </div>
-          <!-- Exportar/importar configuración (Fase 1 del lote 2,
-               docs/PLAN_FEATURES_LOTE2.md) — mismo criterio que las dos de arriba: ajuste
-               del MOTOR, no de Electron, por eso vive acá. El chequeo de "¿es tu cuenta?"
-               al importar sí es Electron-only (window.msLicense) — ver importConfig() en
-               panel-client.js, se salta solo si no hay app de escritorio. -->
-          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
-            <div>
-              <div>Exportar/importar configuración</div>
-              <div class="pref-desc">Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.</div>
-            </div>
-            <div style="display:flex;gap:.4rem;flex-shrink:0">
-              <button type="button" class="preset-save-btn" onclick="exportConfig()">Exportar</button>
-              <button type="button" class="preset-save-btn" onclick="$('#importConfigInput').click()">Importar</button>
-              <input type="file" id="importConfigInput" accept="application/json" style="display:none" onchange="importConfig(this.files[0])">
-            </div>
           </div>
         </div>
         <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">

@@ -88,7 +88,7 @@ export async function handle(req, res, url, ctx) {
   // texto plano a propósito — loadAll() ya devuelve las URLs DESENCRIPTADAS aunque haya
   // MASTER_KEY (las claves de retransmisión viajan en la URL misma), así que el archivo
   // resultante es tan sensible como el destinations.json/settings.json de origen. El
-  // aviso de "guardalo con cuidado" vive del lado del cliente (botón de exportar), acá
+  // aviso de "guárdalo con cuidado" vive del lado del cliente (botón de exportar), acá
   // solo se arma el JSON — este endpoint no decide UI.
   if (req.method === 'GET' && url.pathname === '/api/config/export') {
     json(res, 200, {

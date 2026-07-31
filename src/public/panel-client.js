@@ -1471,14 +1471,11 @@
   }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
   function markActiveLanguageBtn(lang) {
-    $('#langEsBtn')?.classList.toggle('sel', lang === 'es');
-    $('#langEnBtn')?.classList.toggle('sel', lang === 'en');
-    $('#langFrBtn')?.classList.toggle('sel', lang === 'fr');
-    $('#langPtBtn')?.classList.toggle('sel', lang === 'pt');
+    const sel = $('#langSelect');
+    if (sel) sel.value = lang;
   }
   async function setAppLanguage(lang) {
     if (!window.msApp?.setLanguage) return;
-    markActiveLanguageBtn(lang); // feedback inmediato — la recarga real la dispara main.js
     await window.msApp.setLanguage(lang);
   }
   async function toggleLoginItem() {
