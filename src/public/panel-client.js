@@ -173,7 +173,14 @@
     if (d.status !== 'live' || !d.metrics) return '';
     const parts = [];
     if (d.metrics.bitrate != null) parts.push(d.metrics.bitrate + ' kbps');
-    if (d.metrics.fps != null) parts.push(d.metrics.fps + ' fps');
+    // d.metrics.fps es el contador interno de FFmpeg (cuadros procesados por segundo de
+    // reloj real, no fps del video — con -c copy y speed > 1x sale inflado, ej. 234 "fps"
+    // a 60fps real x3.87 de velocidad). Se divide por speed para mostrar el fps real de la
+    // señal, que es lo que el usuario espera ver acá.
+    if (d.metrics.fps != null) {
+      const realFps = d.metrics.speed ? d.metrics.fps / d.metrics.speed : d.metrics.fps;
+      parts.push(Math.round(realFps) + ' fps');
+    }
     if (d.metrics.speed != null) parts.push(d.metrics.speed + 'x');
     return parts.join(' · ');
   }
