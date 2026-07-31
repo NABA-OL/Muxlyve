@@ -64,6 +64,7 @@ export async function handle(req, res, url, ctx) {
       telegramBots: settings.telegramBots,
       liveMessage: settings.liveMessage || '',
       endMessage: settings.endMessage || '',
+      audioSilenceAlertEnabled: settings.audioSilenceAlertEnabled,
     });
     return true;
   }
@@ -91,16 +92,24 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
+  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter,
+  // más avisos puntuales de "silencio sostenido" (ver checkSilenceWatchdog en
+  // src/monitor.js) — mismo stream, discriminado por `type` para no abrir una segunda
+  // conexión SSE solo para esto.
   if (req.method === 'GET' && url.pathname === '/api/audio') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
+    const onLevel = (lvl) => res.write(`data: ${JSON.stringify({ type: 'level', ...lvl })}\n\n`);
+    const onSilence = (info) => res.write(`data: ${JSON.stringify({ type: 'silence', ...info })}\n\n`);
     audioBus.on('level', onLevel);
-    req.on('close', () => audioBus.off('level', onLevel));
+    audioBus.on('silence', onSilence);
+    req.on('close', () => {
+      audioBus.off('level', onLevel);
+      audioBus.off('silence', onSilence);
+    });
     return true;
   }
 
@@ -119,6 +128,7 @@ export async function handle(req, res, url, ctx) {
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
     const patch = {};
     if ('chatCommandsEnabled' in input) patch.chatCommandsEnabled = !!input.chatCommandsEnabled;
+    if ('audioSilenceAlertEnabled' in input) patch.audioSilenceAlertEnabled = !!input.audioSilenceAlertEnabled;
     if ('discordWebhooks' in input) {
       const list = Array.isArray(input.discordWebhooks) ? input.discordWebhooks : [];
       if (list.length > MAX_DISCORD_WEBHOOKS) {

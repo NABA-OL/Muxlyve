@@ -256,7 +256,14 @@
     if (typeof EventSource === 'undefined') return;
     const es = new EventSource('/api/audio');
     es.onmessage = (e) => {
-      try { const l = JSON.parse(e.data); vu.tL = l.l; vu.tR = l.r; } catch {}
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'silence') {
+          window.msApp?.notify?.('Muxlyve', 'No se detecta audio en la señal hace 20 segundos — revisa tu micrófono o la app de captura.');
+          return;
+        }
+        vu.tL = msg.l; vu.tR = msg.r;
+      } catch {}
     };
     // EventSource reconecta solo ante error; nada más que hacer.
   })();
@@ -619,6 +626,7 @@
     try { renderPresets((await api('GET', '/api/presets')).presets || []); } catch {}
   }
   function renderPresets(presets) {
+    window._presets = presets; // applyPresetUi() necesita leer title/category por nombre
     const chips = $('#presetChips');
     chips.innerHTML = '';
     if (!presets.length) {
@@ -632,7 +640,8 @@
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'preset-chip' + (p.active ? ' active' : '');
-      chip.title = p.active ? 'Activo ahora' : 'Aplicar este perfil';
+      const hasStreamInfo = !!(p.title || p.category);
+      chip.title = (p.active ? 'Activo ahora' : 'Aplicar este perfil') + (hasStreamInfo ? ' (incluye título/categoría)' : '');
       chip.onclick = () => applyPresetUi(p.name);
       const label = document.createElement('span');
       label.textContent = p.name;
@@ -648,15 +657,39 @@
   }
   async function applyPresetUi(name) {
     try {
+      const preset = (window._presets || []).find((p) => p.name === name);
       await withDestBusy(async () => { render(await api('POST', '/api/presets/apply', { name })); });
       toast('Perfil "' + name + '" aplicado');
+      if (preset) await applyPresetStreamInfo(preset); // no-op si el perfil no guardó título/categoría
     } catch (e) { toast(e.message, true); }
   }
+  // Perfiles guardados con título/categoría (ver saveCurrentPreset) también los aplican
+  // al aplicarse — mismo camino que el botón "Aplicar" de "Modificar información del
+  // stream" (applyStreamTitle), pero sin abrir ese modal ni depender de sus inputs. Nunca
+  // debe poder tumbar el apply de destinos si algo sale mal acá — por eso vive en un
+  // try/catch propio, llamado DESPUÉS de que los destinos ya se aplicaron.
+  async function applyPresetStreamInfo(preset) {
+    if (!preset.title && !preset.category) return;
+    if (!window.msOAuth?.setTitle) return; // panel abierto en un navegador sin Electron — no rompe nada
+    try {
+      const results = await window.msOAuth.setTitle(preset.title || '', preset.category || '');
+      if (!Object.keys(results || {}).length) return; // sin Twitch/Kick conectado, nada que actualizar
+      if (preset.title) localStorage.setItem('ms_stream_title', preset.title);
+      if (preset.category) localStorage.setItem('ms_stream_category', preset.category);
+      updateStreamTitleDisplay();
+    } catch {}
+  }
+  // Captura el título/categoría actual (lo último aplicado con éxito, ver
+  // applyStreamTitle) junto con los destinos — así aplicar el perfil después restaura las
+  // tres cosas juntas. Si el streamer nunca seteó un título, el perfil se guarda igual,
+  // solo que sin esos dos campos (perfil "de siempre", sin sorpresas).
   async function saveCurrentPreset() {
     const name = await showPrompt('Guardar perfil actual', 'Ej. Solo Twitch');
     if (!name) return;
     try {
-      const { presets } = await api('POST', '/api/presets', { name });
+      const title = localStorage.getItem('ms_stream_title') || '';
+      const category = localStorage.getItem('ms_stream_category') || '';
+      const { presets } = await api('POST', '/api/presets', { name, title, category });
       renderPresets(presets);
       toast('Perfil "' + name + '" guardado');
     } catch (e) { toast(e.message, true); }
@@ -935,6 +968,7 @@
       }
       if (c.version) window._appVersion = c.version;
       $('#chatCmdChk').checked = c.chatCommandsEnabled !== false;
+      $('#audioSilenceChk').checked = c.audioSilenceAlertEnabled !== false;
       window._liveMessage = c.liveMessage || '';
       window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
@@ -1473,6 +1507,10 @@
   // igual con la app de escritorio o el panel servido a un navegador cualquiera.
   async function toggleChatCommands() {
     try { await api('POST', '/api/settings', { chatCommandsEnabled: $('#chatCmdChk').checked }); }
+    catch (e) { toast(e.message, true); }
+  }
+  async function toggleAudioSilenceAlert() {
+    try { await api('POST', '/api/settings', { audioSilenceAlertEnabled: $('#audioSilenceChk').checked }); }
     catch (e) { toast(e.message, true); }
   }
   // Webhooks de Discord (hasta 3) y bots de Telegram (hasta 3) — Preferencias → Webhooks.

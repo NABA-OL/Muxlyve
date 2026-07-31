@@ -907,6 +907,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <span class="sys-toggle-track"></span>
             </label>
           </div>
+          <!-- Vigía de audio caído — mismo criterio que Comando !clip: ajuste del MOTOR
+               (settings.json), funciona igual con o sin la app de escritorio, por eso vive
+               acá y no en "Sistema" (esa pestaña se oculta sin Electron). -->
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Avisar si se corta el audio</div>
+              <div class="pref-desc">Si no se detecta audio real por 20 segundos seguidos mientras estás en vivo (micrófono desconectado, app de captura caída), muestra una notificación.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="audioSilenceChk" onchange="toggleAudioSilenceAlert()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
         </div>
         <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">
           <div class="field">

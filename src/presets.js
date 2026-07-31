@@ -16,22 +16,38 @@ export function listPresets() {
   return loadSettings().destinationPresets;
 }
 
-// Guarda el estado ENABLED actual de `destinations` bajo `name`. Si el nombre ya existía,
-// lo actualiza en el mismo lugar (no lo manda al final de la lista). Si es nuevo y ya se
-// llegó al tope, rechaza con un error claro — mejor eso que descartar en silencio el
-// perfil más viejo sin que el streamer se entere.
-export function savePreset(name, destinations) {
+// Título/categoría opcionales de un perfil: mismo tope de 140 caracteres que exige
+// Twitch para el título del stream (no hay un límite propio que respetar acá, es
+// puramente defensivo — nunca se validó esto ni siquiera en el flujo normal de
+// "Modificar información del stream", ver applyStreamTitle() en panel-client.js).
+const MAX_STREAM_INFO_LEN = 140;
+function validStreamInfoField(v) {
+  return typeof v === 'string' && v.trim() ? v.trim().slice(0, MAX_STREAM_INFO_LEN) : null;
+}
+
+// Guarda el estado ENABLED actual de `destinations` bajo `name`, más opcionalmente el
+// título/categoría del stream (streamInfo = { title, category }) — así aplicar el perfil
+// no solo prende/apaga destinos, también deja el título y la categoría como estaban al
+// guardarlo. Retrocompatible: perfiles guardados antes de esto simplemente no tienen esos
+// dos campos (quedan null), y savePreset() sin tercer argumento se comporta igual que
+// siempre. Si el nombre ya existía, lo actualiza en el mismo lugar (no lo manda al final
+// de la lista). Si es nuevo y ya se llegó al tope, rechaza con un error claro — mejor eso
+// que descartar en silencio el perfil más viejo sin que el streamer se entere.
+export function savePreset(name, destinations, streamInfo = {}) {
   const trimmed = String(name || '').trim();
   if (!trimmed) throw new Error('El nombre del perfil es obligatorio.');
   const enabled = destinations.filter((d) => d.enabled).map((d) => d.name);
+  const title = validStreamInfoField(streamInfo.title);
+  const category = validStreamInfoField(streamInfo.category);
   const existing = loadSettings().destinationPresets;
   const idx = existing.findIndex((p) => p.name === trimmed);
   if (idx < 0 && existing.length >= MAX_PRESETS) {
     throw new Error(`Máximo ${MAX_PRESETS} perfiles — borrá uno para guardar otro.`);
   }
+  const entry = { name: trimmed, enabled, title, category };
   const next = idx >= 0
-    ? existing.map((p, i) => (i === idx ? { name: trimmed, enabled } : p))
-    : [...existing, { name: trimmed, enabled }];
+    ? existing.map((p, i) => (i === idx ? entry : p))
+    : [...existing, entry];
   saveSettings({ destinationPresets: next });
   return next;
 }

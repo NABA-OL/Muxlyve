@@ -45,13 +45,14 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // POST /api/presets  { name } -> guarda el estado enabled ACTUAL de todos los destinos
-  // bajo ese nombre. Si el nombre ya existe, lo pisa.
+  // POST /api/presets  { name, title?, category? } -> guarda el estado enabled ACTUAL de
+  // todos los destinos bajo ese nombre, más opcionalmente el título/categoría del stream
+  // (ver src/presets.js). Si el nombre ya existe, lo pisa.
   if (req.method === 'POST' && url.pathname === '/api/presets') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
     try {
-      json(res, 200, { presets: savePreset(input.name, loadAll()) });
+      json(res, 200, { presets: savePreset(input.name, loadAll(), { title: input.title, category: input.category }) });
     } catch (err) {
       json(res, 400, { error: err.message });
     }
