@@ -315,4 +315,14 @@ export const tMap = {
   'Programación guardada': { en: 'Schedule saved', fr: 'Programmation enregistree', pt: 'Agendamento salvo' },
   'Quedaron como .ts por un cierre inesperado — conviértelas a .mp4 para poder reproducirlas.': { en: 'They were left as .ts by an unexpected shutdown — convert them to .mp4 to play them.', fr: 'Restes en .ts suite a un arret inattendu — convertis-les en .mp4 pour pouvoir les lire.', pt: 'Ficaram como .ts por um fechamento inesperado — converta-os para .mp4 para poder reproduzi-los.' },
   'Sin cambios — revisa que las horas marcadas sean futuras': { en: 'No changes — check that the marked times are in the future', fr: 'Aucun changement — verifie que les heures marquees sont futures', pt: 'Sem alterações — confira se os horários marcados são futuros' },
+
+  // Fase 5 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — timeout/ban (Twitch).
+  'Moderar (Twitch)': { en: 'Moderate (Twitch)', fr: 'Moderer (Twitch)', pt: 'Moderar (Twitch)' },
+  'Timeout 1 min': { en: 'Timeout 1 min', fr: 'Timeout 1 min', pt: 'Timeout 1 min' },
+  'Timeout 10 min': { en: 'Timeout 10 min', fr: 'Timeout 10 min', pt: 'Timeout 10 min' },
+  'Timeout 1 hora': { en: 'Timeout 1 hour', fr: 'Timeout 1 heure', pt: 'Timeout 1 hora' },
+  'Ban permanente': { en: 'Permanent ban', fr: 'Ban permanent', pt: 'Banimento permanente' },
+  'Timeout aplicado': { en: 'Timeout applied', fr: 'Timeout applique', pt: 'Timeout aplicado' },
+  'Usuario baneado': { en: 'User banned', fr: 'Utilisateur banni', pt: 'Usuário banido' },
+  'No se pudo moderar': { en: 'Could not moderate', fr: 'Moderation impossible', pt: 'Não foi possível moderar' },
 };

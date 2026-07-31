@@ -464,6 +464,24 @@
   .chat-pin-btn:hover { color: var(--accent); }
   .chat-pin-btn:disabled { opacity: .4; cursor: default; }
   .chat-pin-btn.pinned { opacity: 1; color: var(--accent); }
+  /* Moderar (timeout/ban) — mismo criterio visual que .chat-pin-btn (aparece al hacer
+     hover de la fila), pero en rojo en vez de acento para distinguirlo de un pin de un
+     vistazo. .chat-mod-menu es un menú flotante posicionado con JS (createModBtn en
+     chat-render.js), no un dropdown anclado por CSS — por eso position:fixed y no
+     relative/absolute sobre el botón. */
+  .chat-mod-btn { flex-shrink: 0; background: transparent; border: none;
+    color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s var(--ease-out);
+    padding: 0 2px; display: flex; align-items: center; }
+  .chat-row:hover .chat-mod-btn { opacity: 1; }
+  .chat-mod-btn:hover { color: var(--danger); }
+  .chat-mod-btn:disabled { opacity: .4; cursor: default; }
+  .chat-mod-menu { position: fixed; z-index: 50; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; padding: .3rem; width: 170px;
+    box-shadow: 0 12px 28px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: .1rem; }
+  .chat-mod-menu button { background: transparent; border: none; color: var(--text);
+    text-align: left; padding: .4rem .55rem; border-radius: 6px; font-size: .8rem; cursor: pointer; }
+  .chat-mod-menu button:hover { background: var(--surface-2); }
+  .chat-mod-menu button:last-child { color: var(--danger); }
   .chat-row .chat-icon { flex-shrink: 0; margin-top: .1rem; }
   .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .chat-empty { color: var(--muted); font-size: .78rem; padding: .3rem 0; }

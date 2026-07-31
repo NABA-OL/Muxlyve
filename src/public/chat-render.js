@@ -107,3 +107,80 @@ async function syncPinnedMessage() {
     if (r.ok) pinnedMessageId = r.messageId || null;
   } catch {}
 }
+
+// ── Timeout/ban (Fase 5, docs/PLAN_FEATURES_LOTE2.md) ───────────────────────────────────
+// Solo Twitch — igual que el pin, Kick no lo expone en API pública y YouTube no lo tiene
+// en absoluto (ver CLAUDE.md). El overlay de OBS (CHAT_OVERLAY_HTML) no llama a
+// createModBtn() en absoluto — es de solo lectura, mismo criterio que el pin.
+const MOD_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>';
+const MOD_ACTIONS = [
+  { label: 'Timeout 1 min', duration: 60 },
+  { label: 'Timeout 10 min', duration: 600 },
+  { label: 'Timeout 1 hora', duration: 3600 },
+  { label: 'Ban permanente', duration: null },
+];
+
+function closeAllModMenus() {
+  document.querySelectorAll('.chat-mod-menu').forEach((m) => m.remove());
+}
+
+async function runModAction(btn, userId, action) {
+  closeAllModMenus();
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/chat-ban', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, duration: action.duration, reason: 'Moderado desde Muxlyve' }),
+    });
+    const r = await res.json();
+    if (typeof toast === 'function') {
+      toast(r.ok ? (action.duration ? 'Timeout aplicado' : 'Usuario baneado') : (r.error || 'No se pudo moderar'), !r.ok);
+    }
+  } catch (e) {
+    if (typeof toast === 'function') toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Menú corto flotante en vez de un modal — timeout 1m/10m/1h o ban permanente. Un solo
+// menú abierto a la vez (closeAllModMenus antes de abrir uno nuevo); se cierra solo al
+// tocar afuera. Devuelve el botón ya armado, listo para agregar a la fila del mensaje —
+// ambas vistas (panel y popout) lo crean igual, ver appendChatMessage()/append().
+function createModBtn(userId) {
+  const btn = document.createElement('button');
+  btn.className = 'chat-mod-btn';
+  btn.title = 'Moderar (Twitch)';
+  btn.innerHTML = MOD_ICON_SVG;
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const already = btn.dataset.menuOpen === '1';
+    closeAllModMenus();
+    if (already) { btn.dataset.menuOpen = ''; return; } // togglea: si ya estaba abierto, solo cerrar
+    btn.dataset.menuOpen = '1';
+    const menu = document.createElement('div');
+    menu.className = 'chat-mod-menu';
+    for (const action of MOD_ACTIONS) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = action.label;
+      item.onclick = (ev) => { ev.stopPropagation(); runModAction(btn, userId, action); };
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    const rect = btn.getBoundingClientRect();
+    const menuWidth = 170;
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.left = Math.max(4, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 4)) + 'px';
+    setTimeout(() => {
+      document.addEventListener('click', function onDocClick(ev) {
+        if (menu.contains(ev.target)) return;
+        menu.remove();
+        btn.dataset.menuOpen = '';
+        document.removeEventListener('click', onDocClick);
+      });
+    }, 0);
+  };
+  return btn;
+}

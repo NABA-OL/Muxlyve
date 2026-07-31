@@ -2283,6 +2283,10 @@
       pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
       row.appendChild(pinBtn);
     }
+    // Moderar (timeout/ban): solo Twitch, y no sobre tu propio mensaje.
+    if (msg.platform === 'twitch' && msg.userId && !msg.isBroadcaster) {
+      row.appendChild(createModBtn(msg.userId));
+    }
     box.appendChild(row);
     while (box.children.length > 200) box.removeChild(box.firstChild);
     if (atBottom) box.scrollTop = box.scrollHeight;

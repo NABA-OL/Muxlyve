@@ -86,6 +86,11 @@ function handleLine(line) {
     isMod: isModFromTwitchTags(tags),
     // id: UUID del mensaje (tag IRCv3) — lo exige /helix/chat/messages/pin como message_id.
     id: tags.id || null,
+    // user-id: ID numérico de Twitch del autor (tag IRCv3, siempre presente en PRIVMSG) —
+    // lo exige /helix/moderation/bans como user_id para timeout/ban (ver Fase 5,
+    // docs/PLAN_FEATURES_LOTE2.md). No confundir con el "id" de arriba (ese es del
+    // MENSAJE, no del usuario).
+    userId: tags['user-id'] || null,
     timestamp: Date.now(),
   });
 }
