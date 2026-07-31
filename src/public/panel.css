@@ -301,6 +301,16 @@
     color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }
   .about-close-btn:hover { background: var(--border); }
 
+  /* Pestañas del modal "Mensaje de aviso" (al iniciar / al finalizar) — un solo mensaje
+     visible a la vez en el mismo textarea, ver switchMsgTab() en panel-client.js. */
+  .msg-tabs { display: flex; gap: .35rem; margin-bottom: .75rem; }
+  .msg-tab { flex: 1; padding: .4rem; background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 8px; font-size: .82rem; font-weight: 600; cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s; }
+  .msg-tab:hover { color: var(--text); }
+  .msg-tab.active { background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: var(--accent); color: var(--accent); }
+
   /* ── Barra de ingest: stats + VU meter ── */
   .ingest-bar { display: flex; align-items: center; gap: .75rem; margin-top: .6rem;
     padding: .5rem .65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }

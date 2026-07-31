@@ -33,7 +33,7 @@ export function isValidRecDuration(d) {
 const DEFAULT_SETTINGS = {
   streamKey: DEFAULT_STREAM_KEY, recArmed: false, fullRecArmed: false, recDuration: 60,
   clipsDir: null, recordingsDir: null, chatCommandsEnabled: true, discordWebhooks: [],
-  telegramBots: [], liveMessage: null, destinationPresets: [],
+  telegramBots: [], liveMessage: null, endMessage: null, destinationPresets: [],
 };
 
 function validDir(d) {
@@ -43,9 +43,10 @@ function validDir(d) {
 // Límite real de Discord para el campo `content` de un webhook (Telegram permite más,
 // 4096 — se usa el menor de los dos para no tener que truncar distinto por plataforma al
 // mandar el mismo mensaje a ambas). Se recorta acá (al guardar) para no descubrirlo recién
-// al streamear.
+// al streamear. Misma función para liveMessage (al iniciar) y endMessage (al finalizar) —
+// misma validación exacta, solo cambia qué campo del settings.json la usa.
 const MAX_LIVE_MSG = 2000;
-function validLiveMessage(m) {
+function validMessage(m) {
   return typeof m === 'string' && m.trim() ? m.trim().slice(0, MAX_LIVE_MSG) : null;
 }
 
@@ -156,7 +157,8 @@ export function loadSettings() {
         ...(typeof data.discordWebhookUrl === 'string' && data.discordWebhookUrl ? [data.discordWebhookUrl] : []),
       ]),
       telegramBots: validTelegramBots(data.telegramBots),
-      liveMessage: validLiveMessage(data.liveMessage ?? data.discordMessage),
+      liveMessage: validMessage(data.liveMessage ?? data.discordMessage),
+      endMessage: validMessage(data.endMessage),
       destinationPresets: validPresets(data.destinationPresets),
     };
   } catch (err) {

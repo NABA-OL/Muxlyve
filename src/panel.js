@@ -550,7 +550,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
              stream — ver src/notify.js / src/telegram.js. Vive acá, no en Preferencias
              (donde están las URLs/tokens, pestaña Webhooks), porque es algo que se toca
              seguido (cada stream puede querer un mensaje distinto), no un ajuste de una vez. -->
-        <button class="stream-icon-btn" onclick="openDiscordMsgModal()" title="Mensaje de aviso al iniciar">
+        <button class="stream-icon-btn" onclick="openDiscordMsgModal()" title="Mensaje de aviso">
           <span class="icon-mask icon-webhook" style="width:17px;height:17px"></span>
         </button>
       </div>
@@ -1100,7 +1100,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <h2>Mensaje de aviso</h2>
       <button class="prefs-close" onclick="closeDiscordMsgModal()">✕</button>
     </div>
-    <p class="pref-desc" style="margin:0 0 .6rem">Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.</p>
+    <!-- Un solo modal para los dos mensajes (al iniciar / al finalizar) en vez de un
+         segundo botón en la grilla 2x2 de arriba — ver src/routes/system.js (kind
+         'start'|'end') y notify.js/telegram.js. switchMsgTab() en panel-client.js. -->
+    <div class="msg-tabs">
+      <button type="button" class="msg-tab active" id="msgTabStart" onclick="switchMsgTab('start')">Al iniciar</button>
+      <button type="button" class="msg-tab" id="msgTabEnd" onclick="switchMsgTab('end')">Al finalizar</button>
+    </div>
+    <p class="pref-desc" style="margin:0 0 .6rem" id="discordMsgDesc">Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.</p>
     <div class="field">
       <textarea id="discordMsgInput" rows="5" maxlength="2000" oninput="updateDiscordMsgCount()"
         placeholder="🔴 ¡La transmisión empezó!"

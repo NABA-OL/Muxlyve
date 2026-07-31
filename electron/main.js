@@ -87,7 +87,7 @@ let tray = null;
 // ── Splash screen ─────────────────────────────────────────────────────────────
 function showSplash() {
   splash = new BrowserWindow({
-    width: 360, height: 210,
+    width: 460, height: 310,
     frame: false,
     resizable: false,
     center: true,

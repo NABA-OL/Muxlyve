@@ -63,6 +63,7 @@ export async function handle(req, res, url, ctx) {
       discordWebhooks: settings.discordWebhooks,
       telegramBots: settings.telegramBots,
       liveMessage: settings.liveMessage || '',
+      endMessage: settings.endMessage || '',
     });
     return true;
   }
@@ -151,42 +152,51 @@ export async function handle(req, res, url, ctx) {
       if (msg.length > 2000) { json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') }); return true; }
       patch.liveMessage = msg || null;
     }
+    if ('endMessage' in input) {
+      const msg = typeof input.endMessage === 'string' ? input.endMessage.trim() : '';
+      if (msg.length > 2000) { json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') }); return true; }
+      patch.endMessage = msg || null;
+    }
     saveSettings(patch);
     json(res, 200, { ok: true });
     return true;
   }
 
-  // POST /api/notify-test-discord  { url } -> prueba UN webhook puntual, sin necesidad
-  // de haberlo guardado antes (así se puede probar antes de confirmar). Ignora el
-  // cooldown de 30 min (ver src/notify.js) — botón "Probar" de cada fila.
+  // POST /api/notify-test-discord  { url, kind? } -> prueba UN webhook puntual, sin
+  // necesidad de haberlo guardado antes (así se puede probar antes de confirmar). Ignora
+  // el cooldown de 30 min (ver src/notify.js) — botón "Probar" de cada fila. kind:
+  // 'start'|'end', default 'start' (compat con clientes viejos que no lo mandan).
   if (req.method === 'POST' && url.pathname === '/api/notify-test-discord') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
-    json(res, 200, await testDiscordWebhook(input.url));
+    json(res, 200, await testDiscordWebhook(input.url, input.kind === 'end' ? 'end' : 'start'));
     return true;
   }
 
-  // POST /api/notify-test-telegram  { botToken, chatId } -> mismo criterio, para un bot
-  // de Telegram puntual.
+  // POST /api/notify-test-telegram  { botToken, chatId, kind? } -> mismo criterio, para
+  // un bot de Telegram puntual.
   if (req.method === 'POST' && url.pathname === '/api/notify-test-telegram') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
-    json(res, 200, await testTelegramBot(input.botToken, input.chatId));
+    json(res, 200, await testTelegramBot(input.botToken, input.chatId, input.kind === 'end' ? 'end' : 'start'));
     return true;
   }
 
-  // POST /api/notify-test-all -> dispara el mensaje de aviso YA GUARDADO a TODOS los
-  // canales configurados (Discord + Telegram) de una — botón "Probar" del modal de
-  // mensaje (previsualiza cómo va a quedar en cada uno, no uno a la vez).
+  // POST /api/notify-test-all  { kind? } -> dispara el mensaje YA GUARDADO (de inicio o de
+  // fin, según kind) a TODOS los canales configurados (Discord + Telegram) de una — botón
+  // "Probar" del modal de mensaje (previsualiza cómo va a quedar en cada uno).
   if (req.method === 'POST' && url.pathname === '/api/notify-test-all') {
+    let input;
+    try { input = await readBody(req); } catch { input = {}; }
+    const kind = input.kind === 'end' ? 'end' : 'start';
     const settings = loadSettings();
     const results = [];
     for (let i = 0; i < settings.discordWebhooks.length; i++) {
-      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i])) });
+      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i], kind)) });
     }
     for (let i = 0; i < settings.telegramBots.length; i++) {
       const bot = settings.telegramBots[i];
-      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId)) });
+      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId, kind)) });
     }
     json(res, 200, { results });
     return true;

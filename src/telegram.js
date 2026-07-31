@@ -8,11 +8,12 @@
 // settings.js, mismo criterio que isValidDiscordWebhook: validado al guardar Y al usar.
 import { loadSettings, isValidTelegramBot } from './settings.js';
 
-// Mismo criterio que notify.js: un cooldown compartido para los hasta 3 bots juntos.
+// Mismo criterio que notify.js: un cooldown compartido para los hasta 3 bots juntos, y
+// separado por kind (start/end) — ver el comentario en notify.js sobre por qué.
 const NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
-let lastNotifyAt = 0;
+const lastNotifyAt = { start: 0, end: 0 };
 
-const DEFAULT_MESSAGE = '🔴 ¡La transmisión empezó!';
+const DEFAULT_MESSAGES = { start: '🔴 ¡La transmisión empezó!', end: '⚫ La transmisión terminó.' };
 
 // El mensaje se escribe pensando en Discord (**negrita**, *itálica* o _itálica_) —
 // Telegram usa su propia sintaxis MarkdownV2, e INVERTIDA para negrita/itálica: un solo
@@ -79,33 +80,35 @@ async function postToTelegram(botToken, chatId, text) {
   }
 }
 
-// Llamado desde onPublish() en relays.js, igual que notifyDiscord() — nunca debe poder
-// tumbar el arranque del stream, y un bot caído no frena a los demás (allSettled).
-export async function notifyTelegram() {
-  const { telegramBots, liveMessage } = loadSettings();
+// Llamado desde onPublish()/onUnpublish() en relays.js según kind ('start'/'end'), igual
+// que notifyDiscord() — nunca debe poder tumbar el arranque/cierre del stream, y un bot
+// caído no frena a los demás (allSettled).
+export async function notifyTelegram(kind = 'start') {
+  const { telegramBots, liveMessage, endMessage } = loadSettings();
   if (!telegramBots.length) return;
-  if (Date.now() - lastNotifyAt < NOTIFY_COOLDOWN_MS) return;
-  lastNotifyAt = Date.now();
-  const message = liveMessage || DEFAULT_MESSAGE;
+  if (Date.now() - lastNotifyAt[kind] < NOTIFY_COOLDOWN_MS) return;
+  lastNotifyAt[kind] = Date.now();
+  const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   const results = await Promise.allSettled(
     telegramBots.map((bot) => postToTelegram(bot.botToken, bot.chatId, message)),
   );
   results.forEach((r, i) => {
-    if (r.status === 'fulfilled') console.log(`[notify] Telegram #${i + 1} — aviso enviado.`);
-    else console.error(`[notify] Telegram #${i + 1} — no se pudo avisar —`, r.reason.message);
+    if (r.status === 'fulfilled') console.log(`[notify] Telegram #${i + 1} (${kind}) — aviso enviado.`);
+    else console.error(`[notify] Telegram #${i + 1} (${kind}) — no se pudo avisar —`, r.reason.message);
   });
 }
 
 // Botón "Probar" de cada fila — prueba un bot puntual sin necesidad de guardarlo antes.
 // Ignora el cooldown a propósito.
-export async function testTelegramBot(botToken, chatId) {
+export async function testTelegramBot(botToken, chatId, kind = 'start') {
   const clean = { botToken: String(botToken || '').trim(), chatId: String(chatId || '').trim() };
   if (!isValidTelegramBot(clean)) {
     return { ok: false, error: 'Bot token o chat ID inválido.' };
   }
-  const { liveMessage } = loadSettings();
+  const { liveMessage, endMessage } = loadSettings();
+  const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   try {
-    await postToTelegram(clean.botToken, clean.chatId, `[Prueba de Muxlyve]\n${liveMessage || DEFAULT_MESSAGE}`);
+    await postToTelegram(clean.botToken, clean.chatId, `[Prueba de Muxlyve]\n${message}`);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };

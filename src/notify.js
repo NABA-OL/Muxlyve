@@ -13,11 +13,13 @@ import { loadSettings, isValidDiscordWebhook } from './settings.js';
 
 // Evita un segundo aviso si OBS se reconecta (onPublish se vuelve a llamar) — no es un
 // segundo "empezaste a transmitir" real. Un solo cooldown para los 3 webhooks juntos: si
-// se reconecta, no se re-manda a NINGUNO, no solo al primero.
+// se reconecta, no se re-manda a NINGUNO, no solo al primero. Cooldown SEPARADO por kind
+// (start/end) — comparten uno solo haría que un stream corto (menos de 30 min) nunca
+// dispare el aviso de "terminó" si ya se había mandado el de "empezó" hace poco.
 const NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
-let lastNotifyAt = 0;
+const lastNotifyAt = { start: 0, end: 0 };
 
-const DEFAULT_MESSAGE = '🔴 ¡La transmisión empezó!';
+const DEFAULT_MESSAGES = { start: '🔴 ¡La transmisión empezó!', end: '⚫ La transmisión terminó.' };
 
 async function postToDiscord(webhookUrl, content) {
   const res = await fetch(webhookUrl, {
@@ -29,38 +31,40 @@ async function postToDiscord(webhookUrl, content) {
   if (!res.ok) throw new Error(`Discord respondió ${res.status}`);
 }
 
-// Llamado desde onPublish() en relays.js. Nunca debe poder tumbar el arranque del
-// stream — cualquier falla en UNO de los webhooks (Discord caído, URL mala, timeout)
-// queda en el log y no afecta a los otros (Promise.allSettled, no Promise.all). El
-// mensaje es el que el streamer haya escrito en el modal "Mensaje de aviso" del panel
-// (liveMessage, compartido con Telegram) — si nunca lo tocó, cae al texto genérico de
-// siempre. Discord interpreta markdown en `content` tal cual (negrita, itálica, links) —
-// no hace falta procesarlo acá, se manda literal.
-export async function notifyDiscord() {
-  const { discordWebhooks, liveMessage } = loadSettings();
+// Llamado desde onPublish()/onUnpublish() en relays.js según kind ('start'/'end'). Nunca
+// debe poder tumbar el arranque/cierre del stream — cualquier falla en UNO de los webhooks
+// (Discord caído, URL mala, timeout) queda en el log y no afecta a los otros
+// (Promise.allSettled, no Promise.all). El mensaje es el que el streamer haya escrito en
+// el modal "Mensaje de aviso" del panel (liveMessage/endMessage, compartidos con Telegram)
+// — si nunca lo tocó, cae al texto genérico de siempre. Discord interpreta markdown en
+// `content` tal cual (negrita, itálica, links) — no hace falta procesarlo acá.
+export async function notifyDiscord(kind = 'start') {
+  const { discordWebhooks, liveMessage, endMessage } = loadSettings();
   if (!discordWebhooks.length) return;
-  if (Date.now() - lastNotifyAt < NOTIFY_COOLDOWN_MS) return;
-  lastNotifyAt = Date.now();
-  const message = liveMessage || DEFAULT_MESSAGE;
+  if (Date.now() - lastNotifyAt[kind] < NOTIFY_COOLDOWN_MS) return;
+  lastNotifyAt[kind] = Date.now();
+  const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   const results = await Promise.allSettled(discordWebhooks.map((url) => postToDiscord(url, message)));
   results.forEach((r, i) => {
-    if (r.status === 'fulfilled') console.log(`[notify] Discord #${i + 1} — aviso enviado.`);
-    else console.error(`[notify] Discord #${i + 1} — no se pudo avisar —`, r.reason.message);
+    if (r.status === 'fulfilled') console.log(`[notify] Discord #${i + 1} (${kind}) — aviso enviado.`);
+    else console.error(`[notify] Discord #${i + 1} (${kind}) — no se pudo avisar —`, r.reason.message);
   });
 }
 
 // Botón "Probar" de cada fila en Preferencias → Webhooks — prueba UNA url puntual (no
 // necesita estar guardada todavía, así el streamer puede probar antes de guardar). Manda
-// el mensaje REAL configurado con un prefijo que deja claro que es una prueba. Ignora el
-// cooldown a propósito — el usuario lo pidió ahora mismo, no es un rebote de reconexión.
-export async function testDiscordWebhook(url) {
+// el mensaje REAL configurado (según kind) con un prefijo que deja claro que es una
+// prueba. Ignora el cooldown a propósito — el usuario lo pidió ahora mismo, no es un
+// rebote de reconexión.
+export async function testDiscordWebhook(url, kind = 'start') {
   const trimmed = typeof url === 'string' ? url.trim() : '';
   if (!isValidDiscordWebhook(trimmed)) {
     return { ok: false, error: 'URL de webhook inválida — debe ser https://discord.com/api/webhooks/...' };
   }
-  const { liveMessage } = loadSettings();
+  const { liveMessage, endMessage } = loadSettings();
+  const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   try {
-    await postToDiscord(trimmed, `**[Prueba de Muxlyve]**\n${liveMessage || DEFAULT_MESSAGE}`);
+    await postToDiscord(trimmed, `**[Prueba de Muxlyve]**\n${message}`);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };

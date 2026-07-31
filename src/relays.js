@@ -257,6 +257,10 @@ export function onPublish(url, destinations) {
 
 // OBS dejó de publicar: para todo y olvida el origen.
 export function onUnpublish() {
+  // Si nunca se avisó "estoy en vivo" (ningún destino llegó a conectar de verdad — ver
+  // liveNotified/parseProgress arriba), tampoco se avisa "terminó": sería un aviso de
+  // cierre sin apertura, más confuso que no avisar nada.
+  const wasNotified = liveNotified;
   for (const name of [...relays.keys()]) stopRelay(name);
   stopRecording();
   stopFullRecording();
@@ -267,6 +271,10 @@ export function onUnpublish() {
   // Nueva sesión = nueva evaluación de bitrate desde cero (el bitrate de OBS pudo cambiar).
   transcodingDecided.clear();
   bitrateSamples.clear();
+  if (wasNotified) {
+    notifyDiscord('end'); // aviso a Discord (hasta 3 webhooks) si hay configurados — no-op si no
+    notifyTelegram('end'); // ídem Telegram (hasta 3 bots) — ver src/notify.js / src/telegram.js
+  }
 }
 
 // Aplica un cambio de un destino en caliente. Sin emisión activa no hace nada.

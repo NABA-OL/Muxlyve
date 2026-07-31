@@ -268,10 +268,13 @@ export const tMap = {
   ' canales configurados': { en: ' configured channels', fr: ' canaux configures', pt: ' canais configurados' },
   ' enviados — ': { en: ' sent — ', fr: ' envoyes — ', pt: ' enviados — ' },
   'revisa Webhooks en Preferencias': { en: 'check Webhooks in Preferences', fr: 'verifie Webhooks dans Preferences', pt: 'confira Webhooks em Preferências' },
-  'Mensaje de aviso al iniciar': { en: 'Notification message on start', fr: "Message d'avis au demarrage", pt: 'Mensagem de aviso ao iniciar' },
   'Mensaje de aviso guardado': { en: 'Notification message saved', fr: 'Message avis enregistre', pt: 'Mensagem de aviso salva' },
   'Mensaje de aviso': { en: 'Notification message', fr: 'Message avis', pt: 'Mensagem de aviso' },
   'Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.': { en: 'Sent to the configured Discord webhooks and Telegram bots (Preferences → Webhooks) as soon as the stream starts. Discord supports its formatting (**bold**, *italics*, links) — Telegram shows it as plain text.', fr: 'Envoye aux webhooks Discord et bots Telegram configures (Preferences → Webhooks) des que le stream commence. Discord accepte son formatage (**gras**, *italique*, liens) — Telegram affiche du texte brut.', pt: 'Enviado aos webhooks do Discord e bots do Telegram configurados (Preferências → Webhooks) assim que a transmissão começa. Discord aceita sua formatação (**negrito**, *itálico*, links) — Telegram mostra como texto simples.' },
+  // Webhook de "transmisión terminada" — mismo modal que el de inicio, pestañas nuevas.
+  'Al iniciar': { en: 'On start', fr: 'Au demarrage', pt: 'Ao iniciar' },
+  'Al finalizar': { en: 'On end', fr: 'A la fin', pt: 'Ao finalizar' },
+  'Se manda a los mismos canales apenas termina la transmisión. Mismo formato que el de inicio (Discord admite **negrita**/*itálica*/enlaces, Telegram lo muestra como texto plano).': { en: 'Sent to the same channels as soon as the stream ends. Same format as the start message (Discord supports **bold**/*italics*/links, Telegram shows it as plain text).', fr: 'Envoye aux memes canaux des que le stream se termine. Meme format que le message de debut (Discord accepte **gras**/*italique*/liens, Telegram affiche du texte brut).', pt: 'Enviado aos mesmos canais assim que a transmissão termina. Mesmo formato da mensagem de início (Discord aceita **negrito**/*itálico*/links, Telegram mostra como texto simples).' },
 
   // Perfiles (presets de destinos) — mismo motivo, la función se agregó sin tocar tMap.
   'Perfiles': { en: 'Profiles', fr: 'Profils', pt: 'Perfis' },

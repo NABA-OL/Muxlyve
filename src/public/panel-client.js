@@ -341,6 +341,14 @@
       const stateClass = (rtmpDest && rtmpDest.url) ? (rtmpDest.enabled ? ' pb-on' : ' pb-off') : '';
       block.className = 'pb-block' + (isOpen ? ' open' : '') + stateClass;
       block.id = 'pb-' + p.id;
+      // renderPlatforms() reconstruye este nodo desde cero en cada refresh (cada 2s) — sin
+      // esto, el glow pulsante (@keyframes pbGlowOn/Off, ciclo de 5s) se reiniciaba a los
+      // 2s de cada vez, nunca llegaba a completar una vuelta suave y se veía "saltar" de
+      // naranja a rojo de golpe. Un animation-delay NEGATIVO sincroniza la fase al reloj
+      // real: el elemento nuevo arranca ya avanzado el tramo del ciclo que le toca, como si
+      // nunca se hubiera reiniciado — mismo efecto visual continuo que .video-wrap, que sí
+      // reutiliza el mismo nodo (classList.toggle) en vez de recrearlo.
+      if (stateClass) block.style.animationDelay = '-' + ((Date.now() % 5000) / 1000) + 's';
 
       // OAuth header part
       let oauthHtml = '';
@@ -928,6 +936,7 @@
       if (c.version) window._appVersion = c.version;
       $('#chatCmdChk').checked = c.chatCommandsEnabled !== false;
       window._liveMessage = c.liveMessage || '';
+      window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
       renderTelegramBots(c.telegramBots || []);
     } catch {}
@@ -1585,11 +1594,33 @@
   }
 
   // Modal de mensaje de aviso (Discord + Telegram) — acceso rápido desde la grilla 2x2,
-  // ver el botón en stream-actions-grid. window._liveMessage se carga en loadConfig() y
-  // se mantiene en memoria para no tener que pedirlo de nuevo cada vez que se abre.
-  function openDiscordMsgModal() {
-    $('#discordMsgInput').value = window._liveMessage || '';
+  // ver el botón en stream-actions-grid. Un solo modal para los dos mensajes (al iniciar /
+  // al finalizar), con pestañas en vez de un segundo botón en la grilla — msgTabKind
+  // guarda cuál se está editando ahora mismo. window._liveMessage/_endMessage se cargan en
+  // loadConfig() y se mantienen en memoria para no tener que pedirlos de nuevo cada vez.
+  let msgTabKind = 'start';
+  const MSG_TAB_META = {
+    start: {
+      desc: 'Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.',
+      placeholder: '🔴 ¡La transmisión empezó!',
+    },
+    end: {
+      desc: 'Se manda a los mismos canales apenas termina la transmisión. Mismo formato que el de inicio (Discord admite **negrita**/*itálica*/enlaces, Telegram lo muestra como texto plano).',
+      placeholder: '⚫ La transmisión terminó.',
+    },
+  };
+  function switchMsgTab(kind) {
+    msgTabKind = kind;
+    $('#msgTabStart').classList.toggle('active', kind === 'start');
+    $('#msgTabEnd').classList.toggle('active', kind === 'end');
+    const meta = MSG_TAB_META[kind];
+    $('#discordMsgDesc').textContent = meta.desc;
+    $('#discordMsgInput').placeholder = meta.placeholder;
+    $('#discordMsgInput').value = (kind === 'start' ? window._liveMessage : window._endMessage) || '';
     updateDiscordMsgCount();
+  }
+  function openDiscordMsgModal() {
+    switchMsgTab('start'); // siempre arranca en "al iniciar", sea cual sea la pestaña que quedó activa la última vez
     $('#discordMsgOverlay').classList.add('open');
   }
   function closeDiscordMsgModal() { $('#discordMsgOverlay').classList.remove('open'); }
@@ -1598,19 +1629,21 @@
   }
   async function saveDiscordMsgModal() {
     const value = $('#discordMsgInput').value.trim();
+    const field = msgTabKind === 'start' ? 'liveMessage' : 'endMessage';
     try {
-      await api('POST', '/api/settings', { liveMessage: value });
-      window._liveMessage = value;
+      await api('POST', '/api/settings', { [field]: value });
+      if (msgTabKind === 'start') window._liveMessage = value; else window._endMessage = value;
       toast('Mensaje de aviso guardado');
       closeDiscordMsgModal();
     } catch (e) { toast(e.message, true); }
   }
-  // Prueba TODOS los canales configurados de una — usa el mensaje YA GUARDADO (si hay
-  // ediciones sin guardar en el textarea, "Guardar" primero). Toast resume cuántos
-  // salieron bien; si alguno falló, el primer error queda de referencia.
+  // Prueba TODOS los canales configurados de una, con el mensaje de la pestaña activa —
+  // usa el mensaje YA GUARDADO (si hay ediciones sin guardar en el textarea, "Guardar"
+  // primero). Toast resume cuántos salieron bien; si alguno falló, el primer error queda
+  // de referencia.
   async function testAllChannelsUi() {
     try {
-      const { results } = await api('POST', '/api/notify-test-all');
+      const { results } = await api('POST', '/api/notify-test-all', { kind: msgTabKind });
       if (!results.length) { toast('No hay ningún webhook o bot configurado todavía', true); return; }
       const okCount = results.filter((r) => r.ok).length;
       const firstError = results.find((r) => !r.ok);
