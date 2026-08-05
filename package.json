@@ -10,6 +10,7 @@
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
     "validate": "node scripts/validate.mjs",
     "validate:panel": "node scripts/validate-panel-script.mjs",
+    "build:demo": "node demo/build-demo.mjs",
     "test:unit": "node --test \"test/**/*.test.mjs\"",
     "test": "npm run test:unit && bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/.bin/electron .",
