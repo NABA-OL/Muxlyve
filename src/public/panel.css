@@ -285,16 +285,35 @@
   .lic-note { font-size: .72rem; color: var(--muted); margin: .5rem 0 0; line-height: 1.4; }
 
   /* ── Modal Acerca de ── */
-  .about-modal { width: 340px; text-align: center; }
+  /* +250px en ancho y alto sobre el tamaño original (340×~320) para que el fondo del
+     shader (ver hero-bg.js) tenga espacio real donde respirar — un canvas angosto se ve
+     recortado, no "prisma". position:relative + overflow:hidden acá para que el canvas
+     (position:absolute) quede clippeado a las esquinas redondeadas del modal. */
+  .about-modal { width: 590px; min-height: 570px; text-align: center;
+    position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  /* mix-blend-mode:screen en vez de opacity baja: el renderer del shader pinta sobre
+     negro (ver clearColor en hero-bg.js) — con opacity, ese negro se mezcla con el fondo
+     del modal y todo se ve gris lavado. Con "screen", el negro no aporta nada (se vuelve
+     invisible) y solo brillan los trazos de color de encima — mismo efecto visual que un
+     "lighten"/glow, sin la niebla gris. AJUSTE A MANO: quien quiera más o menos presencia
+     del fondo, sube o baja el opacity de acá (1 = shader a máxima intensidad, más bajo =
+     más sutil) — screen ya evita que se vea gris a cualquier valor. */
+  .about-bg-canvas { position: absolute; inset: 0; z-index: 0; display: block; width: 100%; height: 100%;
+    opacity: .5; mix-blend-mode: screen; }
+  /* prefs-head (título + X) queda arriba fijo, about-center ocupa el resto y centra
+     nombre+versión ahí adentro, about-footer queda pegado abajo — flex:1 en el del medio
+     es lo que empuja todo, no hay que tocar la altura de los otros dos a mano. */
+  .about-content { position: relative; z-index: 1; display: flex; flex-direction: column; flex: 1; }
+  .about-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .about-footer { flex-shrink: 0; }
   .about-logo { font-size: 2rem; font-weight: 800; letter-spacing: -.03em;
     background: linear-gradient(135deg, #7c5cff, #a78bfa); -webkit-background-clip: text;
     -webkit-text-fill-color: transparent; background-clip: text; margin: .5rem 0 .25rem; }
-  .about-version { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; }
+  .about-version { font-size: .75rem; color: var(--muted); }
   .about-dev { font-size: .9rem; color: var(--text); margin-bottom: .25rem; }
   .about-copy { font-size: .75rem; color: var(--muted); margin-bottom: 1.25rem; line-height: 1.5; }
   .about-link { font-size: .8rem; color: var(--accent); text-decoration: none; }
   .about-link:hover { text-decoration: underline; }
-  .about-divider { height: 1px; background: var(--border); margin: 1rem 0; }
   .about-btn-row { display: flex; gap: .5rem; margin-top: 1rem; }
   .about-close-btn { flex: 1; padding: .5rem; background: var(--surface-2); border: 1px solid var(--border);
     color: var(--text); border-radius: 8px; font-size: .85rem; cursor: pointer; }

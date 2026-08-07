@@ -87,6 +87,15 @@ const CONNECTIONS_SVG = loadStaticAsset('connections.svg');
 const VIDEO_OFF_SVG   = loadStaticAsset('video-off.svg');
 const CHAT_SVG        = loadStaticAsset('chat.svg');
 const WEBHOOK_SVG     = loadStaticAsset('webhook.svg');
+// three.js self-hospedado (mismo criterio que flv.min.js) — NUNCA pasa por
+// translateHtml(): es una librería de terceros minificada, correr el buscar/reemplazar
+// de idiomas sobre 365kb de código ajeno es trabajo desperdiciado y un riesgo real de
+// coincidencia accidental con alguna key corta del diccionario, sale mal.
+const THREE_JS = loadStaticAsset('three.module.min.js');
+// three.module.min.js importa este segundo chunk (así lo empaqueta three.js desde hace
+// varias versiones, no es cosa nuestra) — sin esto el import falla en 404 y el shader
+// nunca se dibuja, aunque el archivo principal cargó bien.
+const THREE_CORE_JS = loadStaticAsset('three.core.min.js');
 // Fase 1 del refactor (docs/PLAN_REFACTOR_PANEL.md) — CSS de PANEL_HTML sacado de un
 // <style> inline a archivo real. utf-8 explícito (no Buffer crudo como los SVG de
 // arriba) porque este pasa por translateHtml() al servirse, que opera sobre string.
@@ -103,6 +112,11 @@ const PANEL_CLIENT_JS = readFileSync(path.join(PUBLIC, 'panel-client.js'), 'utf-
 // Fase 2 del refactor — lógica de chat compartida entre las 3 vistas, ver
 // src/public/chat-render.js. Se sirve igual que los demás .js de src/public/.
 const CHAT_RENDER_JS = readFileSync(path.join(PUBLIC, 'chat-render.js'), 'utf-8');
+// Fondo shader del modal Acerca de — sí es módulo ES real (import()/export), a
+// diferencia de los .js de arriba: se carga con import() dinámico desde
+// openAbout() (panel-client.js), no con un <script> fijo, así que no depende del scope
+// global y no choca con la Trampa 1 de los comentarios de arriba.
+const HERO_BG_JS = readFileSync(path.join(PUBLIC, 'hero-bg.js'), 'utf-8');
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -329,6 +343,9 @@ export function startPanel(port, config = {}) {
       if (url.pathname === '/chat-window.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_WINDOW_JS));
       if (url.pathname === '/panel-client.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(PANEL_CLIENT_JS));
       if (url.pathname === '/chat-render.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_RENDER_JS));
+      if (url.pathname === '/hero-bg.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(HERO_BG_JS));
+      if (url.pathname === '/three.module.min.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', THREE_JS);
+      if (url.pathname === '/three.core.min.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', THREE_CORE_JS);
       if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/logo-muxlyve-light.svg' || url.pathname === '/icon-muxlyve.svg') {
         if (url.pathname === '/icon-muxlyve.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', ICON_SVG);
         return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
@@ -1050,18 +1067,26 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 </div>
 <div class="prefs-overlay" id="aboutOverlay" onclick="if(event.target===this)closeAbout()">
   <div class="prefs-modal about-modal">
-    <div class="prefs-head">
-      <h2>Acerca de</h2>
-      <button class="prefs-close" onclick="closeAbout()">✕</button>
-    </div>
-    <div class="about-logo">Muxlyve</div>
-    <div class="about-version" id="aboutVersion">v0.0.0</div>
-    <div class="about-divider"></div>
-    <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
-    <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
-    <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
-    <div class="about-btn-row">
-      <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
+    <!-- Fondo "prisma" (mismo shader del hero de la web) — se monta con import()
+         dinámico solo al abrir este modal, ver openAbout()/closeAbout() en
+         panel-client.js. Sin canvas.getContext disponible (navegador viejo, WebGL
+         deshabilitado) simplemente no se dibuja nada acá y queda el fondo sólido de
+         siempre — degrada solo. -->
+    <canvas id="aboutBgCanvas" class="about-bg-canvas" aria-hidden="true"></canvas>
+    <div class="about-content">
+      <div class="prefs-head">
+        <h2>Acerca de</h2>
+        <button class="prefs-close" onclick="closeAbout()">✕</button>
+      </div>
+      <div class="about-center">
+        <div class="about-logo">Muxlyve</div>
+        <div class="about-version" id="aboutVersion">v0.0.0</div>
+      </div>
+      <div class="about-footer">
+        <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
+        <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
+        <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
+      </div>
     </div>
   </div>
 </div>

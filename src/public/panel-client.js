@@ -1864,13 +1864,32 @@
     $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
   }
 
-  function openAbout() {
+  // Fondo shader del modal Acerca de (ver hero-bg.js) — import() dinámico, no un
+  // <script type="module"> fijo en el HTML: three.js pesa ~360kb minificado y este modal
+  // casi no se abre, no tiene sentido pagar ese costo en cada carga del panel.
+  // stopAboutBG guarda la función de limpieza que devuelve initHeroBG() — hay que
+  // llamarla al cerrar el modal o el contexto WebGL se filtra si se abre/cierra varias
+  // veces seguidas.
+  let stopAboutBG = null;
+  async function openAbout() {
     // Versión ya cargada en init (appVersion global); año dinámico
     $('#aboutVersion').textContent = 'v' + (window._appVersion || '—');
     $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
     $('#aboutOverlay').classList.add('open');
+    if (!stopAboutBG) {
+      try {
+        const { initHeroBG } = await import('/hero-bg.js');
+        stopAboutBG = initHeroBG($('#aboutBgCanvas'));
+      } catch {
+        // Sin WebGL o falló la carga (ej. sin red la primera vez) — el modal se ve igual
+        // con el fondo sólido de siempre, no es un error que el usuario necesite ver.
+      }
+    }
   }
-  function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
+  function closeAbout() {
+    $('#aboutOverlay').classList.remove('open');
+    if (stopAboutBG) { stopAboutBG(); stopAboutBG = null; }
+  }
 
   // Botón secundario, estilo bordeado (mismo que "Acerca de Muxlyve"/"Gestionar
   // suscripción" en Licencia) — .lic-manage-btn. Primario: .browse-btn (morado sólido).
