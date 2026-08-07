@@ -11,7 +11,9 @@ const MAX_NAME = 40;
 const MAX_URL = 500;
 
 // Valida la entrada del panel en el límite de confianza antes de tocar el archivo o ffmpeg.
-function validateDestination(input, t) {
+// Exportada: la reusa POST /api/config/import (src/routes/system.js, Fase 1 del lote 2)
+// para no reimplementar la misma validación al importar un backup completo.
+export function validateDestination(input, t) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   const url = typeof input.url === 'string' ? input.url.trim() : '';
   const enabled = Boolean(input.enabled);
@@ -45,13 +47,14 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // POST /api/presets  { name } -> guarda el estado enabled ACTUAL de todos los destinos
-  // bajo ese nombre. Si el nombre ya existe, lo pisa.
+  // POST /api/presets  { name, title?, category? } -> guarda el estado enabled ACTUAL de
+  // todos los destinos bajo ese nombre, más opcionalmente el título/categoría del stream
+  // (ver src/presets.js). Si el nombre ya existe, lo pisa.
   if (req.method === 'POST' && url.pathname === '/api/presets') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
     try {
-      json(res, 200, { presets: savePreset(input.name, loadAll()) });
+      json(res, 200, { presets: savePreset(input.name, loadAll(), { title: input.title, category: input.category }) });
     } catch (err) {
       json(res, 400, { error: err.message });
     }

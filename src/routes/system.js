@@ -17,6 +17,20 @@ import {
 } from '../settings.js';
 import { testDiscordWebhook } from '../notify.js';
 import { testTelegramBot } from '../telegram.js';
+import { loadAll, saveAll } from '../destinations.js';
+import { applyChange } from '../relays.js';
+import { validateDestination } from './destinations.js';
+
+// Fase 1 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — exportar/importar configuración.
+// Whitelist explícita: cualquier otra clave del archivo importado se ignora en silencio,
+// nunca se escribe tal cual a disco. Los valores DENTRO de cada campo aceptado igual
+// pasan por el saneado normal de loadSettings() (ver el comentario en el endpoint de
+// abajo) — esto solo decide QUÉ campos se consideran, no valida su contenido.
+const IMPORTABLE_SETTINGS_FIELDS = [
+  'streamKey', 'recArmed', 'fullRecArmed', 'recDuration', 'clipsDir', 'recordingsDir',
+  'chatCommandsEnabled', 'discordWebhooks', 'telegramBots', 'liveMessage', 'endMessage',
+  'destinationPresets', 'audioSilenceAlertEnabled',
+];
 
 let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
 const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
@@ -63,7 +77,73 @@ export async function handle(req, res, url, ctx) {
       discordWebhooks: settings.discordWebhooks,
       telegramBots: settings.telegramBots,
       liveMessage: settings.liveMessage || '',
+      endMessage: settings.endMessage || '',
+      audioSilenceAlertEnabled: settings.audioSilenceAlertEnabled,
     });
+    return true;
+  }
+
+  // GET /api/config/export -> destinations.json + settings.json juntos, para
+  // backup/migración de máquina (Fase 1 del lote 2, docs/PLAN_FEATURES_LOTE2.md). Va en
+  // texto plano a propósito — loadAll() ya devuelve las URLs DESENCRIPTADAS aunque haya
+  // MASTER_KEY (las claves de retransmisión viajan en la URL misma), así que el archivo
+  // resultante es tan sensible como el destinations.json/settings.json de origen. El
+  // aviso de "guárdalo con cuidado" vive del lado del cliente (botón de exportar), acá
+  // solo se arma el JSON — este endpoint no decide UI.
+  if (req.method === 'GET' && url.pathname === '/api/config/export') {
+    json(res, 200, {
+      exportedAt: Date.now(),
+      destinations: loadAll(),
+      settings: loadSettings(),
+    });
+    return true;
+  }
+
+  // POST /api/config/import  { destinations: [...], settings: {...} } -> reemplaza
+  // destinos + ajustes del motor con los del archivo. Nada de importar parcial en
+  // silencio: si UN destino es inválido, se rechaza el archivo completo antes de tocar
+  // nada (mismo validateDestination que ya usa POST /api/destinations, ver
+  // src/routes/destinations.js).
+  //
+  // Nota sobre el chequeo de "¿es tu propia cuenta?": ESTE endpoint no sabe nada de
+  // licencias — Freemius/license.js vive en electron/, y src/ tiene que poder correr
+  // headless/Docker sin Electron. Por eso esa comparación (correo de la licencia que
+  // exportó vs. la de esta máquina) la hace el CLIENTE antes de mandar el POST acá (ver
+  // importConfig() en panel-client.js) — acá solo llega la data ya confirmada por el
+  // usuario, sea cual sea el resultado de esa comparación.
+  if (req.method === 'POST' && url.pathname === '/api/config/import') {
+    let input;
+    try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
+    if (!Array.isArray(input.destinations) || !input.settings || typeof input.settings !== 'object') {
+      json(res, 400, { error: t('Archivo de configuración inválido — falta destinations o settings.') });
+      return true;
+    }
+    const validated = [];
+    for (const raw of input.destinations) {
+      const { error, dest } = validateDestination(raw || {}, t);
+      if (error) {
+        json(res, 400, { error: t('Destino inválido en el archivo ("') + (raw?.name || '?') + t('"): ') + error });
+        return true;
+      }
+      validated.push(dest);
+    }
+    const settingsPatch = {};
+    for (const field of IMPORTABLE_SETTINGS_FIELDS) {
+      if (field in input.settings) settingsPatch[field] = input.settings[field];
+    }
+    saveSettings(settingsPatch);
+    // loadSettings() ya sanea cada campo al leer (isValidStreamKey, validDiscordWebhooks,
+    // validTelegramBots, etc. — ver settings.js) — volver a guardar lo recién leído
+    // reescribe la versión LIMPIA sobre el archivo, sin tener que duplicar acá ninguna de
+    // esas validaciones. El archivo importado es "no confiable" por definición (puede
+    // venir de cualquier lado), este paso lo trata igual que cualquier settings.json
+    // editado a mano.
+    saveSettings(loadSettings());
+    // Aplica los destinos como si fuera un guardado manual uno por uno — applyChange no
+    // interrumpe un relay activo si ese destino puntual no cambió de estado.
+    saveAll(validated);
+    validated.forEach(applyChange);
+    json(res, 200, buildState());
     return true;
   }
 
@@ -90,16 +170,24 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter.
+  // GET /api/audio -> SSE: niveles de audio L/R en tiempo real (~16 Hz) para el VU meter,
+  // más avisos puntuales de "silencio sostenido" (ver checkSilenceWatchdog en
+  // src/monitor.js) — mismo stream, discriminado por `type` para no abrir una segunda
+  // conexión SSE solo para esto.
   if (req.method === 'GET' && url.pathname === '/api/audio') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    const onLevel = (lvl) => res.write(`data: ${JSON.stringify(lvl)}\n\n`);
+    const onLevel = (lvl) => res.write(`data: ${JSON.stringify({ type: 'level', ...lvl })}\n\n`);
+    const onSilence = (info) => res.write(`data: ${JSON.stringify({ type: 'silence', ...info })}\n\n`);
     audioBus.on('level', onLevel);
-    req.on('close', () => audioBus.off('level', onLevel));
+    audioBus.on('silence', onSilence);
+    req.on('close', () => {
+      audioBus.off('level', onLevel);
+      audioBus.off('silence', onSilence);
+    });
     return true;
   }
 
@@ -118,6 +206,7 @@ export async function handle(req, res, url, ctx) {
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
     const patch = {};
     if ('chatCommandsEnabled' in input) patch.chatCommandsEnabled = !!input.chatCommandsEnabled;
+    if ('audioSilenceAlertEnabled' in input) patch.audioSilenceAlertEnabled = !!input.audioSilenceAlertEnabled;
     if ('discordWebhooks' in input) {
       const list = Array.isArray(input.discordWebhooks) ? input.discordWebhooks : [];
       if (list.length > MAX_DISCORD_WEBHOOKS) {
@@ -151,42 +240,51 @@ export async function handle(req, res, url, ctx) {
       if (msg.length > 2000) { json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') }); return true; }
       patch.liveMessage = msg || null;
     }
+    if ('endMessage' in input) {
+      const msg = typeof input.endMessage === 'string' ? input.endMessage.trim() : '';
+      if (msg.length > 2000) { json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') }); return true; }
+      patch.endMessage = msg || null;
+    }
     saveSettings(patch);
     json(res, 200, { ok: true });
     return true;
   }
 
-  // POST /api/notify-test-discord  { url } -> prueba UN webhook puntual, sin necesidad
-  // de haberlo guardado antes (así se puede probar antes de confirmar). Ignora el
-  // cooldown de 30 min (ver src/notify.js) — botón "Probar" de cada fila.
+  // POST /api/notify-test-discord  { url, kind? } -> prueba UN webhook puntual, sin
+  // necesidad de haberlo guardado antes (así se puede probar antes de confirmar). Ignora
+  // el cooldown de 30 min (ver src/notify.js) — botón "Probar" de cada fila. kind:
+  // 'start'|'end', default 'start' (compat con clientes viejos que no lo mandan).
   if (req.method === 'POST' && url.pathname === '/api/notify-test-discord') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
-    json(res, 200, await testDiscordWebhook(input.url));
+    json(res, 200, await testDiscordWebhook(input.url, input.kind === 'end' ? 'end' : 'start'));
     return true;
   }
 
-  // POST /api/notify-test-telegram  { botToken, chatId } -> mismo criterio, para un bot
-  // de Telegram puntual.
+  // POST /api/notify-test-telegram  { botToken, chatId, kind? } -> mismo criterio, para
+  // un bot de Telegram puntual.
   if (req.method === 'POST' && url.pathname === '/api/notify-test-telegram') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
-    json(res, 200, await testTelegramBot(input.botToken, input.chatId));
+    json(res, 200, await testTelegramBot(input.botToken, input.chatId, input.kind === 'end' ? 'end' : 'start'));
     return true;
   }
 
-  // POST /api/notify-test-all -> dispara el mensaje de aviso YA GUARDADO a TODOS los
-  // canales configurados (Discord + Telegram) de una — botón "Probar" del modal de
-  // mensaje (previsualiza cómo va a quedar en cada uno, no uno a la vez).
+  // POST /api/notify-test-all  { kind? } -> dispara el mensaje YA GUARDADO (de inicio o de
+  // fin, según kind) a TODOS los canales configurados (Discord + Telegram) de una — botón
+  // "Probar" del modal de mensaje (previsualiza cómo va a quedar en cada uno).
   if (req.method === 'POST' && url.pathname === '/api/notify-test-all') {
+    let input;
+    try { input = await readBody(req); } catch { input = {}; }
+    const kind = input.kind === 'end' ? 'end' : 'start';
     const settings = loadSettings();
     const results = [];
     for (let i = 0; i < settings.discordWebhooks.length; i++) {
-      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i])) });
+      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i], kind)) });
     }
     for (let i = 0; i < settings.telegramBots.length; i++) {
       const bot = settings.telegramBots[i];
-      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId)) });
+      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId, kind)) });
     }
     json(res, 200, { results });
     return true;

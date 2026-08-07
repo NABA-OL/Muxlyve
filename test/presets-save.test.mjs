@@ -36,4 +36,43 @@ test('sobreescribir un perfil EXISTENTE en el tope sí funciona (no es un perfil
   assert.deepEqual(listPresets()[0].enabled, []);
 });
 
+// Fase 3 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — perfiles con título + categoría.
+// Los tests de arriba ya llenaron el tope de 6 perfiles (Perfil 0..5) — estos reusan esos
+// mismos nombres (sobreescribir, no crear) para no chocar con el límite.
+test('savePreset sin streamInfo deja title/category en null (retrocompatible)', () => {
+  savePreset('Perfil 1', dest);
+  const p = listPresets().find((x) => x.name === 'Perfil 1');
+  assert.equal(p.title, null);
+  assert.equal(p.category, null);
+});
+
+test('savePreset con streamInfo guarda título y categoría', () => {
+  savePreset('Perfil 2', dest, { title: 'Charlando un rato', category: 'Just Chatting' });
+  const p = listPresets().find((x) => x.name === 'Perfil 2');
+  assert.equal(p.title, 'Charlando un rato');
+  assert.equal(p.category, 'Just Chatting');
+});
+
+test('savePreset con streamInfo vacío/en blanco lo deja en null, no en string vacío', () => {
+  savePreset('Perfil 3', dest, { title: '   ', category: '' });
+  const p = listPresets().find((x) => x.name === 'Perfil 3');
+  assert.equal(p.title, null);
+  assert.equal(p.category, null);
+});
+
+test('savePreset recorta título/categoría a 140 caracteres', () => {
+  const largo = 'x'.repeat(200);
+  savePreset('Perfil 4', dest, { title: largo, category: largo });
+  const p = listPresets().find((x) => x.name === 'Perfil 4');
+  assert.equal(p.title.length, 140);
+  assert.equal(p.category.length, 140);
+});
+
+test('sobreescribir un perfil existente actualiza también título/categoría, no solo destinos', () => {
+  savePreset('Perfil 1', dest, { title: 'Ahora sí tiene', category: 'Minecraft' });
+  const p = listPresets().find((x) => x.name === 'Perfil 1');
+  assert.equal(p.title, 'Ahora sí tiene');
+  assert.equal(p.category, 'Minecraft');
+});
+
 after(() => { rmSync(tmpDir, { recursive: true, force: true }); });

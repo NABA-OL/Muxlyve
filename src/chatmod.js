@@ -68,3 +68,17 @@ export async function getChatPinned() {
   if (!getPinnedHandler) return { ok: false, error: 'No disponible — requiere la app de escritorio.' };
   return getPinnedHandler();
 }
+
+// Mismo puente, para timeout/ban — solo Twitch (ver electron/oauth.js banTwitchUser).
+// duration en segundos: presente = timeout, ausente/null = ban permanente — mismo
+// criterio que la API de Twitch (moderation/bans), no se reinterpreta acá.
+let banHandler = null;
+
+export function setChatBanHandler(fn) {
+  banHandler = fn;
+}
+
+export async function banChatUser(userId, duration, reason) {
+  if (!banHandler) return { ok: false, error: 'No disponible — requiere la app de escritorio.' };
+  return banHandler(userId, duration, reason);
+}

@@ -11,7 +11,13 @@ import {
   pinChatMessage as pinChatMessageBackend,
   unpinChatMessage as unpinChatMessageBackend,
   getChatPinned as getChatPinnedBackend,
+  banChatUser as banChatUserBackend,
 } from '../chatmod.js';
+
+// Tope real que exige Twitch para /helix/moderation/bans (14 días, en segundos) —
+// validado acá para devolver un error claro en español en vez de que Twitch lo rechace
+// con un 400 críptico.
+const MAX_BAN_DURATION_SECONDS = 1209600;
 
 export async function handle(req, res, url, ctx) {
   const { json, readBody, t } = ctx;
@@ -74,6 +80,26 @@ export async function handle(req, res, url, ctx) {
   // ninguno) — para que el botón arranque sincronizado con el estado real, no a ciegas.
   if (req.method === 'GET' && url.pathname === '/api/chat-pinned') {
     json(res, 200, await getChatPinnedBackend());
+    return true;
+  }
+
+  // POST /api/chat-ban  { userId, duration?, reason? } -> timeout (con duration, en
+  // segundos) o ban permanente (sin duration) — solo Twitch, ver src/chatmod.js /
+  // electron/oauth.js banTwitchUser. Fase 5 del lote 2 (docs/PLAN_FEATURES_LOTE2.md).
+  if (req.method === 'POST' && url.pathname === '/api/chat-ban') {
+    const body = await readBody(req);
+    const userId = String(body.userId || '').trim();
+    if (!userId) { json(res, 400, { error: t('Falta el id del usuario.') }); return true; }
+    let duration;
+    if (body.duration !== undefined && body.duration !== null) {
+      duration = Number(body.duration);
+      if (!Number.isInteger(duration) || duration <= 0 || duration > MAX_BAN_DURATION_SECONDS) {
+        json(res, 400, { error: t('Duración de timeout inválida.') });
+        return true;
+      }
+    }
+    const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : undefined;
+    json(res, 200, await banChatUserBackend(userId, duration, reason));
     return true;
   }
 

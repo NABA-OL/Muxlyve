@@ -33,7 +33,8 @@ export function isValidRecDuration(d) {
 const DEFAULT_SETTINGS = {
   streamKey: DEFAULT_STREAM_KEY, recArmed: false, fullRecArmed: false, recDuration: 60,
   clipsDir: null, recordingsDir: null, chatCommandsEnabled: true, discordWebhooks: [],
-  telegramBots: [], liveMessage: null, destinationPresets: [],
+  telegramBots: [], liveMessage: null, endMessage: null, destinationPresets: [],
+  audioSilenceAlertEnabled: true,
 };
 
 function validDir(d) {
@@ -43,9 +44,10 @@ function validDir(d) {
 // Límite real de Discord para el campo `content` de un webhook (Telegram permite más,
 // 4096 — se usa el menor de los dos para no tener que truncar distinto por plataforma al
 // mandar el mismo mensaje a ambas). Se recorta acá (al guardar) para no descubrirlo recién
-// al streamear.
+// al streamear. Misma función para liveMessage (al iniciar) y endMessage (al finalizar) —
+// misma validación exacta, solo cambia qué campo del settings.json la usa.
 const MAX_LIVE_MSG = 2000;
-function validLiveMessage(m) {
+function validMessage(m) {
   return typeof m === 'string' && m.trim() ? m.trim().slice(0, MAX_LIVE_MSG) : null;
 }
 
@@ -119,11 +121,19 @@ const MAX_PRESETS = 6;
 // Perfiles de destinos guardados por NOMBRE de destino (no índice — los destinos se
 // pueden borrar y reordenar). Cualquier entrada mal formada se descarta sin avisar: el
 // archivo lo puede haber editado el usuario a mano, nunca se confía en su forma.
+// title/category son opcionales (perfiles guardados antes de esto no los tienen) — se
+// normalizan a null si faltan o vienen mal, nunca undefined (para que el JSON los siga
+// mostrando explícitos en vez de omitirlos).
 function validPresets(list) {
   if (!Array.isArray(list)) return [];
   return list
     .filter((p) => p && typeof p.name === 'string' && p.name.trim() && Array.isArray(p.enabled))
-    .map((p) => ({ name: p.name.trim(), enabled: p.enabled.filter((n) => typeof n === 'string') }))
+    .map((p) => ({
+      name: p.name.trim(),
+      enabled: p.enabled.filter((n) => typeof n === 'string'),
+      title: typeof p.title === 'string' && p.title.trim() ? p.title.trim() : null,
+      category: typeof p.category === 'string' && p.category.trim() ? p.category.trim() : null,
+    }))
     .slice(0, MAX_PRESETS);
 }
 
@@ -156,8 +166,10 @@ export function loadSettings() {
         ...(typeof data.discordWebhookUrl === 'string' && data.discordWebhookUrl ? [data.discordWebhookUrl] : []),
       ]),
       telegramBots: validTelegramBots(data.telegramBots),
-      liveMessage: validLiveMessage(data.liveMessage ?? data.discordMessage),
+      liveMessage: validMessage(data.liveMessage ?? data.discordMessage),
+      endMessage: validMessage(data.endMessage),
       destinationPresets: validPresets(data.destinationPresets),
+      audioSilenceAlertEnabled: data.audioSilenceAlertEnabled === undefined ? true : !!data.audioSilenceAlertEnabled,
     };
   } catch (err) {
     console.error('[config] No se pudo leer settings.json:', err.message);

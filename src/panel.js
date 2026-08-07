@@ -15,11 +15,12 @@ import * as systemRoutes from './routes/system.js';
 import * as chatRoutes from './routes/chat.js';
 import * as destinationsRoutes from './routes/destinations.js';
 import * as recordingRoutes from './routes/recording.js';
+import * as sessionsRoutes from './routes/sessions.js';
 
 // Fase 3 del refactor — cada módulo de src/routes/ atiende un dominio y devuelve
 // true/false según haya manejado la request. Orden sin significado especial (los paths
 // no se pisan entre módulos).
-const ROUTE_MODULES = [systemRoutes, chatRoutes, destinationsRoutes, recordingRoutes];
+const ROUTE_MODULES = [systemRoutes, chatRoutes, destinationsRoutes, recordingRoutes, sessionsRoutes];
 
 // Orden por longitud descendente: si una key corta (" disponible") se reemplaza antes que
 // una key larga que la contiene ("No disponible en esta versión."), la larga nunca vuelve a
@@ -86,6 +87,15 @@ const CONNECTIONS_SVG = loadStaticAsset('connections.svg');
 const VIDEO_OFF_SVG   = loadStaticAsset('video-off.svg');
 const CHAT_SVG        = loadStaticAsset('chat.svg');
 const WEBHOOK_SVG     = loadStaticAsset('webhook.svg');
+// three.js self-hospedado (mismo criterio que flv.min.js) — NUNCA pasa por
+// translateHtml(): es una librería de terceros minificada, correr el buscar/reemplazar
+// de idiomas sobre 365kb de código ajeno es trabajo desperdiciado y un riesgo real de
+// coincidencia accidental con alguna key corta del diccionario, sale mal.
+const THREE_JS = loadStaticAsset('three.module.min.js');
+// three.module.min.js importa este segundo chunk (así lo empaqueta three.js desde hace
+// varias versiones, no es cosa nuestra) — sin esto el import falla en 404 y el shader
+// nunca se dibuja, aunque el archivo principal cargó bien.
+const THREE_CORE_JS = loadStaticAsset('three.core.min.js');
 // Fase 1 del refactor (docs/PLAN_REFACTOR_PANEL.md) — CSS de PANEL_HTML sacado de un
 // <style> inline a archivo real. utf-8 explícito (no Buffer crudo como los SVG de
 // arriba) porque este pasa por translateHtml() al servirse, que opera sobre string.
@@ -102,6 +112,11 @@ const PANEL_CLIENT_JS = readFileSync(path.join(PUBLIC, 'panel-client.js'), 'utf-
 // Fase 2 del refactor — lógica de chat compartida entre las 3 vistas, ver
 // src/public/chat-render.js. Se sirve igual que los demás .js de src/public/.
 const CHAT_RENDER_JS = readFileSync(path.join(PUBLIC, 'chat-render.js'), 'utf-8');
+// Fondo shader del modal Acerca de — sí es módulo ES real (import()/export), a
+// diferencia de los .js de arriba: se carga con import() dinámico desde
+// openAbout() (panel-client.js), no con un <script> fijo, así que no depende del scope
+// global y no choca con la Trampa 1 de los comentarios de arriba.
+const HERO_BG_JS = readFileSync(path.join(PUBLIC, 'hero-bg.js'), 'utf-8');
 
 function json(res, code, data) {
   const body = JSON.stringify(data);
@@ -328,6 +343,9 @@ export function startPanel(port, config = {}) {
       if (url.pathname === '/chat-window.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_WINDOW_JS));
       if (url.pathname === '/panel-client.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(PANEL_CLIENT_JS));
       if (url.pathname === '/chat-render.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(CHAT_RENDER_JS));
+      if (url.pathname === '/hero-bg.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', translateHtml(HERO_BG_JS));
+      if (url.pathname === '/three.module.min.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', THREE_JS);
+      if (url.pathname === '/three.core.min.js') return serveWithEtag(req, res, 'application/javascript; charset=utf-8', THREE_CORE_JS);
       if (url.pathname === '/logo-muxlyve.svg' || url.pathname === '/logo-muxlyve-light.svg' || url.pathname === '/icon-muxlyve.svg') {
         if (url.pathname === '/icon-muxlyve.svg') return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', ICON_SVG);
         return serveWithEtag(req, res, 'image/svg+xml; charset=utf-8', url.pathname === '/logo-muxlyve-light.svg' ? LOGO_SVG_LIGHT : LOGO_SVG);
@@ -550,7 +568,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
              stream — ver src/notify.js / src/telegram.js. Vive acá, no en Preferencias
              (donde están las URLs/tokens, pestaña Webhooks), porque es algo que se toca
              seguido (cada stream puede querer un mensaje distinto), no un ajuste de una vez. -->
-        <button class="stream-icon-btn" onclick="openDiscordMsgModal()" title="Mensaje de aviso al iniciar">
+        <button class="stream-icon-btn" onclick="openDiscordMsgModal()" title="Mensaje de aviso">
           <span class="icon-mask icon-webhook" style="width:17px;height:17px"></span>
         </button>
       </div>
@@ -765,6 +783,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Webhooks</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="history" onclick="switchPrefsTab('history')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>
+          </svg>
+          <span>Historial</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="support" id="prefsNavSupport" onclick="switchPrefsTab('support')" style="display:none">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
@@ -796,12 +821,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div>
               <div>Idioma / Language</div>
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:.4rem;max-width:220px;justify-content:flex-end">
-              <button type="button" class="lang-opt-btn" id="langEsBtn" onclick="setAppLanguage('es')">Español</button>
-              <button type="button" class="lang-opt-btn" id="langEnBtn" onclick="setAppLanguage('en')">English</button>
-              <button type="button" class="lang-opt-btn" id="langFrBtn" onclick="setAppLanguage('fr')">Français</button>
-              <button type="button" class="lang-opt-btn" id="langPtBtn" onclick="setAppLanguage('pt')">Português</button>
-            </div>
+            <select id="langSelect" class="lang-select" onchange="setAppLanguage(this.value)">
+              <option value="es">Español</option>
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+              <option value="pt">Português</option>
+            </select>
           </div>
           <div class="pref-row">
             <div>
@@ -853,6 +878,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div class="pref-row" id="allowLanRestartRow" style="display:none">
             <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
             <button onclick="relaunchApp()">Reiniciar ahora</button>
+          </div>
+          <!-- Exportar/importar configuración (Fase 1 del lote 2,
+               docs/PLAN_FEATURES_LOTE2.md). El chequeo de "¿es tu cuenta?" al importar es
+               Electron-only (window.msLicense) — ver importConfig() en panel-client.js. -->
+          <div class="pref-row">
+            <div>
+              <div>Exportar/importar configuración</div>
+              <div class="pref-desc">Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.</div>
+            </div>
+            <div style="display:flex;gap:.4rem;flex-shrink:0">
+              <button type="button" class="preset-save-btn" onclick="exportConfig()">Exportar</button>
+              <button type="button" class="preset-save-btn" onclick="$('#importConfigInput').click()">Importar</button>
+              <input type="file" id="importConfigInput" accept="application/json" style="display:none" onchange="importConfig(this.files[0])">
+            </div>
           </div>
         </div>
         <div class="prefs-panel" id="prefsClipsBlock" data-panel="clips">
@@ -907,6 +946,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <span class="sys-toggle-track"></span>
             </label>
           </div>
+          <!-- Vigía de audio caído — mismo criterio que Comando !clip: ajuste del MOTOR
+               (settings.json), funciona igual con o sin la app de escritorio, por eso vive
+               acá y no en "Sistema" (esa pestaña se oculta sin Electron). -->
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Avisar si se corta el audio</div>
+              <div class="pref-desc">Si no se detecta audio real por 20 segundos seguidos mientras estás en vivo (micrófono desconectado, app de captura caída), muestra una notificación.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="audioSilenceChk" onchange="toggleAudioSilenceAlert()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
         </div>
         <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">
           <div class="field">
@@ -921,6 +973,12 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div id="telegramBotsList"></div>
             <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
           </div>
+        </div>
+        <!-- Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) — tabla simple,
+             sin gráficos a propósito. Se carga bajo demanda (loadSessionHistory(), llamada
+             desde openPrefs()) — GET /api/sessions, ver src/routes/sessions.js. -->
+        <div class="prefs-panel" id="prefsHistoryBlock" data-panel="history">
+          <div id="sessionHistoryList"></div>
         </div>
         <div class="prefs-panel" id="reportSection" data-panel="support">
           <div class="pref-row">
@@ -1009,18 +1067,26 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 </div>
 <div class="prefs-overlay" id="aboutOverlay" onclick="if(event.target===this)closeAbout()">
   <div class="prefs-modal about-modal">
-    <div class="prefs-head">
-      <h2>Acerca de</h2>
-      <button class="prefs-close" onclick="closeAbout()">✕</button>
-    </div>
-    <div class="about-logo">Muxlyve</div>
-    <div class="about-version" id="aboutVersion">v0.0.0</div>
-    <div class="about-divider"></div>
-    <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
-    <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
-    <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
-    <div class="about-btn-row">
-      <button class="about-close-btn" onclick="closeAbout()">Cerrar</button>
+    <!-- Fondo "prisma" (mismo shader del hero de la web) — se monta con import()
+         dinámico solo al abrir este modal, ver openAbout()/closeAbout() en
+         panel-client.js. Sin canvas.getContext disponible (navegador viejo, WebGL
+         deshabilitado) simplemente no se dibuja nada acá y queda el fondo sólido de
+         siempre — degrada solo. -->
+    <canvas id="aboutBgCanvas" class="about-bg-canvas" aria-hidden="true"></canvas>
+    <div class="about-content">
+      <div class="prefs-head">
+        <h2>Acerca de</h2>
+        <button class="prefs-close" onclick="closeAbout()">✕</button>
+      </div>
+      <div class="about-center">
+        <div class="about-logo">Muxlyve</div>
+        <div class="about-version" id="aboutVersion">v0.0.0</div>
+      </div>
+      <div class="about-footer">
+        <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
+        <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
+        <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
+      </div>
     </div>
   </div>
 </div>
@@ -1100,7 +1166,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <h2>Mensaje de aviso</h2>
       <button class="prefs-close" onclick="closeDiscordMsgModal()">✕</button>
     </div>
-    <p class="pref-desc" style="margin:0 0 .6rem">Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.</p>
+    <!-- Un solo modal para los dos mensajes (al iniciar / al finalizar) en vez de un
+         segundo botón en la grilla 2x2 de arriba — ver src/routes/system.js (kind
+         'start'|'end') y notify.js/telegram.js. switchMsgTab() en panel-client.js. -->
+    <div class="msg-tabs">
+      <button type="button" class="msg-tab active" id="msgTabStart" onclick="switchMsgTab('start')">Al iniciar</button>
+      <button type="button" class="msg-tab" id="msgTabEnd" onclick="switchMsgTab('end')">Al finalizar</button>
+    </div>
+    <p class="pref-desc" style="margin:0 0 .6rem" id="discordMsgDesc">Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.</p>
     <div class="field">
       <textarea id="discordMsgInput" rows="5" maxlength="2000" oninput="updateDiscordMsgCount()"
         placeholder="🔴 ¡La transmisión empezó!"

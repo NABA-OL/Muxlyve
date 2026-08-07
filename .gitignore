@@ -15,6 +15,7 @@ config/crypto-salt.json
 *.log
 media/
 dist-app/
+demo/dist/
 build/mac/
 build/icon.icns
 .DS_Store

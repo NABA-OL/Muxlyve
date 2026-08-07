@@ -268,10 +268,18 @@ export const tMap = {
   ' canales configurados': { en: ' configured channels', fr: ' canaux configures', pt: ' canais configurados' },
   ' enviados — ': { en: ' sent — ', fr: ' envoyes — ', pt: ' enviados — ' },
   'revisa Webhooks en Preferencias': { en: 'check Webhooks in Preferences', fr: 'verifie Webhooks dans Preferences', pt: 'confira Webhooks em Preferências' },
-  'Mensaje de aviso al iniciar': { en: 'Notification message on start', fr: "Message d'avis au demarrage", pt: 'Mensagem de aviso ao iniciar' },
   'Mensaje de aviso guardado': { en: 'Notification message saved', fr: 'Message avis enregistre', pt: 'Mensagem de aviso salva' },
   'Mensaje de aviso': { en: 'Notification message', fr: 'Message avis', pt: 'Mensagem de aviso' },
   'Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.': { en: 'Sent to the configured Discord webhooks and Telegram bots (Preferences → Webhooks) as soon as the stream starts. Discord supports its formatting (**bold**, *italics*, links) — Telegram shows it as plain text.', fr: 'Envoye aux webhooks Discord et bots Telegram configures (Preferences → Webhooks) des que le stream commence. Discord accepte son formatage (**gras**, *italique*, liens) — Telegram affiche du texte brut.', pt: 'Enviado aos webhooks do Discord e bots do Telegram configurados (Preferências → Webhooks) assim que a transmissão começa. Discord aceita sua formatação (**negrito**, *itálico*, links) — Telegram mostra como texto simples.' },
+  // Webhook de "transmisión terminada" — mismo modal que el de inicio, pestañas nuevas.
+  ' (incluye título/categoría)': { en: ' (includes title/category)', fr: ' (inclut titre/categorie)', pt: ' (inclui título/categoria)' },
+  // Fase 4 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — vigía de audio caído.
+  'Avisar si se corta el audio': { en: 'Alert if audio drops', fr: 'Alerter si le son coupe', pt: 'Avisar se o áudio cair' },
+  'Si no se detecta audio real por 20 segundos seguidos mientras estás en vivo (micrófono desconectado, app de captura caída), muestra una notificación.': { en: 'If no real audio is detected for 20 seconds straight while you are live (mic unplugged, capture app crashed), shows a notification.', fr: "Si aucun son reel n'est detecte pendant 20 secondes d'affilee alors que tu es en direct (micro debranche, app de capture plantee), affiche une notification.", pt: 'Se nenhum áudio real for detectado por 20 segundos seguidos enquanto você está ao vivo (microfone desconectado, app de captura travou), mostra uma notificação.' },
+  'No se detecta audio en la señal hace 20 segundos — revisa tu micrófono o la app de captura.': { en: 'No audio detected in the signal for 20 seconds — check your microphone or capture app.', fr: 'Aucun son detecte dans le signal depuis 20 secondes — verifie ton micro ou ton app de capture.', pt: 'Nenhum áudio detectado no sinal há 20 segundos — confira seu microfone ou o app de captura.' },
+  'Al iniciar': { en: 'On start', fr: 'Au demarrage', pt: 'Ao iniciar' },
+  'Al finalizar': { en: 'On end', fr: 'A la fin', pt: 'Ao finalizar' },
+  'Se manda a los mismos canales apenas termina la transmisión. Mismo formato que el de inicio (Discord admite **negrita**/*itálica*/enlaces, Telegram lo muestra como texto plano).': { en: 'Sent to the same channels as soon as the stream ends. Same format as the start message (Discord supports **bold**/*italics*/links, Telegram shows it as plain text).', fr: 'Envoye aux memes canaux des que le stream se termine. Meme format que le message de debut (Discord accepte **gras**/*italique*/liens, Telegram affiche du texte brut).', pt: 'Enviado aos mesmos canais assim que a transmissão termina. Mesmo formato da mensagem de início (Discord aceita **negrito**/*itálico*/links, Telegram mostra como texto simples).' },
 
   // Perfiles (presets de destinos) — mismo motivo, la función se agregó sin tocar tMap.
   'Perfiles': { en: 'Profiles', fr: 'Profils', pt: 'Perfis' },
@@ -307,4 +315,41 @@ export const tMap = {
   'Programación guardada': { en: 'Schedule saved', fr: 'Programmation enregistree', pt: 'Agendamento salvo' },
   'Quedaron como .ts por un cierre inesperado — conviértelas a .mp4 para poder reproducirlas.': { en: 'They were left as .ts by an unexpected shutdown — convert them to .mp4 to play them.', fr: 'Restes en .ts suite a un arret inattendu — convertis-les en .mp4 pour pouvoir les lire.', pt: 'Ficaram como .ts por um fechamento inesperado — converta-os para .mp4 para poder reproduzi-los.' },
   'Sin cambios — revisa que las horas marcadas sean futuras': { en: 'No changes — check that the marked times are in the future', fr: 'Aucun changement — verifie que les heures marquees sont futures', pt: 'Sem alterações — confira se os horários marcados são futuros' },
+
+  // Fase 5 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — timeout/ban (Twitch).
+  'Moderar (Twitch)': { en: 'Moderate (Twitch)', fr: 'Moderer (Twitch)', pt: 'Moderar (Twitch)' },
+  'Timeout 1 min': { en: 'Timeout 1 min', fr: 'Timeout 1 min', pt: 'Timeout 1 min' },
+  'Timeout 10 min': { en: 'Timeout 10 min', fr: 'Timeout 10 min', pt: 'Timeout 10 min' },
+  'Timeout 1 hora': { en: 'Timeout 1 hour', fr: 'Timeout 1 heure', pt: 'Timeout 1 hora' },
+  'Ban permanente': { en: 'Permanent ban', fr: 'Ban permanent', pt: 'Banimento permanente' },
+  'Timeout aplicado': { en: 'Timeout applied', fr: 'Timeout applique', pt: 'Timeout aplicado' },
+  'Usuario baneado': { en: 'User banned', fr: 'Utilisateur banni', pt: 'Usuário banido' },
+  'No se pudo moderar': { en: 'Could not moderate', fr: 'Moderation impossible', pt: 'Não foi possível moderar' },
+
+  // Fase 6 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — historial de sesiones.
+  'Historial': { en: 'History', fr: 'Historique', pt: 'Histórico' },
+  'Fecha': { en: 'Date', fr: 'Date', pt: 'Data' },
+  'Plataformas': { en: 'Platforms', fr: 'Plateformes', pt: 'Plataformas' },
+  'Pico de espectadores': { en: 'Peak viewers', fr: 'Pic de spectateurs', pt: 'Pico de espectadores' },
+  'No se pudo cargar el historial.': { en: 'Could not load the history.', fr: 'Impossible de charger historique.', pt: 'Não foi possível carregar o histórico.' },
+  'Todavía no hay sesiones registradas — se guardan solas cada vez que sales en vivo de verdad (al menos una plataforma conectada).': { en: 'No sessions recorded yet — they save automatically every time you actually go live (at least one platform connected).', fr: 'Aucune session enregistree pour le moment — elles se sauvegardent automatiquement chaque fois que tu es vraiment en direct (au moins une plateforme connectee).', pt: 'Ainda não há sessões registradas — elas são salvas automaticamente sempre que você fica ao vivo de verdade (pelo menos uma plataforma conectada).' },
+
+  // Fase 1 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — exportar/importar configuración.
+  // Las entradas que aparecen dentro de panel-client.js (toasts, confirm) NO llevan
+  // apóstrofo en ningún idioma — translateHtml() las pega tal cual sobre el JS servido, y
+  // un apóstrofo ahí rompería el string de una comilla simple. Las que solo viven en el
+  // HTML de panel.js (botones/descripción) no tienen esa restricción, pero se dejan igual
+  // de limpias por consistencia.
+  'Exportar/importar configuración': { en: 'Export/import configuration', fr: 'Exporter/importer la configuration', pt: 'Exportar/importar configuração' },
+  'Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.': { en: 'Destinations and settings in a single file — for backup or migrating machines. Contains your stream keys in plain text, keep it safe.', fr: 'Destinations et reglages dans un seul fichier — pour sauvegarde ou migration de machine. Contient tes cles de diffusion en texte brut, garde-le en lieu sur.', pt: 'Destinos e configurações em um único arquivo — para backup ou migração de máquina. Contém suas chaves de retransmissão em texto simples, guarde-o com cuidado.' },
+  'Exportar': { en: 'Export', fr: 'Exporter', pt: 'Exportar' },
+  'Importar': { en: 'Import', fr: 'Importer', pt: 'Importar' },
+  'Configuración exportada': { en: 'Configuration exported', fr: 'Configuration exportee', pt: 'Configuração exportada' },
+  'Configuración importada': { en: 'Configuration imported', fr: 'Configuration importee', pt: 'Configuração importada' },
+  'El archivo no es un JSON válido.': { en: 'The file is not valid JSON.', fr: 'Fichier JSON invalide.', pt: 'O arquivo não é um JSON válido.' },
+  'El archivo no tiene el formato esperado (¿es un export de Muxlyve?).': { en: 'The file does not have the expected format (is it a Muxlyve export?).', fr: 'Format de fichier inattendu (export Muxlyve ?).', pt: 'O arquivo não tem o formato esperado (é uma exportação do Muxlyve?).' },
+  'Este archivo fue exportado desde otra cuenta (': { en: 'This file was exported from another account (', fr: 'Ce fichier a ete exporte depuis un autre compte (', pt: 'Este arquivo foi exportado de outra conta (' },
+  '), no la que está activa en este equipo (': { en: '), not the one active on this machine (', fr: '), et non celle active sur cette machine (', pt: '), não a que está ativa neste computador (' },
+  '). ¿Importar igual?': { en: '). Import anyway?', fr: '). Importer quand meme ?', pt: '). Importar mesmo assim?' },
+  'Importar de todas formas': { en: 'Import anyway', fr: 'Importer quand meme', pt: 'Importar mesmo assim' },
 };

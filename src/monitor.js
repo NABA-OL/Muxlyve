@@ -8,8 +8,9 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { FFMPEG } from './ffmpeg.js';
+import { loadSettings } from './settings.js';
 
-export const audioBus = new EventEmitter(); // emite 'level' { l, r }
+export const audioBus = new EventEmitter(); // emite 'level' { l, r } y 'silence' { since }
 
 let proc = null;
 let videoInfo = null; // { width, height, fps } — del banner de entrada
@@ -20,6 +21,36 @@ let pcmRemainder = Buffer.alloc(0);
 const EMIT_THROTTLE_MS = 60; // tope ~16 Hz para no inundar SSE
 const DB_FLOOR = -60;        // dBFS que mapea a 0%
 const INT16_MAX = 32768;
+
+// ── Vigía de audio caído (Fase 4, docs/PLAN_FEATURES_LOTE2.md) ──────────────────────────
+// Mic desconectado, app de captura crasheada, cable suelto — la señal sigue "en vivo"
+// (OBS manda frames) pero sin audio real. SILENCE_THRESHOLD_PCT no exige 0% exacto (hay
+// ruido de piso/redondeo real) y SILENCE_ALERT_MS exige que se sostenga, no un silencio
+// de un segundo cualquiera — un streamer que no habla todo el tiempo, o un juego con
+// audio bajo, no debe disparar esto. silenceAlerted evita repetir el aviso cada chunk
+// mientras el silencio se mantiene — uno por tramo, no un spam.
+const SILENCE_THRESHOLD_PCT = 2;
+const SILENCE_ALERT_MS = 20000;
+let silenceStartedAt = null;
+let silenceAlerted = false;
+
+function checkSilenceWatchdog() {
+  const silent = lastAudio.l <= SILENCE_THRESHOLD_PCT && lastAudio.r <= SILENCE_THRESHOLD_PCT;
+  if (!silent) {
+    silenceStartedAt = null;
+    silenceAlerted = false;
+    return;
+  }
+  if (silenceStartedAt === null) {
+    silenceStartedAt = Date.now();
+    return;
+  }
+  if (silenceAlerted || Date.now() - silenceStartedAt < SILENCE_ALERT_MS) return;
+  silenceAlerted = true;
+  // Desactivable desde Preferencias (settings.js) — el umbral/duración no son
+  // configurables todavía, ver comentario de arriba sobre por qué están fijos.
+  if (loadSettings().audioSilenceAlertEnabled) audioBus.emit('silence', { since: silenceStartedAt });
+}
 
 // dBFS (negativo, 0 = máximo) -> porcentaje 0..100
 function dbToPct(db) {
@@ -69,12 +100,15 @@ function processPcm(chunk) {
   if (frames === 0) return;
   lastAudio = { l: ampToPct(peakL), r: ampToPct(peakR) };
   emitLevel();
+  checkSilenceWatchdog();
 }
 
 export function startMonitor(sourceUrl) {
   if (proc || !sourceUrl) return;
   videoInfo = null;
   pcmRemainder = Buffer.alloc(0);
+  silenceStartedAt = null; // nueva sesión = nuevo tramo, sin arrastrar silencio de la anterior
+  silenceAlerted = false;
   const args = [
     '-rw_timeout', '5000000',
     '-i', sourceUrl,
@@ -103,6 +137,8 @@ export function stopMonitor() {
   proc = null;
   videoInfo = null;
   lastAudio = { l: 0, r: 0 };
+  silenceStartedAt = null;
+  silenceAlerted = false;
 }
 
 // Stats del ingest para /api/state.
@@ -138,6 +174,37 @@ if (process.argv[1]?.endsWith('monitor.js') && process.argv.includes('--selftest
   assert(pcmRemainder.length === 3, 'sin frame completo => 3 bytes en remainder, got ' + pcmRemainder.length);
   processPcm(Buffer.from([0x7F, 0x00, 0x00])); // completa: R=0x007F... -> arma frame
   assert(pcmRemainder.length === 2, 'reensambla cruzando chunks, sobran 2 bytes');
+
+  // Vigía de audio caído — silencio real (frame en 0) sin esperar 20s reales:
+  // retrocedemos silenceStartedAt a mano en vez de dormir el proceso.
+  const silentFrame = Buffer.alloc(4); // L=0, R=0
+  let silenceEmitted = null;
+  audioBus.once('silence', (info) => { silenceEmitted = info; });
+
+  pcmRemainder = Buffer.alloc(0);
+  silenceStartedAt = null;
+  silenceAlerted = false;
+  processPcm(silentFrame);
+  assert(silenceStartedAt !== null, 'primer frame en silencio arranca el conteo');
+  assert(silenceEmitted === null, 'no avisa todavía — no pasó SILENCE_ALERT_MS');
+
+  silenceStartedAt = Date.now() - (SILENCE_ALERT_MS + 1000); // simula 21s de silencio sostenido
+  pcmRemainder = Buffer.alloc(0);
+  processPcm(silentFrame);
+  assert(silenceEmitted !== null, 'a los 20s+ de silencio sostenido, avisa');
+  assert(silenceAlerted === true, 'queda marcado como ya avisado');
+
+  silenceEmitted = null;
+  pcmRemainder = Buffer.alloc(0);
+  processPcm(silentFrame);
+  assert(silenceEmitted === null, 'no repite el aviso mientras el silencio se sostiene');
+
+  const loudFrame = Buffer.alloc(4);
+  loudFrame.writeInt16LE(20000, 0); loudFrame.writeInt16LE(20000, 2);
+  pcmRemainder = Buffer.alloc(0);
+  processPcm(loudFrame);
+  assert(silenceStartedAt === null, 'audio real de vuelta reinicia el conteo');
+  assert(silenceAlerted === false, 'y des-marca el aviso para el próximo tramo de silencio');
 
   console.log('monitor.js self-check OK');
   process.exit(0);

@@ -173,7 +173,14 @@
     if (d.status !== 'live' || !d.metrics) return '';
     const parts = [];
     if (d.metrics.bitrate != null) parts.push(d.metrics.bitrate + ' kbps');
-    if (d.metrics.fps != null) parts.push(d.metrics.fps + ' fps');
+    // d.metrics.fps es el contador interno de FFmpeg (cuadros procesados por segundo de
+    // reloj real, no fps del video — con -c copy y speed > 1x sale inflado, ej. 234 "fps"
+    // a 60fps real x3.87 de velocidad). Se divide por speed para mostrar el fps real de la
+    // señal, que es lo que el usuario espera ver acá.
+    if (d.metrics.fps != null) {
+      const realFps = d.metrics.speed ? d.metrics.fps / d.metrics.speed : d.metrics.fps;
+      parts.push(Math.round(realFps) + ' fps');
+    }
     if (d.metrics.speed != null) parts.push(d.metrics.speed + 'x');
     return parts.join(' · ');
   }
@@ -256,7 +263,14 @@
     if (typeof EventSource === 'undefined') return;
     const es = new EventSource('/api/audio');
     es.onmessage = (e) => {
-      try { const l = JSON.parse(e.data); vu.tL = l.l; vu.tR = l.r; } catch {}
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'silence') {
+          window.msApp?.notify?.('Muxlyve', 'No se detecta audio en la señal hace 20 segundos — revisa tu micrófono o la app de captura.');
+          return;
+        }
+        vu.tL = msg.l; vu.tR = msg.r;
+      } catch {}
     };
     // EventSource reconecta solo ante error; nada más que hacer.
   })();
@@ -341,6 +355,14 @@
       const stateClass = (rtmpDest && rtmpDest.url) ? (rtmpDest.enabled ? ' pb-on' : ' pb-off') : '';
       block.className = 'pb-block' + (isOpen ? ' open' : '') + stateClass;
       block.id = 'pb-' + p.id;
+      // renderPlatforms() reconstruye este nodo desde cero en cada refresh (cada 2s) — sin
+      // esto, el glow pulsante (@keyframes pbGlowOn/Off, ciclo de 5s) se reiniciaba a los
+      // 2s de cada vez, nunca llegaba a completar una vuelta suave y se veía "saltar" de
+      // naranja a rojo de golpe. Un animation-delay NEGATIVO sincroniza la fase al reloj
+      // real: el elemento nuevo arranca ya avanzado el tramo del ciclo que le toca, como si
+      // nunca se hubiera reiniciado — mismo efecto visual continuo que .video-wrap, que sí
+      // reutiliza el mismo nodo (classList.toggle) en vez de recrearlo.
+      if (stateClass) block.style.animationDelay = '-' + ((Date.now() % 5000) / 1000) + 's';
 
       // OAuth header part
       let oauthHtml = '';
@@ -611,6 +633,7 @@
     try { renderPresets((await api('GET', '/api/presets')).presets || []); } catch {}
   }
   function renderPresets(presets) {
+    window._presets = presets; // applyPresetUi() necesita leer title/category por nombre
     const chips = $('#presetChips');
     chips.innerHTML = '';
     if (!presets.length) {
@@ -624,7 +647,8 @@
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'preset-chip' + (p.active ? ' active' : '');
-      chip.title = p.active ? 'Activo ahora' : 'Aplicar este perfil';
+      const hasStreamInfo = !!(p.title || p.category);
+      chip.title = (p.active ? 'Activo ahora' : 'Aplicar este perfil') + (hasStreamInfo ? ' (incluye título/categoría)' : '');
       chip.onclick = () => applyPresetUi(p.name);
       const label = document.createElement('span');
       label.textContent = p.name;
@@ -640,15 +664,39 @@
   }
   async function applyPresetUi(name) {
     try {
+      const preset = (window._presets || []).find((p) => p.name === name);
       await withDestBusy(async () => { render(await api('POST', '/api/presets/apply', { name })); });
       toast('Perfil "' + name + '" aplicado');
+      if (preset) await applyPresetStreamInfo(preset); // no-op si el perfil no guardó título/categoría
     } catch (e) { toast(e.message, true); }
   }
+  // Perfiles guardados con título/categoría (ver saveCurrentPreset) también los aplican
+  // al aplicarse — mismo camino que el botón "Aplicar" de "Modificar información del
+  // stream" (applyStreamTitle), pero sin abrir ese modal ni depender de sus inputs. Nunca
+  // debe poder tumbar el apply de destinos si algo sale mal acá — por eso vive en un
+  // try/catch propio, llamado DESPUÉS de que los destinos ya se aplicaron.
+  async function applyPresetStreamInfo(preset) {
+    if (!preset.title && !preset.category) return;
+    if (!window.msOAuth?.setTitle) return; // panel abierto en un navegador sin Electron — no rompe nada
+    try {
+      const results = await window.msOAuth.setTitle(preset.title || '', preset.category || '');
+      if (!Object.keys(results || {}).length) return; // sin Twitch/Kick conectado, nada que actualizar
+      if (preset.title) localStorage.setItem('ms_stream_title', preset.title);
+      if (preset.category) localStorage.setItem('ms_stream_category', preset.category);
+      updateStreamTitleDisplay();
+    } catch {}
+  }
+  // Captura el título/categoría actual (lo último aplicado con éxito, ver
+  // applyStreamTitle) junto con los destinos — así aplicar el perfil después restaura las
+  // tres cosas juntas. Si el streamer nunca seteó un título, el perfil se guarda igual,
+  // solo que sin esos dos campos (perfil "de siempre", sin sorpresas).
   async function saveCurrentPreset() {
     const name = await showPrompt('Guardar perfil actual', 'Ej. Solo Twitch');
     if (!name) return;
     try {
-      const { presets } = await api('POST', '/api/presets', { name });
+      const title = localStorage.getItem('ms_stream_title') || '';
+      const category = localStorage.getItem('ms_stream_category') || '';
+      const { presets } = await api('POST', '/api/presets', { name, title, category });
       renderPresets(presets);
       toast('Perfil "' + name + '" guardado');
     } catch (e) { toast(e.message, true); }
@@ -927,7 +975,9 @@
       }
       if (c.version) window._appVersion = c.version;
       $('#chatCmdChk').checked = c.chatCommandsEnabled !== false;
+      $('#audioSilenceChk').checked = c.audioSilenceAlertEnabled !== false;
       window._liveMessage = c.liveMessage || '';
+      window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
       renderTelegramBots(c.telegramBots || []);
     } catch {}
@@ -1402,10 +1452,11 @@
     $('#themeChk').checked = document.documentElement.dataset.theme !== 'light';
     loadLicenseInfo();
     loadOrphanRecordings();
+    loadSessionHistory();
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'support', 'license'] : ['clips', 'webhooks', 'license'];
+    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'history', 'support', 'license'] : ['clips', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -1427,14 +1478,11 @@
   }
   function closePrefs() { $('#prefsOverlay').classList.remove('open'); }
   function markActiveLanguageBtn(lang) {
-    $('#langEsBtn')?.classList.toggle('sel', lang === 'es');
-    $('#langEnBtn')?.classList.toggle('sel', lang === 'en');
-    $('#langFrBtn')?.classList.toggle('sel', lang === 'fr');
-    $('#langPtBtn')?.classList.toggle('sel', lang === 'pt');
+    const sel = $('#langSelect');
+    if (sel) sel.value = lang;
   }
   async function setAppLanguage(lang) {
     if (!window.msApp?.setLanguage) return;
-    markActiveLanguageBtn(lang); // feedback inmediato — la recarga real la dispara main.js
     await window.msApp.setLanguage(lang);
   }
   async function toggleLoginItem() {
@@ -1465,6 +1513,73 @@
   async function toggleChatCommands() {
     try { await api('POST', '/api/settings', { chatCommandsEnabled: $('#chatCmdChk').checked }); }
     catch (e) { toast(e.message, true); }
+  }
+  async function toggleAudioSilenceAlert() {
+    try { await api('POST', '/api/settings', { audioSilenceAlertEnabled: $('#audioSilenceChk').checked }); }
+    catch (e) { toast(e.message, true); }
+  }
+
+  // Exportar/importar configuración (Fase 1 del lote 2, docs/PLAN_FEATURES_LOTE2.md).
+  // Descarga un archivo con destinos + ajustes — GET /api/config/export ya arma el JSON
+  // del motor; acá solo se le agrega quién lo exportó (correo de la licencia, si hay
+  // Electron) y se dispara la descarga vía Blob (sin pedirle nada especial al servidor).
+  async function exportConfig() {
+    try {
+      const data = await api('GET', '/api/config/export');
+      const info = await window.msLicense?.getInfo().catch(() => null);
+      data.license = { email: info?.email || null };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'muxlyve-config-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Configuración exportada');
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  // Antes de mandar el archivo al servidor, compara el correo de licencia con el que
+  // quedó guardado adentro del archivo (ver exportConfig arriba) — si las dos existen y
+  // NO coinciden, es casi seguro que este archivo es de otra persona (alguien más lo
+  // exportó, o lo compartieron sin querer). No lo bloquea del todo — migrar entre tus
+  // propias máquinas es exactamente el caso de uso que esto existe para resolver — pero
+  // ya no puede pasar en silencio: hace falta confirmar explícitamente el mismatch.
+  // Sin Electron (panel servido a un navegador cualquiera) no hay con qué comparar, se
+  // salta el chequeo — mismo criterio que cualquier otra función Electron-only.
+  async function importConfig(file) {
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      toast('El archivo no es un JSON válido.', true);
+      return;
+    }
+    if (!Array.isArray(parsed.destinations) || !parsed.settings) {
+      toast('El archivo no tiene el formato esperado (¿es un export de Muxlyve?).', true);
+      return;
+    }
+    const fileEmail = parsed.license?.email || null;
+    const info = await window.msLicense?.getInfo().catch(() => null);
+    const currentEmail = info?.email || null;
+    if (fileEmail && currentEmail && fileEmail !== currentEmail) {
+      const ok = await showConfirm(
+        'Este archivo fue exportado desde otra cuenta (' + fileEmail + '), no la que está activa en este equipo (' + currentEmail + '). ¿Importar igual?',
+        'Importar de todas formas',
+      );
+      if (!ok) return;
+    }
+    try {
+      await api('POST', '/api/config/import', { destinations: parsed.destinations, settings: parsed.settings });
+      toast('Configuración importada');
+      $('#importConfigInput').value = ''; // permite volver a elegir el mismo archivo despues
+      refresh();
+      loadConfig();
+    } catch (e) {
+      toast(e.message, true);
+    }
   }
   // Webhooks de Discord (hasta 3) y bots de Telegram (hasta 3) — Preferencias → Webhooks.
   // Arrays en memoria, poblados por loadConfig()/render*() al abrir el panel; cada cambio
@@ -1585,11 +1700,33 @@
   }
 
   // Modal de mensaje de aviso (Discord + Telegram) — acceso rápido desde la grilla 2x2,
-  // ver el botón en stream-actions-grid. window._liveMessage se carga en loadConfig() y
-  // se mantiene en memoria para no tener que pedirlo de nuevo cada vez que se abre.
-  function openDiscordMsgModal() {
-    $('#discordMsgInput').value = window._liveMessage || '';
+  // ver el botón en stream-actions-grid. Un solo modal para los dos mensajes (al iniciar /
+  // al finalizar), con pestañas en vez de un segundo botón en la grilla — msgTabKind
+  // guarda cuál se está editando ahora mismo. window._liveMessage/_endMessage se cargan en
+  // loadConfig() y se mantienen en memoria para no tener que pedirlos de nuevo cada vez.
+  let msgTabKind = 'start';
+  const MSG_TAB_META = {
+    start: {
+      desc: 'Se manda a los webhooks de Discord y bots de Telegram configurados (Preferencias → Webhooks) apenas empieza la transmisión. Discord admite su formato (**negrita**, *itálica*, enlaces) — Telegram lo muestra como texto plano.',
+      placeholder: '🔴 ¡La transmisión empezó!',
+    },
+    end: {
+      desc: 'Se manda a los mismos canales apenas termina la transmisión. Mismo formato que el de inicio (Discord admite **negrita**/*itálica*/enlaces, Telegram lo muestra como texto plano).',
+      placeholder: '⚫ La transmisión terminó.',
+    },
+  };
+  function switchMsgTab(kind) {
+    msgTabKind = kind;
+    $('#msgTabStart').classList.toggle('active', kind === 'start');
+    $('#msgTabEnd').classList.toggle('active', kind === 'end');
+    const meta = MSG_TAB_META[kind];
+    $('#discordMsgDesc').textContent = meta.desc;
+    $('#discordMsgInput').placeholder = meta.placeholder;
+    $('#discordMsgInput').value = (kind === 'start' ? window._liveMessage : window._endMessage) || '';
     updateDiscordMsgCount();
+  }
+  function openDiscordMsgModal() {
+    switchMsgTab('start'); // siempre arranca en "al iniciar", sea cual sea la pestaña que quedó activa la última vez
     $('#discordMsgOverlay').classList.add('open');
   }
   function closeDiscordMsgModal() { $('#discordMsgOverlay').classList.remove('open'); }
@@ -1598,19 +1735,21 @@
   }
   async function saveDiscordMsgModal() {
     const value = $('#discordMsgInput').value.trim();
+    const field = msgTabKind === 'start' ? 'liveMessage' : 'endMessage';
     try {
-      await api('POST', '/api/settings', { liveMessage: value });
-      window._liveMessage = value;
+      await api('POST', '/api/settings', { [field]: value });
+      if (msgTabKind === 'start') window._liveMessage = value; else window._endMessage = value;
       toast('Mensaje de aviso guardado');
       closeDiscordMsgModal();
     } catch (e) { toast(e.message, true); }
   }
-  // Prueba TODOS los canales configurados de una — usa el mensaje YA GUARDADO (si hay
-  // ediciones sin guardar en el textarea, "Guardar" primero). Toast resume cuántos
-  // salieron bien; si alguno falló, el primer error queda de referencia.
+  // Prueba TODOS los canales configurados de una, con el mensaje de la pestaña activa —
+  // usa el mensaje YA GUARDADO (si hay ediciones sin guardar en el textarea, "Guardar"
+  // primero). Toast resume cuántos salieron bien; si alguno falló, el primer error queda
+  // de referencia.
   async function testAllChannelsUi() {
     try {
-      const { results } = await api('POST', '/api/notify-test-all');
+      const { results } = await api('POST', '/api/notify-test-all', { kind: msgTabKind });
       if (!results.length) { toast('No hay ningún webhook o bot configurado todavía', true); return; }
       const okCount = results.filter((r) => r.ok).length;
       const firstError = results.find((r) => !r.ok);
@@ -1725,13 +1864,32 @@
     $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
   }
 
-  function openAbout() {
+  // Fondo shader del modal Acerca de (ver hero-bg.js) — import() dinámico, no un
+  // <script type="module"> fijo en el HTML: three.js pesa ~360kb minificado y este modal
+  // casi no se abre, no tiene sentido pagar ese costo en cada carga del panel.
+  // stopAboutBG guarda la función de limpieza que devuelve initHeroBG() — hay que
+  // llamarla al cerrar el modal o el contexto WebGL se filtra si se abre/cierra varias
+  // veces seguidas.
+  let stopAboutBG = null;
+  async function openAbout() {
     // Versión ya cargada en init (appVersion global); año dinámico
     $('#aboutVersion').textContent = 'v' + (window._appVersion || '—');
     $('#aboutCopy').innerHTML = '© ' + new Date().getFullYear() + ' Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.';
     $('#aboutOverlay').classList.add('open');
+    if (!stopAboutBG) {
+      try {
+        const { initHeroBG } = await import('/hero-bg.js');
+        stopAboutBG = initHeroBG($('#aboutBgCanvas'));
+      } catch {
+        // Sin WebGL o falló la carga (ej. sin red la primera vez) — el modal se ve igual
+        // con el fondo sólido de siempre, no es un error que el usuario necesite ver.
+      }
+    }
   }
-  function closeAbout() { $('#aboutOverlay').classList.remove('open'); }
+  function closeAbout() {
+    $('#aboutOverlay').classList.remove('open');
+    if (stopAboutBG) { stopAboutBG(); stopAboutBG = null; }
+  }
 
   // Botón secundario, estilo bordeado (mismo que "Acerca de Muxlyve"/"Gestionar
   // suscripción" en Licencia) — .lic-manage-btn. Primario: .browse-btn (morado sólido).
@@ -1792,6 +1950,72 @@
       body.appendChild(summaryRow('Bitrate prom. ' + name, avg + ' kbps'));
     }
     $('#summaryOverlay').classList.add('open');
+  }
+
+  // ── Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) ──────────────────────
+  // A diferencia del resumen de arriba (sessionPeakViewers y demás, todo en memoria del
+  // cliente, se pierde al cerrar la ventana), esto persiste server-side en sessions.json
+  // — ver src/sessions.js / src/routes/sessions.js. Preferencias → Historial, se carga
+  // bajo demanda (openPrefs), no hace falta pollearlo.
+  function fmtSessionDate(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString(UI_LANG, { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString(UI_LANG, { hour: '2-digit', minute: '2-digit' });
+  }
+  async function loadSessionHistory() {
+    const box = $('#sessionHistoryList');
+    if (!box) return;
+    try {
+      const { sessions } = await api('GET', '/api/sessions');
+      renderSessionHistory(sessions);
+    } catch {
+      box.innerHTML = '';
+      const err = document.createElement('div');
+      err.className = 'preset-chips-empty';
+      err.textContent = 'No se pudo cargar el historial.';
+      box.appendChild(err);
+    }
+  }
+  function renderSessionHistory(sessions) {
+    const box = $('#sessionHistoryList');
+    box.innerHTML = '';
+    if (!sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'preset-chips-empty';
+      empty.textContent = 'Todavía no hay sesiones registradas — se guardan solas cada vez que sales en vivo de verdad (al menos una plataforma conectada).';
+      box.appendChild(empty);
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'history-table';
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const label of ['Fecha', 'Duración', 'Plataformas', 'Pico de espectadores']) {
+      const th = document.createElement('th');
+      th.textContent = label;
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const s of sessions) {
+      const tr = document.createElement('tr');
+      const tdDate = document.createElement('td');
+      tdDate.textContent = fmtSessionDate(s.startedAt);
+      const tdDur = document.createElement('td');
+      tdDur.textContent = fmtUptime(s.durationSeconds);
+      const tdDest = document.createElement('td');
+      tdDest.textContent = s.destinations.length ? s.destinations.join(', ') : '—';
+      const tdPeak = document.createElement('td');
+      const peakEntries = Object.entries(s.peakViewers || {}).filter(([, v]) => v > 0);
+      tdPeak.textContent = peakEntries.length
+        ? peakEntries.map(([p, v]) => (VIEWER_PLATFORM_LABELS[p] || p) + ' ' + v.toLocaleString(UI_LANG)).join(', ')
+        : '—';
+      tr.append(tdDate, tdDur, tdDest, tdPeak);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
   }
 
   // ── Comprobación previa a salir en vivo ──
@@ -2211,6 +2435,10 @@
       updatePinBtnState(pinBtn, msg.id === pinnedMessageId);
       pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
       row.appendChild(pinBtn);
+    }
+    // Moderar (timeout/ban): solo Twitch, y no sobre tu propio mensaje.
+    if (msg.platform === 'twitch' && msg.userId && !msg.isBroadcaster) {
+      row.appendChild(createModBtn(msg.userId));
     }
     box.appendChild(row);
     while (box.children.length > 200) box.removeChild(box.firstChild);

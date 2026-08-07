@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
 import { setViewerCounts } from '../src/viewers.js';
-import { setChatModeHandler, setChatSendHandler, setChatPinHandler, setChatUnpinHandler, setChatGetPinnedHandler } from '../src/chatmod.js';
+import { setChatModeHandler, setChatSendHandler, setChatPinHandler, setChatUnpinHandler, setChatGetPinnedHandler, setChatBanHandler } from '../src/chatmod.js';
 import { tMap } from '../src/i18n.js';
 
 // Los resultados de este módulo llegan al renderer directo (IPC) o vía el puente HTTP de
@@ -33,9 +33,10 @@ const PLATFORMS = {
     // moderator:manage:chat_settings → modo lento / solo emotes (setTwitchChatMode).
     // user:write:chat → enviar mensaje como el streamer (sendChatMessage).
     // moderator:manage:chat_messages → fijar mensaje (pinTwitchMessage).
+    // moderator:manage:banned_users → timeout/ban (banTwitchUser, Fase 5 del lote 2).
     // Cambiar el scope invalida los tokens ya emitidos — quien ya conectó Twitch antes de
     // esto necesita reconectar.
-    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key channel:manage:broadcast moderator:manage:chat_settings user:write:chat moderator:manage:chat_messages',
+    scope: 'user:read:email channel:read:subscriptions channel:read:stream_key channel:manage:broadcast moderator:manage:chat_settings user:write:chat moderator:manage:chat_messages moderator:manage:banned_users',
     pkce: true,
     envKey: 'TWITCH',
     // Twitch solo acepta https:// o http://localhost — usa localhost interceptado por Electron
@@ -808,3 +809,38 @@ export async function getTwitchPinnedMessage() {
   return { ok: true, messageId: data.data?.[0]?.message_id || null };
 }
 setChatGetPinnedHandler(getTwitchPinnedMessage);
+
+// POST /helix/moderation/bans — timeout (con duration, en segundos) o ban permanente
+// (sin duration) del autor de un mensaje. Requiere scope moderator:manage:banned_users
+// (ver PLATFORMS.twitch arriba) — quien conectó Twitch antes de que este scope se
+// agregara va a necesitar reconectar, el error de Twitch en ese caso es 401 "Missing
+// scope", que ya cae en el mensaje genérico de abajo (no hace falta un caso especial:
+// el usuario ve el error y "reconectá Twitch" es la solución obvia igual que para
+// cualquier otro 401 de scope faltante en este archivo).
+export async function banTwitchUser(userId, duration, reason) {
+  if (!userId) return { ok: false, error: t('Falta el user id — no se puede moderar.') };
+  const tok = readTokens().twitch;
+  if (!tok?.broadcasterId) return { ok: false, error: t('Falta broadcasterId — reconecta Twitch.') };
+  const token = await getValidToken('twitch');
+  if (!token) return { ok: false, error: t('Sesión de Twitch inválida — reconecta.') };
+  const params = new URLSearchParams({ broadcaster_id: tok.broadcasterId, moderator_id: tok.broadcasterId });
+  const data = { user_id: String(userId) };
+  if (duration) data.duration = Number(duration);
+  // 500 = tope real que exige Twitch para el campo reason.
+  if (reason) data.reason = String(reason).slice(0, 500);
+  const res = await fetch(`https://api.twitch.tv/helix/moderation/bans?${params}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Client-Id': clientId(PLATFORMS.twitch),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ data }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Twitch ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+setChatBanHandler(banTwitchUser);

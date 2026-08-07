@@ -22,8 +22,8 @@
     align-items: center;
   }
   .icon {
-    width: 72px; height: 72px;
-    margin-bottom: 18px;
+    width: 92px; height: 92px;
+    margin-bottom: 22px;
     animation: pop-in .55s cubic-bezier(.22,1,.36,1) both;
   }
   @keyframes pop-in {
@@ -35,8 +35,8 @@
      el color acento arranca en la "v" de "ve", igual que en el resto de la app. */
   .wordmark {
     display: flex;
-    font-size: 1.3rem; font-weight: 700; letter-spacing: -.03em;
-    margin-bottom: 28px;
+    font-size: 1.85rem; font-weight: 700; letter-spacing: -.03em;
+    margin-bottom: 26px;
   }
   .letter {
     display: inline-block;
@@ -52,7 +52,7 @@
     width: 160px; height: 2px;
     background: #1e2635; border-radius: 1px;
     overflow: hidden; margin-bottom: 14px;
-    animation: fade-in .4s 1.05s ease both;
+    animation: fade-in .4s .82s ease both;
   }
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
@@ -67,7 +67,7 @@
        apenas se hace visible. Duración estirada (2s -> 3.2s): se sentía apurada —
        window.finishLoad() la corta a 100% igual apenas el motor real avisa que está
        listo, así que estirarla no atrasa un arranque rápido. */
-    animation: load-init 3.2s 1.05s cubic-bezier(.4,0,.2,1) forwards;
+    animation: load-init 3.2s .82s cubic-bezier(.4,0,.2,1) forwards;
   }
   @keyframes load-init {
     0%   { width: 0%; }
@@ -76,15 +76,15 @@
     100% { width: 57%; }
   }
   .status {
-    font-size: .68rem; color: #8b949e; letter-spacing: .05em;
+    font-size: .72rem; color: #8b949e; letter-spacing: .05em;
     text-transform: uppercase;
-    animation: fade-in .4s 1.1s ease both;
+    animation: fade-in .4s .87s ease both;
   }
   .version {
-    font-size: .62rem; color: #4d5563; letter-spacing: .03em;
-    margin-top: 8px;
+    font-size: .65rem; color: #4d5563; letter-spacing: .03em;
+    margin-top: 9px;
     font-family: ui-monospace, monospace;
-    animation: fade-in .4s 1.15s ease both;
+    animation: fade-in .4s .92s ease both;
   }
 </style>
 </head>
@@ -93,12 +93,12 @@
   <img src="../src/public/icon-muxlyve.svg" class="icon" alt="">
   <div class="wordmark" aria-label="Muxlyve">
     <span class="letter" style="animation-delay:.00s">M</span>
-    <span class="letter" style="animation-delay:.09s">u</span>
-    <span class="letter" style="animation-delay:.18s">x</span>
-    <span class="letter" style="animation-delay:.27s">l</span>
-    <span class="letter" style="animation-delay:.36s">y</span>
-    <span class="letter accent" style="animation-delay:.45s">v</span>
-    <span class="letter accent" style="animation-delay:.54s">e</span>
+    <span class="letter" style="animation-delay:.05s">u</span>
+    <span class="letter" style="animation-delay:.10s">x</span>
+    <span class="letter" style="animation-delay:.15s">l</span>
+    <span class="letter" style="animation-delay:.20s">y</span>
+    <span class="letter accent" style="animation-delay:.25s">v</span>
+    <span class="letter accent" style="animation-delay:.30s">e</span>
   </div>
   <div class="track"><div class="bar" id="bar"></div></div>
   <div class="status" id="status">Iniciando motor…</div>
