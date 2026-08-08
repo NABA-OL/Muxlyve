@@ -225,7 +225,12 @@ async function handleApi(req, res, url, config) {
 // overlay de chat para OBS/Streamlabs se pega por URL en una fuente de Navegador, que no
 // puede mandar headers — exigirle token rompería la razón de ser de la función. No exponen
 // nada sensible (mensajes de chat ya públicos en Twitch/Kick, sin claves ni control).
-const PUBLIC_LAN_PATHS = new Set(['/chat-overlay', '/api/chat']);
+// chat-overlay.css y chat-render.js van acá también: son los assets que /chat-overlay
+// carga con <link>/<script> — esas etiquetas tampoco mandan Authorization, así que sin
+// esto el HTML pasaba (whitelisted) pero el CSS/JS que necesita para pintar algo daba 401
+// en cualquier acceso no-loopback (ej. desde otra máquina en la LAN) y la página quedaba
+// en blanco, aunque en localhost se viera perfecto (loopback se salta el gate entero).
+const PUBLIC_LAN_PATHS = new Set(['/chat-overlay', '/api/chat', '/chat-overlay.css', '/chat-render.js']);
 
 // Debug del LAN pairing (Stream Deck, etc.) — panel.js corre en el proceso Node del motor,
 // no comparte consola con el renderer de Electron, así que console.log acá solo se ve en
@@ -1373,8 +1378,9 @@ export const CHAT_OVERLAY_HTML = /* html */ `<!doctype html>
   }
   var es = new EventSource('/api/chat');
   es.onmessage = function (e) {
-    try { append(JSON.parse(e.data)); } catch (err) {}
+    try { append(JSON.parse(e.data)); } catch (err) { console.error('[chat-overlay] no se pudo mostrar el mensaje:', err); }
   };
+  es.onerror = function (err) { console.error('[chat-overlay] EventSource error:', err); };
 </script>
 </body>
 </html>`;

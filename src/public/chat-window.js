@@ -151,7 +151,7 @@ function append(msg) {
 syncPinnedMessage();
 const es = new EventSource('/api/chat');
 es.onmessage = (e) => {
-  try { append(JSON.parse(e.data)); } catch (err) {}
+  try { append(JSON.parse(e.data)); } catch (err) { console.error('[chat-window] no se pudo mostrar el mensaje:', err); }
 };
 
 function renderViewerBar(counts) {

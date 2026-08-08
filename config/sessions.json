@@ -1,0 +1,13 @@
+[
+  {
+    "startedAt": 1786210216209,
+    "endedAt": 1786210839812,
+    "durationSeconds": 623,
+    "destinations": [
+      "Twitch"
+    ],
+    "peakViewers": {
+      "kick": 1
+    }
+  }
+]

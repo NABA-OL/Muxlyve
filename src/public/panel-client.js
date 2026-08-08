@@ -2456,7 +2456,7 @@
       try {
         sessionChatMsgCount++; // cuenta todo lo recibido, filtrado o no (ver isChatMessageBlocked)
         appendChatMessage(JSON.parse(e.data));
-      } catch {}
+      } catch (err) { console.error('[chat] no se pudo mostrar el mensaje:', err); }
     };
   }
 
