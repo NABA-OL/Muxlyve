@@ -32,8 +32,16 @@ export async function handle(req, res, url, ctx) {
     });
     for (const msg of getChatHistory()) res.write(`data: ${JSON.stringify(msg)}\n\n`);
     const onMessage = (msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    // Llega aparte y un ratito después del mensaje original (ver maybeTranslate() en
+    // src/chat.js) — el cliente la reconoce por type:'translation' (los mensajes
+    // normales nunca traen ese campo) y solo anota la fila que ya pintó, no repinta nada.
+    const onTranslated = (payload) => res.write(`data: ${JSON.stringify({ type: 'translation', ...payload })}\n\n`);
     chatBus.on('message', onMessage);
-    req.on('close', () => chatBus.off('message', onMessage));
+    chatBus.on('message-translated', onTranslated);
+    req.on('close', () => {
+      chatBus.off('message', onMessage);
+      chatBus.off('message-translated', onTranslated);
+    });
     return true;
   }
 

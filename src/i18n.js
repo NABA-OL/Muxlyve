@@ -352,4 +352,13 @@ export const tMap = {
   '), no la que está activa en este equipo (': { en: '), not the one active on this machine (', fr: '), et non celle active sur cette machine (', pt: '), não a que está ativa neste computador (' },
   '). ¿Importar igual?': { en: '). Import anyway?', fr: '). Importer quand meme ?', pt: '). Importar mesmo assim?' },
   'Importar de todas formas': { en: 'Import anyway', fr: 'Importer quand meme', pt: 'Importar mesmo assim' },
+
+  // Toggle habilitar/deshabilitar webhook (Discord/Telegram) sin borrarlo — vive dentro
+  // de panel-client.js como atributo title="" de un string JS de comilla simple, mismo
+  // criterio de "sin apóstrofo" que el resto de esta sección.
+  'Habilitar/deshabilitar sin borrar': { en: 'Enable/disable without deleting', fr: 'Activer/desactiver sans supprimer', pt: 'Ativar/desativar sem excluir' },
+
+  // Traducción de chat — texto vive en panel.js (HTML backtick), apóstrofos seguros acá.
+  'Traducir mensajes del chat': { en: 'Translate chat messages', fr: 'Traduire les messages du chat', pt: 'Traduzir mensagens do chat' },
+  'Muestra una traducción debajo de los mensajes que no estén en el idioma de la app. Usa un servicio externo no oficial — puede fallar o dejar de funcionar sin aviso, el chat sigue andando igual si eso pasa.': { en: 'Shows a translation under messages that aren\'t in the app\'s language. Uses an unofficial external service — it can fail or stop working without notice, the chat keeps working the same either way.', fr: 'Affiche une traduction sous les messages qui ne sont pas dans la langue de l\'appli. Utilise un service externe non officiel — il peut échouer ou s\'arrêter sans préavis, le chat continue de fonctionner pareil.', pt: 'Mostra uma tradução abaixo das mensagens que não estejam no idioma do app. Usa um serviço externo não oficial — pode falhar ou parar de funcionar sem aviso, o chat continua funcionando do mesmo jeito.' },
 };

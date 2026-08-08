@@ -19,7 +19,21 @@ const settingsPath = path.join(tmpDir, 'settings.json');
 test('discordWebhookUrl viejo (singular) migra a discordWebhooks[]', () => {
   writeFileSync(settingsPath, JSON.stringify({ discordWebhookUrl: 'https://discord.com/api/webhooks/1/a' }));
   const s = loadSettings();
-  assert.deepEqual(s.discordWebhooks, ['https://discord.com/api/webhooks/1/a']);
+  assert.deepEqual(s.discordWebhooks, [{ url: 'https://discord.com/api/webhooks/1/a', enabled: true }]);
+});
+
+test('discordWebhooks viejo (array de strings planos) migra a {url, enabled} con enabled=true', () => {
+  writeFileSync(settingsPath, JSON.stringify({ discordWebhooks: ['https://discord.com/api/webhooks/1/a'] }));
+  const s = loadSettings();
+  assert.deepEqual(s.discordWebhooks, [{ url: 'https://discord.com/api/webhooks/1/a', enabled: true }]);
+});
+
+test('discordWebhooks respeta enabled:false ya guardado', () => {
+  writeFileSync(settingsPath, JSON.stringify({
+    discordWebhooks: [{ url: 'https://discord.com/api/webhooks/1/a', enabled: false }],
+  }));
+  const s = loadSettings();
+  assert.deepEqual(s.discordWebhooks, [{ url: 'https://discord.com/api/webhooks/1/a', enabled: false }]);
 });
 
 test('discordMessage viejo migra a liveMessage', () => {
@@ -51,7 +65,7 @@ test('webhooks inválidos o duplicados se descartan al leer', () => {
     ],
   }));
   const s = loadSettings();
-  assert.deepEqual(s.discordWebhooks, ['https://discord.com/api/webhooks/1/a']);
+  assert.deepEqual(s.discordWebhooks, [{ url: 'https://discord.com/api/webhooks/1/a', enabled: true }]);
 });
 
 test('telegramBots respeta el mismo tope y descarta entradas inválidas', () => {
@@ -67,6 +81,19 @@ test('telegramBots respeta el mismo tope y descarta entradas inválidas', () => 
   }));
   const s = loadSettings();
   assert.equal(s.telegramBots.length, MAX_TELEGRAM_BOTS);
+});
+
+test('telegramBots viejo sin campo enabled migra a enabled=true; respeta enabled:false ya guardado', () => {
+  const validToken = '123456789:AAHqhK9DsSNGCQnQanCwHzXTVo1TVe0MYCA';
+  writeFileSync(settingsPath, JSON.stringify({
+    telegramBots: [
+      { botToken: validToken, chatId: '1' },
+      { botToken: validToken, chatId: '2', enabled: false },
+    ],
+  }));
+  const s = loadSettings();
+  assert.equal(s.telegramBots[0].enabled, true);
+  assert.equal(s.telegramBots[1].enabled, false);
 });
 
 test('sin nada configurado, los arrays arrancan vacíos', () => {

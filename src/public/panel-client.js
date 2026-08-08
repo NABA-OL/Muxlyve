@@ -73,9 +73,38 @@
         if (hist.length > METRICS_HISTORY_MAX) hist.shift();
         sessionBitrateSum[d.name] = (sessionBitrateSum[d.name] || 0) + d.metrics.bitrate;
         sessionBitrateCount[d.name] = (sessionBitrateCount[d.name] || 0) + 1;
+        checkBitrateTrend(d.name, hist);
       } else {
         delete metricsHistory[d.name];
+        bitrateTrendWarned.delete(d.name);
       }
+    }
+  }
+  // Pronóstico de salud: avisa ANTES de que el bitrate se ponga feo, no cuando ya está mal
+  // (eso ya lo hace el pill "rezagado"/lagging, reactivo). Compara el promedio del primer
+  // tercio de la ventana (~1 min, mismos datos del sparkline) contra el último tercio — una
+  // caída sostenida del 30%+ dispara un aviso nativo UNA vez por racha (bitrateTrendWarned
+  // evita repetirlo cada poll); se limpia solo si se recupera o el destino deja de estar
+  // live. A propósito no se inventa un "te quedás sin banda en X min" — con una ventana de
+  // 1 min y datos ruidosos, una proyección lineal sería más marketing que dato real; se
+  // avisa con el % de caída medido, que sí es honesto.
+  const bitrateTrendWarned = new Set();
+  const BITRATE_TREND_MIN_SAMPLES = 12; // ~24s+ de datos reales antes de opinar
+  const BITRATE_TREND_DROP_PCT = 30;
+  function checkBitrateTrend(name, hist) {
+    if (hist.length < BITRATE_TREND_MIN_SAMPLES) return;
+    const third = Math.floor(hist.length / 3);
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const earlyAvg = avg(hist.slice(0, third));
+    const recentAvg = avg(hist.slice(-third));
+    const dropPct = earlyAvg > 0 ? Math.round((1 - recentAvg / earlyAvg) * 100) : 0;
+    if (dropPct >= BITRATE_TREND_DROP_PCT) {
+      if (!bitrateTrendWarned.has(name)) {
+        bitrateTrendWarned.add(name);
+        window.msApp?.notify?.('Muxlyve', name + ': el bitrate viene bajando (-' + dropPct + '% en el último minuto) — revisa tu conexión.');
+      }
+    } else if (dropPct < 15) {
+      bitrateTrendWarned.delete(name); // se recuperó — puede volver a avisar si cae de nuevo
     }
   }
   function sparkColor(pillCls) {
@@ -976,6 +1005,7 @@
       if (c.version) window._appVersion = c.version;
       $('#chatCmdChk').checked = c.chatCommandsEnabled !== false;
       $('#audioSilenceChk').checked = c.audioSilenceAlertEnabled !== false;
+      $('#chatTranslateChk').checked = !!c.chatTranslateEnabled; // default false, a diferencia de los de arriba
       window._liveMessage = c.liveMessage || '';
       window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
@@ -1456,7 +1486,7 @@
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'history', 'support', 'license'] : ['clips', 'webhooks', 'history', 'license'];
+    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'history', 'support', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -1516,6 +1546,10 @@
   }
   async function toggleAudioSilenceAlert() {
     try { await api('POST', '/api/settings', { audioSilenceAlertEnabled: $('#audioSilenceChk').checked }); }
+    catch (e) { toast(e.message, true); }
+  }
+  async function toggleChatTranslate() {
+    try { await api('POST', '/api/settings', { chatTranslateEnabled: $('#chatTranslateChk').checked }); }
     catch (e) { toast(e.message, true); }
   }
 
@@ -1594,16 +1628,23 @@
     window._discordWebhooks = list.slice();
     const box = $('#discordWebhooksList');
     box.innerHTML = '';
-    window._discordWebhooks.forEach((url, i) => {
+    window._discordWebhooks.forEach((w, i) => {
       const row = document.createElement('div');
       row.className = 'webhook-row';
       row.innerHTML =
+        '<label class="sys-toggle" title="Habilitar/deshabilitar sin borrar">' +
+          '<input type="checkbox" class="webhook-enabled-chk">' +
+          '<span class="sys-toggle-track"></span>' +
+        '</label>' +
         '<input type="text" placeholder="https://discord.com/api/webhooks/…">' +
         '<button class="browse-btn webhook-test-btn">Probar</button>' +
         '<button class="webhook-del-btn" title="Borrar">✕</button>';
-      const input = row.querySelector('input');
-      input.value = url;
+      const input = row.querySelector('input[type="text"]');
+      const enabledChk = row.querySelector('.webhook-enabled-chk');
+      input.value = w.url;
+      enabledChk.checked = w.enabled;
       input.addEventListener('change', () => updateDiscordWebhook(i, input.value));
+      enabledChk.addEventListener('change', () => toggleDiscordWebhook(i, enabledChk.checked));
       row.querySelector('.webhook-test-btn').addEventListener('click', () => testDiscordWebhookRow(input.value));
       row.querySelector('.webhook-del-btn').addEventListener('click', () => removeDiscordWebhook(i));
       box.appendChild(row);
@@ -1612,13 +1653,18 @@
   }
   function addDiscordWebhookRow() {
     if (window._discordWebhooks.length >= MAX_DISCORD_WEBHOOKS) return;
-    renderDiscordWebhooks([...window._discordWebhooks, '']);
-    const inputs = $('#discordWebhooksList').querySelectorAll('input');
+    renderDiscordWebhooks([...window._discordWebhooks, { url: '', enabled: true }]);
+    const inputs = $('#discordWebhooksList').querySelectorAll('input[type="text"]');
     inputs[inputs.length - 1]?.focus();
   }
   async function updateDiscordWebhook(i, value) {
     const next = window._discordWebhooks.slice();
-    next[i] = value.trim();
+    next[i] = { ...next[i], url: value.trim() };
+    await persistDiscordWebhooks(next);
+  }
+  async function toggleDiscordWebhook(i, enabled) {
+    const next = window._discordWebhooks.slice();
+    next[i] = { ...next[i], enabled };
     await persistDiscordWebhooks(next);
   }
   async function removeDiscordWebhook(i) {
@@ -1626,7 +1672,7 @@
     await persistDiscordWebhooks(next);
   }
   async function persistDiscordWebhooks(list) {
-    const cleaned = list.filter((u) => u && u.trim());
+    const cleaned = list.filter((w) => w.url && w.url.trim());
     try {
       await api('POST', '/api/settings', { discordWebhooks: cleaned });
       renderDiscordWebhooks(cleaned);
@@ -1648,6 +1694,10 @@
       const row = document.createElement('div');
       row.className = 'webhook-row webhook-row-telegram';
       row.innerHTML =
+        '<label class="sys-toggle" title="Habilitar/deshabilitar sin borrar">' +
+          '<input type="checkbox" class="webhook-enabled-chk">' +
+          '<span class="sys-toggle-track"></span>' +
+        '</label>' +
         '<input type="text" class="tg-token" placeholder="Token del bot (@BotFather)">' +
         '<input type="text" class="tg-chat" placeholder="Chat ID">' +
         '<button class="browse-btn webhook-save-btn">Guardar</button>' +
@@ -1655,9 +1705,12 @@
         '<button class="webhook-del-btn" title="Borrar">✕</button>';
       const tokenInput = row.querySelector('.tg-token');
       const chatInput = row.querySelector('.tg-chat');
+      const enabledChk = row.querySelector('.webhook-enabled-chk');
       tokenInput.value = bot.botToken;
       chatInput.value = bot.chatId;
+      enabledChk.checked = bot.enabled;
       row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value));
+      enabledChk.addEventListener('change', () => toggleTelegramBot(i, enabledChk.checked));
       row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value));
       row.querySelector('.webhook-del-btn').addEventListener('click', () => removeTelegramBot(i));
       box.appendChild(row);
@@ -1666,7 +1719,7 @@
   }
   function addTelegramBotRow() {
     if (window._telegramBots.length >= MAX_TELEGRAM_BOTS) return;
-    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '' }]);
+    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '', enabled: true }]);
     const inputs = $('#telegramBotsList').querySelectorAll('.tg-token');
     inputs[inputs.length - 1]?.focus();
   }
@@ -1677,7 +1730,12 @@
   // borrando lo que el usuario acababa de escribir. Ver .webhook-row-telegram en el CSS.
   async function saveTelegramBotRow(i, botToken, chatId) {
     const next = window._telegramBots.slice();
-    next[i] = { botToken: botToken.trim(), chatId: chatId.trim() };
+    next[i] = { ...next[i], botToken: botToken.trim(), chatId: chatId.trim() };
+    await persistTelegramBots(next);
+  }
+  async function toggleTelegramBot(i, enabled) {
+    const next = window._telegramBots.slice();
+    next[i] = { ...next[i], enabled };
     await persistTelegramBots(next);
   }
   async function removeTelegramBot(i) {
@@ -2419,6 +2477,8 @@
       row.appendChild(badge);
     }
     const textWrap = document.createElement('span');
+    textWrap.className = 'chat-msg-body';
+    textWrap.dataset.msgId = msg.id; // ver applyTranslation() en chat-render.js
     const nameEl = document.createElement('strong');
     nameEl.style.color = msg.color || '#9147ff';
     nameEl.textContent = msg.username || '???';
@@ -2454,8 +2514,10 @@
     const es = new EventSource('/api/chat');
     es.onmessage = (e) => {
       try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'translation') { applyTranslation(data.id, data.translated); return; }
         sessionChatMsgCount++; // cuenta todo lo recibido, filtrado o no (ver isChatMessageBlocked)
-        appendChatMessage(JSON.parse(e.data));
+        appendChatMessage(data);
       } catch (err) { console.error('[chat] no se pudo mostrar el mensaje:', err); }
     };
   }

@@ -783,6 +783,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Grabador de clips</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="chat" onclick="switchPrefsTab('chat')">
+          <span class="icon-mask icon-chat"></span>
+          <span>Chat</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="webhooks" onclick="switchPrefsTab('webhooks')">
           <span class="icon-mask icon-webhook"></span>
           <span>Webhooks</span>
@@ -938,10 +943,14 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="pref-desc" style="margin-bottom:.5rem">Quedaron como .ts por un cierre inesperado — conviértelas a .mp4 para poder reproducirlas.</div>
             <div id="orphanRecordingsList"></div>
           </div>
-          <!-- Comando !clip — ajuste del MOTOR (settings.json), no de Electron, por eso
-               vive en esta pestaña (siempre visible) y no en "Sistema" (esa se oculta sin
-               la app de escritorio, ver openPrefs()). -->
-          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+        </div>
+        <!-- Chat + avisos en vivo — ajustes del MOTOR (settings.json), no de Electron, por
+             eso viven en su propia pestaña siempre visible y no en "Sistema" (esa se oculta
+             sin la app de escritorio, ver openPrefs()). Antes vivían en "Grabador de
+             clips" — no tenían nada que ver con clips, quedaban ahí solo porque esa pestaña
+             también era siempre visible. -->
+        <div class="prefs-panel" id="prefsChatBlock" data-panel="chat">
+          <div class="pref-row">
             <div>
               <div>Comando !clip en el chat</div>
               <div class="pref-desc">Los mods y tú pueden escribir !clip para guardar un clip del buffer, sin salir del juego.</div>
@@ -951,9 +960,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <span class="sys-toggle-track"></span>
             </label>
           </div>
-          <!-- Vigía de audio caído — mismo criterio que Comando !clip: ajuste del MOTOR
-               (settings.json), funciona igual con o sin la app de escritorio, por eso vive
-               acá y no en "Sistema" (esa pestaña se oculta sin Electron). -->
           <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
             <div>
               <div>Avisar si se corta el audio</div>
@@ -961,6 +967,19 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             </div>
             <label class="sys-toggle">
               <input type="checkbox" id="audioSilenceChk" onchange="toggleAudioSilenceAlert()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <!-- Traducción de chat — apagado por defecto (ver chatTranslateEnabled en
+               settings.js): pega a un endpoint no-oficial de Google Translate, no una API
+               con SLA. Quien lo prenda lo hace sabiendo que es best-effort. -->
+          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+            <div>
+              <div>Traducir mensajes del chat</div>
+              <div class="pref-desc">Muestra una traducción debajo de los mensajes que no estén en el idioma de la app. Usa un servicio externo no oficial — puede fallar o dejar de funcionar sin aviso, el chat sigue andando igual si eso pasa.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="chatTranslateChk" onchange="toggleChatTranslate()">
               <span class="sys-toggle-track"></span>
             </label>
           </div>

@@ -35,6 +35,9 @@ const DEFAULT_SETTINGS = {
   clipsDir: null, recordingsDir: null, chatCommandsEnabled: true, discordWebhooks: [],
   telegramBots: [], liveMessage: null, endMessage: null, destinationPresets: [],
   audioSilenceAlertEnabled: true,
+  // Apagado por defecto a propósito — pega a un endpoint no-oficial de traducción (ver
+  // src/translate.js), quien lo prenda lo hace sabiendo que es best-effort.
+  chatTranslateEnabled: false,
 };
 
 function validDir(d) {
@@ -74,15 +77,19 @@ export const MAX_TELEGRAM_BOTS = 3;
 // Filtra + dedupea + recorta al tope. Entradas inválidas se descartan en silencio acá
 // (mismo criterio que validPresets) — la validación que SÍ rechaza con error al usuario
 // vive en el endpoint POST /api/settings, esta es la red de seguridad al leer del disco.
+// Acepta tanto el string plano de antes (versión previa al toggle de habilitar/
+// deshabilitar) como el objeto {url, enabled} actual — así un settings.json viejo migra
+// solo, sin perder los webhooks ya guardados, con enabled=true por defecto.
 function validDiscordWebhooks(list) {
   if (!Array.isArray(list)) return [];
   const seen = new Set();
   const out = [];
   for (const raw of list) {
-    const url = typeof raw === 'string' ? raw.trim() : '';
+    const url = typeof raw === 'string' ? raw.trim() : (typeof raw?.url === 'string' ? raw.url.trim() : '');
     if (!isValidDiscordWebhook(url) || seen.has(url)) continue;
     seen.add(url);
-    out.push(url);
+    const enabled = typeof raw === 'object' && raw !== null && typeof raw.enabled === 'boolean' ? raw.enabled : true;
+    out.push({ url, enabled });
     if (out.length >= MAX_DISCORD_WEBHOOKS) break;
   }
   return out;
@@ -110,6 +117,9 @@ function validTelegramBots(list) {
       chatId: typeof raw.chatId === 'string' ? raw.chatId.trim() : '',
     };
     if (!isValidTelegramBot(bot)) continue;
+    // enabled: default true — bots guardados antes del toggle no tenían este campo,
+    // no deben aparecer deshabilitados de la nada al actualizar.
+    bot.enabled = typeof raw.enabled === 'boolean' ? raw.enabled : true;
     out.push(bot);
     if (out.length >= MAX_TELEGRAM_BOTS) break;
   }
@@ -170,6 +180,7 @@ export function loadSettings() {
       endMessage: validMessage(data.endMessage),
       destinationPresets: validPresets(data.destinationPresets),
       audioSilenceAlertEnabled: data.audioSilenceAlertEnabled === undefined ? true : !!data.audioSilenceAlertEnabled,
+      chatTranslateEnabled: !!data.chatTranslateEnabled,
     };
   } catch (err) {
     console.error('[config] No se pudo leer settings.json:', err.message);

@@ -184,3 +184,22 @@ function createModBtn(userId) {
   };
   return btn;
 }
+
+// ── Traducción de chat (opt-in, ver chatTranslateEnabled en Preferencias) ──────────────
+// La traducción llega por SSE APARTE del mensaje original y un ratito después (ver
+// maybeTranslate() en src/chat.js) — para entonces la fila ya está pintada en pantalla.
+// Esto solo la busca por su data-msg-id (puesto en appendChatMessage()/append() de cada
+// vista, sobre el span que envuelve el texto — nunca el .chat-icon/badge/botones) y le
+// agrega una línea aparte debajo. Si el mensaje original ya se podó del historial visible
+// (chat muy activo, tope de 40/300 mensajes en pantalla) simplemente no encuentra nada y
+// no hace nada — no repinta ni reordena. No vive en el overlay de OBS a propósito: esa
+// vista es de solo lectura para el público, la traducción es para que el streamer LEA su
+// propio chat, no para el escenario.
+function applyTranslation(id, translated) {
+  const body = document.querySelector('.chat-msg-body[data-msg-id="' + CSS.escape(String(id)) + '"]');
+  if (!body || body.querySelector('.chat-translation')) return;
+  const t = document.createElement('span');
+  t.className = 'chat-translation';
+  t.textContent = translated;
+  body.appendChild(t);
+}

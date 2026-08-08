@@ -484,6 +484,10 @@
   .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
     gap: .3rem; padding-right: .2rem; }
   .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
+  /* display:block a propósito: .chat-msg-body es un <span> (flex item de .chat-row), un
+     <div> hijo ahí sería HTML inválido — este span con display:block hace lo mismo
+     (fuerza salto de línea) sin ese problema. Ver applyTranslation() en chat-render.js. */
+  .chat-translation { display: block; font-size: .72rem; font-style: italic; color: var(--muted); margin-top: .1rem; }
   .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
     color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s var(--ease-out);
     padding: 0 2px; display: flex; align-items: center; }
