@@ -60,6 +60,7 @@
     display: flex; gap: .35rem; align-items: flex-start; }
   .row .chat-icon { flex-shrink: 0; margin-top: .15rem; }
   .row strong { margin-right: .3rem; }
+  .chat-translation { display: block; font-size: .75rem; font-style: italic; color: var(--muted); margin-top: .1rem; }
   .chat-emote { height: 1.4em; width: auto; vertical-align: middle; display: inline-block; }
   .empty { color: var(--muted); font-size: .8rem; }
   .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;

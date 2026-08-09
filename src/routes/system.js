@@ -29,7 +29,7 @@ import { validateDestination } from './destinations.js';
 const IMPORTABLE_SETTINGS_FIELDS = [
   'streamKey', 'recArmed', 'fullRecArmed', 'recDuration', 'clipsDir', 'recordingsDir',
   'chatCommandsEnabled', 'discordWebhooks', 'telegramBots', 'liveMessage', 'endMessage',
-  'destinationPresets', 'audioSilenceAlertEnabled',
+  'destinationPresets', 'audioSilenceAlertEnabled', 'chatTranslateEnabled',
 ];
 
 let publicIpCache = null; // { ip, at } — evita golpear el servicio externo en cada carga del panel
@@ -79,6 +79,7 @@ export async function handle(req, res, url, ctx) {
       liveMessage: settings.liveMessage || '',
       endMessage: settings.endMessage || '',
       audioSilenceAlertEnabled: settings.audioSilenceAlertEnabled,
+      chatTranslateEnabled: settings.chatTranslateEnabled,
     });
     return true;
   }
@@ -207,14 +208,22 @@ export async function handle(req, res, url, ctx) {
     const patch = {};
     if ('chatCommandsEnabled' in input) patch.chatCommandsEnabled = !!input.chatCommandsEnabled;
     if ('audioSilenceAlertEnabled' in input) patch.audioSilenceAlertEnabled = !!input.audioSilenceAlertEnabled;
+    if ('chatTranslateEnabled' in input) patch.chatTranslateEnabled = !!input.chatTranslateEnabled;
     if ('discordWebhooks' in input) {
       const list = Array.isArray(input.discordWebhooks) ? input.discordWebhooks : [];
       if (list.length > MAX_DISCORD_WEBHOOKS) {
         json(res, 400, { error: t(`Máximo ${MAX_DISCORD_WEBHOOKS} webhooks de Discord.`) });
         return true;
       }
-      const cleaned = list.map((u) => (typeof u === 'string' ? u.trim() : '')).filter(Boolean);
-      if (cleaned.some((u) => !isValidDiscordWebhook(u))) {
+      // Acepta {url, enabled} (forma actual) o un string plano (compat con lo que
+      // mande un cliente viejo) — enabled default true si no viene o no es booleano.
+      const cleaned = list
+        .map((w) => ({
+          url: typeof w === 'string' ? w.trim() : (typeof w?.url === 'string' ? w.url.trim() : ''),
+          enabled: typeof w === 'object' && w !== null && typeof w.enabled === 'boolean' ? w.enabled : true,
+        }))
+        .filter((w) => w.url);
+      if (cleaned.some((w) => !isValidDiscordWebhook(w.url))) {
         json(res, 400, { error: t('Una de las URLs de Discord no es válida — debe ser https://discord.com/api/webhooks/...') });
         return true;
       }
@@ -227,7 +236,11 @@ export async function handle(req, res, url, ctx) {
         return true;
       }
       const cleaned = list
-        .map((b) => ({ botToken: String(b?.botToken || '').trim(), chatId: String(b?.chatId || '').trim() }))
+        .map((b) => ({
+          botToken: String(b?.botToken || '').trim(),
+          chatId: String(b?.chatId || '').trim(),
+          enabled: typeof b?.enabled === 'boolean' ? b.enabled : true,
+        }))
         .filter((b) => b.botToken || b.chatId);
       if (cleaned.some((b) => !isValidTelegramBot(b))) {
         json(res, 400, { error: t('Uno de los bots de Telegram tiene el token o el chat ID inválido.') });
@@ -245,7 +258,16 @@ export async function handle(req, res, url, ctx) {
       if (msg.length > 2000) { json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') }); return true; }
       patch.endMessage = msg || null;
     }
-    saveSettings(patch);
+    // writeFileSync puede fallar (EBUSY/EPERM) si algo más tiene el archivo abierto un
+    // instante — antivirus, OneDrive, etc., más común en Windows. Sin este try/catch caía
+    // en el catch-all genérico de panel.js ("Error interno del panel"), sin decir qué pasó
+    // de verdad — imposible de diagnosticar a distancia.
+    try {
+      saveSettings(patch);
+    } catch (e) {
+      json(res, 500, { error: t('No se pudo guardar la configuración: ') + e.message });
+      return true;
+    }
     json(res, 200, { ok: true });
     return true;
   }
@@ -271,19 +293,23 @@ export async function handle(req, res, url, ctx) {
   }
 
   // POST /api/notify-test-all  { kind? } -> dispara el mensaje YA GUARDADO (de inicio o de
-  // fin, según kind) a TODOS los canales configurados (Discord + Telegram) de una — botón
-  // "Probar" del modal de mensaje (previsualiza cómo va a quedar en cada uno).
+  // fin, según kind) a TODOS los canales HABILITADOS (Discord + Telegram) de una — botón
+  // "Probar" del modal de mensaje (previsualiza cómo va a quedar en cada uno). Los
+  // deshabilitados se saltan a propósito: probar algo que no se va a mandar en vivo sería
+  // engañoso, no una prueba real de lo que le va a llegar al streamer.
   if (req.method === 'POST' && url.pathname === '/api/notify-test-all') {
     let input;
     try { input = await readBody(req); } catch { input = {}; }
     const kind = input.kind === 'end' ? 'end' : 'start';
     const settings = loadSettings();
+    const activeDiscord = settings.discordWebhooks.filter((w) => w.enabled);
+    const activeTelegram = settings.telegramBots.filter((b) => b.enabled);
     const results = [];
-    for (let i = 0; i < settings.discordWebhooks.length; i++) {
-      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(settings.discordWebhooks[i], kind)) });
+    for (let i = 0; i < activeDiscord.length; i++) {
+      results.push({ platform: 'discord', index: i + 1, ...(await testDiscordWebhook(activeDiscord[i].url, kind)) });
     }
-    for (let i = 0; i < settings.telegramBots.length; i++) {
-      const bot = settings.telegramBots[i];
+    for (let i = 0; i < activeTelegram.length; i++) {
+      const bot = activeTelegram[i];
       results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId, kind)) });
     }
     json(res, 200, { results });

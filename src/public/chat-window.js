@@ -126,6 +126,8 @@ function append(msg) {
     row.appendChild(badge);
   }
   const textWrap = document.createElement('span');
+  textWrap.className = 'chat-msg-body';
+  textWrap.dataset.msgId = msg.id; // ver applyTranslation() en chat-render.js
   const strong = document.createElement('strong');
   strong.style.color = msg.color || '#9147ff';
   strong.textContent = msg.username || '???';
@@ -151,7 +153,11 @@ function append(msg) {
 syncPinnedMessage();
 const es = new EventSource('/api/chat');
 es.onmessage = (e) => {
-  try { append(JSON.parse(e.data)); } catch (err) {}
+  try {
+    const data = JSON.parse(e.data);
+    if (data.type === 'translation') { applyTranslation(data.id, data.translated); return; }
+    append(data);
+  } catch (err) { console.error('[chat-window] no se pudo mostrar el mensaje:', err); }
 };
 
 function renderViewerBar(counts) {

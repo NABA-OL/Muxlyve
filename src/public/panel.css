@@ -242,15 +242,20 @@
      queda fijado por el más alto de los 4 (Sistema, normalmente) aunque esté oculto —
      visibility:hidden sigue contando para el layout, a diferencia de display:none. Así
      el modal no salta de tamaño al cambiar de sección, solo cambia el contenido visible. */
+  /* Sin scrollbar visible a propósito — con "Mostrar barras de scroll: Siempre" en macOS
+     se dibuja gruesa y se monta encima del texto/toggles de la derecha (el padding-right
+     de acá no le alcanza). El scroll con rueda/trackpad sigue andando igual, solo se
+     esconde la barra en sí (scrollbar-width para Firefox, ::-webkit-scrollbar abajo para
+     Electron/Chrome/Safari). */
   .prefs-panels { flex: 1; min-width: 0; max-height: 60vh; overflow-y: auto; padding-right: .25rem;
-    display: grid; }
+    display: grid; scrollbar-width: none; }
+  .prefs-panels::-webkit-scrollbar { display: none; }
   .prefs-panel { grid-area: 1 / 1; opacity: 0; visibility: hidden; pointer-events: none; }
   .prefs-panel.active { opacity: 1; visibility: visible; pointer-events: auto;
     animation: prefsPanelFade .18s var(--ease-out); }
   @keyframes prefsPanelFade { from { opacity: 0; } to { opacity: 1; } }
   .pref-row { display: flex; align-items: center; justify-content: space-between;
-    padding: .5rem 0; border-bottom: 1px solid var(--border); }
-  .pref-row:last-child { border-bottom: none; }
+    padding: .5rem 0; }
   .pref-row label:first-child { font-size: .85rem; color: var(--text); }
   .pref-row .pref-desc { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
   .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
@@ -299,7 +304,7 @@
      del fondo, sube o baja el opacity de acá (1 = shader a máxima intensidad, más bajo =
      más sutil) — screen ya evita que se vea gris a cualquier valor. */
   .about-bg-canvas { position: absolute; inset: 0; z-index: 0; display: block; width: 100%; height: 100%;
-    opacity: .5; mix-blend-mode: screen; }
+    opacity: .35; mix-blend-mode: screen; }
   /* prefs-head (título + X) queda arriba fijo, about-center ocupa el resto y centra
      nombre+versión ahí adentro, about-footer queda pegado abajo — flex:1 en el del medio
      es lo que empuja todo, no hay que tocar la altura de los otros dos a mano. */
@@ -484,6 +489,10 @@
   .chat-box { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column;
     gap: .3rem; padding-right: .2rem; }
   .chat-row { font-size: .8rem; line-height: 1.35; display: flex; gap: .35rem; align-items: flex-start; }
+  /* display:block a propósito: .chat-msg-body es un <span> (flex item de .chat-row), un
+     <div> hijo ahí sería HTML inválido — este span con display:block hace lo mismo
+     (fuerza salto de línea) sin ese problema. Ver applyTranslation() en chat-render.js. */
+  .chat-translation { display: block; font-size: .72rem; font-style: italic; color: var(--muted); margin-top: .1rem; }
   .chat-pin-btn { margin-left: auto; flex-shrink: 0; background: transparent; border: none;
     color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s var(--ease-out);
     padding: 0 2px; display: flex; align-items: center; }

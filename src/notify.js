@@ -40,11 +40,12 @@ async function postToDiscord(webhookUrl, content) {
 // `content` tal cual (negrita, itálica, links) — no hace falta procesarlo acá.
 export async function notifyDiscord(kind = 'start') {
   const { discordWebhooks, liveMessage, endMessage } = loadSettings();
-  if (!discordWebhooks.length) return;
+  const active = discordWebhooks.filter((w) => w.enabled);
+  if (!active.length) return;
   if (Date.now() - lastNotifyAt[kind] < NOTIFY_COOLDOWN_MS) return;
   lastNotifyAt[kind] = Date.now();
   const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
-  const results = await Promise.allSettled(discordWebhooks.map((url) => postToDiscord(url, message)));
+  const results = await Promise.allSettled(active.map((w) => postToDiscord(w.url, message)));
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') console.log(`[notify] Discord #${i + 1} (${kind}) — aviso enviado.`);
     else console.error(`[notify] Discord #${i + 1} (${kind}) — no se pudo avisar —`, r.reason.message);

@@ -73,9 +73,38 @@
         if (hist.length > METRICS_HISTORY_MAX) hist.shift();
         sessionBitrateSum[d.name] = (sessionBitrateSum[d.name] || 0) + d.metrics.bitrate;
         sessionBitrateCount[d.name] = (sessionBitrateCount[d.name] || 0) + 1;
+        checkBitrateTrend(d.name, hist);
       } else {
         delete metricsHistory[d.name];
+        bitrateTrendWarned.delete(d.name);
       }
+    }
+  }
+  // Pronóstico de salud: avisa ANTES de que el bitrate se ponga feo, no cuando ya está mal
+  // (eso ya lo hace el pill "rezagado"/lagging, reactivo). Compara el promedio del primer
+  // tercio de la ventana (~1 min, mismos datos del sparkline) contra el último tercio — una
+  // caída sostenida del 30%+ dispara un aviso nativo UNA vez por racha (bitrateTrendWarned
+  // evita repetirlo cada poll); se limpia solo si se recupera o el destino deja de estar
+  // live. A propósito no se inventa un "te quedás sin banda en X min" — con una ventana de
+  // 1 min y datos ruidosos, una proyección lineal sería más marketing que dato real; se
+  // avisa con el % de caída medido, que sí es honesto.
+  const bitrateTrendWarned = new Set();
+  const BITRATE_TREND_MIN_SAMPLES = 12; // ~24s+ de datos reales antes de opinar
+  const BITRATE_TREND_DROP_PCT = 30;
+  function checkBitrateTrend(name, hist) {
+    if (hist.length < BITRATE_TREND_MIN_SAMPLES) return;
+    const third = Math.floor(hist.length / 3);
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const earlyAvg = avg(hist.slice(0, third));
+    const recentAvg = avg(hist.slice(-third));
+    const dropPct = earlyAvg > 0 ? Math.round((1 - recentAvg / earlyAvg) * 100) : 0;
+    if (dropPct >= BITRATE_TREND_DROP_PCT) {
+      if (!bitrateTrendWarned.has(name)) {
+        bitrateTrendWarned.add(name);
+        window.msApp?.notify?.('Muxlyve', name + ': el bitrate viene bajando (-' + dropPct + '% en el último minuto) — revisa tu conexión.');
+      }
+    } else if (dropPct < 15) {
+      bitrateTrendWarned.delete(name); // se recuperó — puede volver a avisar si cae de nuevo
     }
   }
   function sparkColor(pillCls) {
@@ -976,6 +1005,7 @@
       if (c.version) window._appVersion = c.version;
       $('#chatCmdChk').checked = c.chatCommandsEnabled !== false;
       $('#audioSilenceChk').checked = c.audioSilenceAlertEnabled !== false;
+      $('#chatTranslateChk').checked = !!c.chatTranslateEnabled; // default false, a diferencia de los de arriba
       window._liveMessage = c.liveMessage || '';
       window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
@@ -1456,7 +1486,7 @@
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'webhooks', 'history', 'support', 'license'] : ['clips', 'webhooks', 'history', 'license'];
+    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'history', 'support', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -1518,23 +1548,64 @@
     try { await api('POST', '/api/settings', { audioSilenceAlertEnabled: $('#audioSilenceChk').checked }); }
     catch (e) { toast(e.message, true); }
   }
+  async function toggleChatTranslate() {
+    try { await api('POST', '/api/settings', { chatTranslateEnabled: $('#chatTranslateChk').checked }); }
+    catch (e) { toast(e.message, true); }
+  }
+
+  // ── Cifrado del archivo .mux (exportar/importar) ──────────────────────────────────
+  // AES-256-GCM con clave derivada de una contraseña vía PBKDF2 — Web Crypto nativo del
+  // navegador, sin librerías nuevas. Todo pasa client-side: el server nunca ve la
+  // contraseña ni el archivo cifrado, solo el JSON en claro de siempre (GET/POST
+  // /api/config/export|import no cambian). Sin la contraseña, el archivo .mux no se
+  // puede ni leer ni importar — antes viajaba en JSON plano, legible por cualquiera que
+  // lo consiguiera. GCM además detecta solo (falla el decrypt) un archivo alterado o una
+  // contraseña incorrecta — no hace falta chequear eso a mano.
+  const MUX_PBKDF2_ITERATIONS = 200000;
+  async function deriveExportKey(password, salt) {
+    const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: MUX_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt'],
+    );
+  }
+  function bufToBase64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+  function base64ToBuf(b64) { return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); }
 
   // Exportar/importar configuración (Fase 1 del lote 2, docs/PLAN_FEATURES_LOTE2.md).
-  // Descarga un archivo con destinos + ajustes — GET /api/config/export ya arma el JSON
-  // del motor; acá solo se le agrega quién lo exportó (correo de la licencia, si hay
-  // Electron) y se dispara la descarga vía Blob (sin pedirle nada especial al servidor).
+  // Descarga un .mux (JSON cifrado adentro) con destinos + ajustes — GET /api/config/export
+  // ya arma el JSON del motor; acá se le agrega quién lo exportó (correo de la licencia,
+  // si hay Electron) y se cifra antes de bajar el archivo.
   async function exportConfig() {
     try {
+      const password = await showPrompt('Contraseña para el archivo', 'La vas a necesitar para importarlo — no se puede recuperar si la olvidas', 'password');
+      if (!password) return; // canceló
+      // La pide de nuevo para confirmar — un typo acá sin darse cuenta significa un
+      // archivo que después nunca va a poder abrir con la clave que CREE que puso.
+      const confirmPassword = await showPrompt('Confirma la contraseña', 'Escríbela de nuevo, igual', 'password');
+      if (!confirmPassword) return; // canceló
+      if (confirmPassword !== password) {
+        toast('Las dos contraseñas no coinciden — intenta de nuevo.', true);
+        return;
+      }
       const data = await api('GET', '/api/config/export');
       const info = await window.msLicense?.getInfo().catch(() => null);
       data.license = { email: info?.email || null };
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await deriveExportKey(password, salt);
+      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(data)));
+      const envelope = { muxlyveExport: 1, salt: bufToBase64(salt), iv: bufToBase64(iv), ciphertext: bufToBase64(ciphertext) };
+      const blob = new Blob([JSON.stringify(envelope)], { type: 'application/octet-stream' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'muxlyve-config-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.download = 'muxlyve-config-' + new Date().toISOString().slice(0, 10) + '.mux';
       a.click();
       URL.revokeObjectURL(a.href);
-      toast('Configuración exportada');
+      toast('Configuración exportada y cifrada');
     } catch (e) {
       toast(e.message, true);
     }
@@ -1550,14 +1621,33 @@
   // salta el chequeo — mismo criterio que cualquier otra función Electron-only.
   async function importConfig(file) {
     if (!file) return;
-    let parsed;
+    // Se limpia YA, no solo al terminar bien — si no, reelegir el MISMO archivo tras un
+    // intento fallido (típico: clave equivocada, querés reintentar) nunca dispara
+    // "change" de nuevo (el navegador no repite el evento si el input no cambió de
+    // valor), y el modal de contraseña deja de aparecer hasta reiniciar la app.
+    $('#importConfigInput').value = '';
+    let raw;
     try {
-      parsed = JSON.parse(await file.text());
+      raw = JSON.parse(await file.text());
     } catch {
-      toast('El archivo no es un JSON válido.', true);
+      toast('El archivo no es válido.', true);
       return;
     }
-    if (!Array.isArray(parsed.destinations) || !parsed.settings) {
+    let parsed;
+    if (raw && raw.muxlyveExport === 1 && raw.salt && raw.iv && raw.ciphertext) {
+      const password = await showPrompt('Contraseña del archivo', 'La misma que usaste al exportarlo', 'password');
+      if (!password) return; // canceló
+      try {
+        const key = await deriveExportKey(password, base64ToBuf(raw.salt));
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBuf(raw.iv) }, key, base64ToBuf(raw.ciphertext));
+        parsed = JSON.parse(new TextDecoder().decode(plaintext));
+      } catch {
+        toast('Contraseña incorrecta o archivo dañado.', true);
+        return;
+      }
+    } else if (Array.isArray(raw?.destinations) && raw?.settings) {
+      parsed = raw; // export sin cifrar de antes de este cambio — se sigue aceptando
+    } else {
       toast('El archivo no tiene el formato esperado (¿es un export de Muxlyve?).', true);
       return;
     }
@@ -1574,7 +1664,6 @@
     try {
       await api('POST', '/api/config/import', { destinations: parsed.destinations, settings: parsed.settings });
       toast('Configuración importada');
-      $('#importConfigInput').value = ''; // permite volver a elegir el mismo archivo despues
       refresh();
       loadConfig();
     } catch (e) {
@@ -1594,16 +1683,23 @@
     window._discordWebhooks = list.slice();
     const box = $('#discordWebhooksList');
     box.innerHTML = '';
-    window._discordWebhooks.forEach((url, i) => {
+    window._discordWebhooks.forEach((w, i) => {
       const row = document.createElement('div');
       row.className = 'webhook-row';
       row.innerHTML =
+        '<label class="sys-toggle" title="Habilitar/deshabilitar sin borrar">' +
+          '<input type="checkbox" class="webhook-enabled-chk">' +
+          '<span class="sys-toggle-track"></span>' +
+        '</label>' +
         '<input type="text" placeholder="https://discord.com/api/webhooks/…">' +
         '<button class="browse-btn webhook-test-btn">Probar</button>' +
         '<button class="webhook-del-btn" title="Borrar">✕</button>';
-      const input = row.querySelector('input');
-      input.value = url;
+      const input = row.querySelector('input[type="text"]');
+      const enabledChk = row.querySelector('.webhook-enabled-chk');
+      input.value = w.url;
+      enabledChk.checked = w.enabled;
       input.addEventListener('change', () => updateDiscordWebhook(i, input.value));
+      enabledChk.addEventListener('change', () => toggleDiscordWebhook(i, enabledChk.checked));
       row.querySelector('.webhook-test-btn').addEventListener('click', () => testDiscordWebhookRow(input.value));
       row.querySelector('.webhook-del-btn').addEventListener('click', () => removeDiscordWebhook(i));
       box.appendChild(row);
@@ -1612,13 +1708,18 @@
   }
   function addDiscordWebhookRow() {
     if (window._discordWebhooks.length >= MAX_DISCORD_WEBHOOKS) return;
-    renderDiscordWebhooks([...window._discordWebhooks, '']);
-    const inputs = $('#discordWebhooksList').querySelectorAll('input');
+    renderDiscordWebhooks([...window._discordWebhooks, { url: '', enabled: true }]);
+    const inputs = $('#discordWebhooksList').querySelectorAll('input[type="text"]');
     inputs[inputs.length - 1]?.focus();
   }
   async function updateDiscordWebhook(i, value) {
     const next = window._discordWebhooks.slice();
-    next[i] = value.trim();
+    next[i] = { ...next[i], url: value.trim() };
+    await persistDiscordWebhooks(next);
+  }
+  async function toggleDiscordWebhook(i, enabled) {
+    const next = window._discordWebhooks.slice();
+    next[i] = { ...next[i], enabled };
     await persistDiscordWebhooks(next);
   }
   async function removeDiscordWebhook(i) {
@@ -1626,7 +1727,7 @@
     await persistDiscordWebhooks(next);
   }
   async function persistDiscordWebhooks(list) {
-    const cleaned = list.filter((u) => u && u.trim());
+    const cleaned = list.filter((w) => w.url && w.url.trim());
     try {
       await api('POST', '/api/settings', { discordWebhooks: cleaned });
       renderDiscordWebhooks(cleaned);
@@ -1648,6 +1749,10 @@
       const row = document.createElement('div');
       row.className = 'webhook-row webhook-row-telegram';
       row.innerHTML =
+        '<label class="sys-toggle" title="Habilitar/deshabilitar sin borrar">' +
+          '<input type="checkbox" class="webhook-enabled-chk">' +
+          '<span class="sys-toggle-track"></span>' +
+        '</label>' +
         '<input type="text" class="tg-token" placeholder="Token del bot (@BotFather)">' +
         '<input type="text" class="tg-chat" placeholder="Chat ID">' +
         '<button class="browse-btn webhook-save-btn">Guardar</button>' +
@@ -1655,9 +1760,12 @@
         '<button class="webhook-del-btn" title="Borrar">✕</button>';
       const tokenInput = row.querySelector('.tg-token');
       const chatInput = row.querySelector('.tg-chat');
+      const enabledChk = row.querySelector('.webhook-enabled-chk');
       tokenInput.value = bot.botToken;
       chatInput.value = bot.chatId;
+      enabledChk.checked = bot.enabled;
       row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value));
+      enabledChk.addEventListener('change', () => toggleTelegramBot(i, enabledChk.checked));
       row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value));
       row.querySelector('.webhook-del-btn').addEventListener('click', () => removeTelegramBot(i));
       box.appendChild(row);
@@ -1666,7 +1774,7 @@
   }
   function addTelegramBotRow() {
     if (window._telegramBots.length >= MAX_TELEGRAM_BOTS) return;
-    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '' }]);
+    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '', enabled: true }]);
     const inputs = $('#telegramBotsList').querySelectorAll('.tg-token');
     inputs[inputs.length - 1]?.focus();
   }
@@ -1677,7 +1785,12 @@
   // borrando lo que el usuario acababa de escribir. Ver .webhook-row-telegram en el CSS.
   async function saveTelegramBotRow(i, botToken, chatId) {
     const next = window._telegramBots.slice();
-    next[i] = { botToken: botToken.trim(), chatId: chatId.trim() };
+    next[i] = { ...next[i], botToken: botToken.trim(), chatId: chatId.trim() };
+    await persistTelegramBots(next);
+  }
+  async function toggleTelegramBot(i, enabled) {
+    const next = window._telegramBots.slice();
+    next[i] = { ...next[i], enabled };
     await persistTelegramBots(next);
   }
   async function removeTelegramBot(i) {
@@ -2282,10 +2395,18 @@
   // Reemplaza prompt() nativo — mismo motivo/patrón que showConfirm de arriba. Devuelve
   // el texto (recortado) o null si canceló / lo dejó vacío.
   let resolvePromptFn = null;
-  function showPrompt(title, placeholder) {
+  // type: 'text' (default) o 'password' — este último para la contraseña de
+  // exportar/importar cifrado (ver exportConfig()/importConfig() más abajo), enmascara la
+  // entrada igual que cualquier campo de clave.
+  function showPrompt(title, placeholder, type) {
     $('#promptTitle').textContent = title || 'Confirmar';
     $('#promptInput').value = '';
     $('#promptInput').placeholder = placeholder || '';
+    $('#promptInput').type = type || 'text';
+    // Chrome ignora autocomplete="off" en campos de contraseña a propósito, pero SÍ
+    // respeta "new-password" — sin esto puede ofrecer autocompletar con una clave vieja
+    // guardada de un intento anterior, que no es la que el usuario está tecleando ahora.
+    $('#promptInput').autocomplete = type === 'password' ? 'new-password' : 'off';
     $('#promptOverlay').classList.add('open');
     setTimeout(() => $('#promptInput').focus(), 50);
     return new Promise((resolve) => { resolvePromptFn = resolve; });
@@ -2419,6 +2540,8 @@
       row.appendChild(badge);
     }
     const textWrap = document.createElement('span');
+    textWrap.className = 'chat-msg-body';
+    textWrap.dataset.msgId = msg.id; // ver applyTranslation() en chat-render.js
     const nameEl = document.createElement('strong');
     nameEl.style.color = msg.color || '#9147ff';
     nameEl.textContent = msg.username || '???';
@@ -2454,9 +2577,11 @@
     const es = new EventSource('/api/chat');
     es.onmessage = (e) => {
       try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'translation') { applyTranslation(data.id, data.translated); return; }
         sessionChatMsgCount++; // cuenta todo lo recibido, filtrado o no (ver isChatMessageBlocked)
-        appendChatMessage(JSON.parse(e.data));
-      } catch {}
+        appendChatMessage(data);
+      } catch (err) { console.error('[chat] no se pudo mostrar el mensaje:', err); }
     };
   }
 

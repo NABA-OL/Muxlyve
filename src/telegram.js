@@ -85,12 +85,13 @@ async function postToTelegram(botToken, chatId, text) {
 // caído no frena a los demás (allSettled).
 export async function notifyTelegram(kind = 'start') {
   const { telegramBots, liveMessage, endMessage } = loadSettings();
-  if (!telegramBots.length) return;
+  const active = telegramBots.filter((b) => b.enabled);
+  if (!active.length) return;
   if (Date.now() - lastNotifyAt[kind] < NOTIFY_COOLDOWN_MS) return;
   lastNotifyAt[kind] = Date.now();
   const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   const results = await Promise.allSettled(
-    telegramBots.map((bot) => postToTelegram(bot.botToken, bot.chatId, message)),
+    active.map((bot) => postToTelegram(bot.botToken, bot.chatId, message)),
   );
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') console.log(`[notify] Telegram #${i + 1} (${kind}) — aviso enviado.`);

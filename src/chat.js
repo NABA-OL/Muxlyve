@@ -4,6 +4,8 @@
 // (justinfanNNNNN) — Twitch permite lectura pública sin autenticación, no requiere el
 // OAuth del usuario para esto en absoluto, solo su channel login para saber a qué unirse.
 import { EventEmitter } from 'node:events';
+import { loadSettings } from './settings.js';
+import { translateText } from './translate.js';
 
 export const chatBus = new EventEmitter();
 
@@ -17,10 +19,34 @@ const MAX_RECONNECT_DELAY = 30000;
 let currentLogin = null;
 let manuallyStopped = true;
 
-function pushMessage(msg) {
+// Traducción de chat (opt-in, ver chatTranslateEnabled en settings.js). Solo Twitch trae
+// un id real (tag IRCv3) — Kick/YouTube no, así que acá se le pone uno sintético a
+// cualquiera que no traiga, para poder correlacionar la traducción (que llega un ratito
+// después, ver abajo) con la fila ya pintada en el cliente.
+let nextSyntheticId = 1;
+const SUPPORTED_TRANSLATE_LANGS = new Set(['es', 'en', 'fr', 'pt']);
+function pushMessage(rawMsg) {
+  const msg = rawMsg.id ? rawMsg : { ...rawMsg, id: 'm' + nextSyntheticId++ };
   history.push(msg);
   if (history.length > MAX_HISTORY) history.shift();
   chatBus.emit('message', msg);
+  maybeTranslate(msg);
+}
+
+// Fire-and-forget a propósito — la traducción NUNCA debe atrasar ni poder tumbar el chat
+// en vivo (ver disclaimer completo del riesgo en src/translate.js). Si tarda o falla, el
+// mensaje ya se mostró igual, sin traducción — no hay nada que "reintentar" ni que
+// bloquee. Emite un evento aparte ('message-translated') en vez de re-emitir el mensaje
+// completo: el cliente solo necesita el id + el texto traducido para anotar la fila que
+// ya está pintada.
+function maybeTranslate(msg) {
+  if (!msg.message) return;
+  const target = process.env.APP_LANG;
+  const targetLang = SUPPORTED_TRANSLATE_LANGS.has(target) ? target : 'es';
+  if (!loadSettings().chatTranslateEnabled) return;
+  translateText(msg.message, targetLang)
+    .then((result) => { if (result) chatBus.emit('message-translated', { id: msg.id, translated: result.translated }); })
+    .catch(() => {});
 }
 
 export function getHistory() {

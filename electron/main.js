@@ -199,13 +199,96 @@ function createWindow() {
 
 // ── Bandeja del sistema ──────────────────────────────────────────────────────
 // Aparte de createTray() para poder reconstruir el menú al cambiar de idioma en caliente
-// (setContextMenu de nuevo) sin tener que recrear el ícono de la bandeja entero.
-function buildTrayMenu() {
+// sin tener que recrear el ícono de la bandeja entero.
+//
+// trayDestinationLabel()/buildTrayMenu(state) — quien no se queda mirando la pestaña de
+// Conexiones (cambió al chat, minimizó) igual quiere saber de un vistazo si el stream va
+// bien, y poder apagar/prender un destino sin abrir la ventana. Un renglón por destino
+// CONFIGURADO (con URL, prendido o no) — type:'checkbox' así el propio tilde muestra
+// prendido/apagado, y clickearlo togglea de una (mismo POST /api/destinations que usa el
+// panel). Semáforo 🟢 en vivo, 🟠 conectando/reconectando/rezagado, 🔴 falló — igual que
+// la pestaña de Conexiones. fps real = fps/speed, mismo cálculo que metricsFor() en
+// panel-client.js (el fps que manda FFmpeg en su progreso es throughput, no el fps real
+// del video — ver ese comentario para el detalle).
+function trayDestinationLabel(d) {
+  const es = APP_LANG === 'es';
+  if (!d.enabled) return `${d.name} — ${es ? 'apagado' : 'off'}`;
+  if (d.status === 'live') {
+    const dot = d.lagging ? '🟠' : '🟢';
+    const parts = [];
+    if (typeof d.metrics?.bitrate === 'number') parts.push(`${d.metrics.bitrate} kbps`);
+    if (typeof d.metrics?.fps === 'number') {
+      const realFps = d.metrics.speed ? d.metrics.fps / d.metrics.speed : d.metrics.fps;
+      parts.push(`${Math.round(realFps)} fps`);
+    }
+    return `${dot} ${d.name} — ${parts.join(' · ') || (es ? 'en vivo' : 'live')}`;
+  }
+  if (d.status === 'connecting' || d.status === 'reconnecting') {
+    return `🟠 ${d.name} — ${es ? 'conectando…' : 'connecting…'}`;
+  }
+  if (d.status === 'failed') return `🔴 ${d.name} — ${es ? 'falló' : 'failed'}`;
+  return `${d.name} — ${es ? 'encendido' : 'on'}`; // prendido pero 'stopped' (recién tocado, un instante nomás)
+}
+// Mismo endpoint que usa el panel para el toggle por destino — upsert por nombre, arranca/
+// para el relay en caliente si hay emisión (ver POST /api/destinations en
+// src/routes/destinations.js). Sin Origin header (fetch del proceso principal, no de un
+// navegador) pasa derecho el chequeo CSRF (ver originAllowed() en panel.js), igual que el
+// plugin de Stream Deck. Silencioso a propósito: si falla (ej. intentar prender un destino
+// con URL placeholder sin configurar), el próximo right-click ya refresca con el estado
+// real — no hay dónde mostrar un error en un ítem de menú nativo.
+async function toggleTrayDestination(d) {
+  try {
+    await fetch(`${PANEL_URL}api/destinations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: d.name, url: d.url, enabled: !d.enabled, maxBitrate: d.maxBitrate }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {}
+  refreshTrayMenu();
+}
+function fmtTrayUptime(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const p = (n) => String(n).padStart(2, '0');
+  return (h ? p(h) + ':' : '') + p(m) + ':' + p(sec);
+}
+function buildTrayMenu(state = { live: false, uptime: 0, destinations: [] }) {
+  const es = APP_LANG === 'es';
+  const configured = (state.destinations || []).filter((d) => d.url);
+  const destItems = configured.map((d) => ({
+    label: trayDestinationLabel(d),
+    type: 'checkbox',
+    checked: !!d.enabled,
+    click: () => toggleTrayDestination(d),
+  }));
+  const topItems = state.live
+    ? [{ label: (es ? 'En vivo — ' : 'Live — ') + fmtTrayUptime(state.uptime), enabled: false }, { type: 'separator' }]
+    : [];
+  const body = destItems.length ? destItems : [{ label: es ? 'Sin destinos configurados' : 'No destinations configured', enabled: false }];
   return Menu.buildFromTemplate([
-    { label: APP_LANG === 'es' ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
+    ...topItems,
+    ...body,
     { type: 'separator' },
-    { label: APP_LANG === 'es' ? 'Salir' : 'Quit', click: () => { app.exit(0); } },
+    { label: es ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
+    { type: 'separator' },
+    { label: es ? 'Salir' : 'Quit', click: () => { app.exit(0); } },
   ]);
+}
+// Repinta el menú con datos frescos justo antes de mostrarlo (ver tray.on('right-click')
+// abajo) — un fetch local a 127.0.0.1 tarda unos ms, imperceptible, y así el streamer
+// siempre ve el estado real del momento, no una foto vieja de cuando arrancó la app.
+// Self-fetch al propio panel HTTP (igual que waitForPanel) en vez de importar buildState()
+// directo: mantiene este archivo desacoplado del motor, mismo criterio que el resto de
+// electron/main.js con el engine.
+async function refreshTrayMenu() {
+  if (!tray) return;
+  let state = { live: false, uptime: 0, destinations: [] };
+  try {
+    const res = await fetch(`${PANEL_URL}api/state`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) state = await res.json();
+  } catch {} // panel no responde todavía (arrancando/cerrando) — menú cae al fallback sin datos
+  tray.setContextMenu(buildTrayMenu(state));
 }
 function createTray() {
   if (tray) return;
@@ -223,7 +306,11 @@ function createTray() {
   if (process.platform === 'darwin' && !icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Muxlyve');
-  tray.setContextMenu(buildTrayMenu());
+  tray.setContextMenu(buildTrayMenu()); // fallback estático — se pisa apenas hay un right-click real
+  tray.on('right-click', async () => {
+    await refreshTrayMenu(); // setContextMenu con datos frescos...
+    tray.popUpContextMenu(); // ...y lo muestra ya mismo, no espera al próximo click
+  });
   tray.on('click', () => {
     if (!win) return;
     if (win.isVisible()) win.hide(); else { win.show(); win.focus(); }
@@ -428,7 +515,7 @@ ipcMain.handle('app:set-language', (_, lang) => {
   savePrefs(prefs);
   // El panel se traduce server-side por request — recargar basta, no hace falta reiniciar
   // toda la app. El menú de bandeja sí hay que repintarlo a mano (no vive en un webContents).
-  if (tray) tray.setContextMenu(buildTrayMenu());
+  if (tray) refreshTrayMenu();
   if (win) win.reload();
   if (chatWin && !chatWin.isDestroyed()) chatWin.reload();
   return APP_LANG;
