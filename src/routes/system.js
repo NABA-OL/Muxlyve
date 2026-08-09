@@ -258,7 +258,16 @@ export async function handle(req, res, url, ctx) {
       if (msg.length > 2000) { json(res, 400, { error: t('El mensaje no puede superar los 2000 caracteres.') }); return true; }
       patch.endMessage = msg || null;
     }
-    saveSettings(patch);
+    // writeFileSync puede fallar (EBUSY/EPERM) si algo más tiene el archivo abierto un
+    // instante — antivirus, OneDrive, etc., más común en Windows. Sin este try/catch caía
+    // en el catch-all genérico de panel.js ("Error interno del panel"), sin decir qué pasó
+    // de verdad — imposible de diagnosticar a distancia.
+    try {
+      saveSettings(patch);
+    } catch (e) {
+      json(res, 500, { error: t('No se pudo guardar la configuración: ') + e.message });
+      return true;
+    }
     json(res, 200, { ok: true });
     return true;
   }
