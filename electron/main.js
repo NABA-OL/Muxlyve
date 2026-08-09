@@ -201,15 +201,18 @@ function createWindow() {
 // Aparte de createTray() para poder reconstruir el menú al cambiar de idioma en caliente
 // sin tener que recrear el ícono de la bandeja entero.
 //
-// trayStatusLine()/buildTrayMenu(destinations) — quien no se queda mirando la pestaña de
+// trayDestinationLabel()/buildTrayMenu(state) — quien no se queda mirando la pestaña de
 // Conexiones (cambió al chat, minimizó) igual quiere saber de un vistazo si el stream va
-// bien: un renglón por destino ACTIVO (enabled), con el mismo semáforo verde/ámbar/rojo
-// que la pestaña de Conexiones — 🟢 en vivo, 🟠 conectando/reconectando/rezagado, 🔴
-// falló. Destinos apagados no aparecen (no aportan nada acá). fps real = fps/speed,
-// mismo cálculo que metricsFor() en panel-client.js (el fps que manda FFmpeg en su
-// progreso es throughput, no el fps real del video — ver ese comentario para el detalle).
-function trayStatusLine(d) {
+// bien, y poder apagar/prender un destino sin abrir la ventana. Un renglón por destino
+// CONFIGURADO (con URL, prendido o no) — type:'checkbox' así el propio tilde muestra
+// prendido/apagado, y clickearlo togglea de una (mismo POST /api/destinations que usa el
+// panel). Semáforo 🟢 en vivo, 🟠 conectando/reconectando/rezagado, 🔴 falló — igual que
+// la pestaña de Conexiones. fps real = fps/speed, mismo cálculo que metricsFor() en
+// panel-client.js (el fps que manda FFmpeg en su progreso es throughput, no el fps real
+// del video — ver ese comentario para el detalle).
+function trayDestinationLabel(d) {
   const es = APP_LANG === 'es';
+  if (!d.enabled) return `${d.name} — ${es ? 'apagado' : 'off'}`;
   if (d.status === 'live') {
     const dot = d.lagging ? '🟠' : '🟢';
     const parts = [];
@@ -224,15 +227,48 @@ function trayStatusLine(d) {
     return `🟠 ${d.name} — ${es ? 'conectando…' : 'connecting…'}`;
   }
   if (d.status === 'failed') return `🔴 ${d.name} — ${es ? 'falló' : 'failed'}`;
-  return null; // enabled pero 'stopped' sin nada más que decir — se omite, no aporta
+  return `${d.name} — ${es ? 'encendido' : 'on'}`; // prendido pero 'stopped' (recién tocado, un instante nomás)
 }
-function buildTrayMenu(destinations = []) {
+// Mismo endpoint que usa el panel para el toggle por destino — upsert por nombre, arranca/
+// para el relay en caliente si hay emisión (ver POST /api/destinations en
+// src/routes/destinations.js). Sin Origin header (fetch del proceso principal, no de un
+// navegador) pasa derecho el chequeo CSRF (ver originAllowed() en panel.js), igual que el
+// plugin de Stream Deck. Silencioso a propósito: si falla (ej. intentar prender un destino
+// con URL placeholder sin configurar), el próximo right-click ya refresca con el estado
+// real — no hay dónde mostrar un error en un ítem de menú nativo.
+async function toggleTrayDestination(d) {
+  try {
+    await fetch(`${PANEL_URL}api/destinations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: d.name, url: d.url, enabled: !d.enabled, maxBitrate: d.maxBitrate }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {}
+  refreshTrayMenu();
+}
+function fmtTrayUptime(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const p = (n) => String(n).padStart(2, '0');
+  return (h ? p(h) + ':' : '') + p(m) + ':' + p(sec);
+}
+function buildTrayMenu(state = { live: false, uptime: 0, destinations: [] }) {
   const es = APP_LANG === 'es';
-  const lines = destinations.filter((d) => d.enabled).map(trayStatusLine).filter(Boolean);
-  const statusItems = (lines.length ? lines : [es ? 'Sin transmisión activa' : 'Not streaming'])
-    .map((label) => ({ label, enabled: false }));
+  const configured = (state.destinations || []).filter((d) => d.url);
+  const destItems = configured.map((d) => ({
+    label: trayDestinationLabel(d),
+    type: 'checkbox',
+    checked: !!d.enabled,
+    click: () => toggleTrayDestination(d),
+  }));
+  const topItems = state.live
+    ? [{ label: (es ? 'En vivo — ' : 'Live — ') + fmtTrayUptime(state.uptime), enabled: false }, { type: 'separator' }]
+    : [];
+  const body = destItems.length ? destItems : [{ label: es ? 'Sin destinos configurados' : 'No destinations configured', enabled: false }];
   return Menu.buildFromTemplate([
-    ...statusItems,
+    ...topItems,
+    ...body,
     { type: 'separator' },
     { label: es ? 'Mostrar Muxlyve' : 'Show Muxlyve', click: () => { if (win) { win.show(); win.focus(); } } },
     { type: 'separator' },
@@ -247,12 +283,12 @@ function buildTrayMenu(destinations = []) {
 // electron/main.js con el engine.
 async function refreshTrayMenu() {
   if (!tray) return;
-  let destinations = [];
+  let state = { live: false, uptime: 0, destinations: [] };
   try {
     const res = await fetch(`${PANEL_URL}api/state`, { signal: AbortSignal.timeout(2000) });
-    if (res.ok) destinations = (await res.json()).destinations || [];
+    if (res.ok) state = await res.json();
   } catch {} // panel no responde todavía (arrancando/cerrando) — menú cae al fallback sin datos
-  tray.setContextMenu(buildTrayMenu(destinations));
+  tray.setContextMenu(buildTrayMenu(state));
 }
 function createTray() {
   if (tray) return;

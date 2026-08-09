@@ -341,7 +341,7 @@ export const tMap = {
   // HTML de panel.js (botones/descripción) no tienen esa restricción, pero se dejan igual
   // de limpias por consistencia.
   'Exportar/importar configuración': { en: 'Export/import configuration', fr: 'Exporter/importer la configuration', pt: 'Exportar/importar configuração' },
-  'Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.': { en: 'Destinations and settings in a single file — for backup or migrating machines. Contains your stream keys in plain text, keep it safe.', fr: 'Destinations et reglages dans un seul fichier — pour sauvegarde ou migration de machine. Contient tes cles de diffusion en texte brut, garde-le en lieu sur.', pt: 'Destinos e configurações em um único arquivo — para backup ou migração de máquina. Contém suas chaves de retransmissão em texto simples, guarde-o com cuidado.' },
+  'Destinos y ajustes en un solo archivo .mux cifrado — para backup o migrar de máquina. Te pide una contraseña al exportar; la vas a necesitar de nuevo para importarlo.': { en: 'Destinations and settings in a single encrypted .mux file — for backup or migrating machines. Asks for a password when exporting; you will need it again to import.', fr: 'Destinations et reglages dans un seul fichier .mux chiffre — pour sauvegarde ou migration de machine. Demande un mot de passe a l’export ; il faudra le meme pour importer.', pt: 'Destinos e configurações em um único arquivo .mux criptografado — para backup ou migração de máquina. Pede uma senha ao exportar; você vai precisar dela de novo para importar.' },
   'Exportar': { en: 'Export', fr: 'Exporter', pt: 'Exportar' },
   'Importar': { en: 'Import', fr: 'Importer', pt: 'Importar' },
   'Configuración exportada': { en: 'Configuration exported', fr: 'Configuration exportee', pt: 'Configuração exportada' },
@@ -361,4 +361,17 @@ export const tMap = {
   // Traducción de chat — texto vive en panel.js (HTML backtick), apóstrofos seguros acá.
   'Traducir mensajes del chat': { en: 'Translate chat messages', fr: 'Traduire les messages du chat', pt: 'Traduzir mensagens do chat' },
   'Muestra una traducción debajo de los mensajes que no estén en el idioma de la app. Usa un servicio externo no oficial — puede fallar o dejar de funcionar sin aviso, el chat sigue andando igual si eso pasa.': { en: 'Shows a translation under messages that aren\'t in the app\'s language. Uses an unofficial external service — it can fail or stop working without notice, the chat keeps working the same either way.', fr: 'Affiche une traduction sous les messages qui ne sont pas dans la langue de l\'appli. Utilise un service externe non officiel — il peut échouer ou s\'arrêter sans préavis, le chat continue de fonctionner pareil.', pt: 'Mostra uma tradução abaixo das mensagens que não estejam no idioma do app. Usa um serviço externo não oficial — pode falhar ou parar de funcionar sem aviso, o chat continua funcionando do mesmo jeito.' },
+
+  // Cifrado del export/import (.mux) — estas SÍ viven dentro de panel-client.js (JS de
+  // comilla simple), sin apóstrofo en ningún idioma.
+  'Contraseña para el archivo': { en: 'Password for the file', fr: 'Mot de passe pour le fichier', pt: 'Senha para o arquivo' },
+  'La vas a necesitar para importarlo — no se puede recuperar si la olvidas': { en: 'You will need it to import it back — it cannot be recovered if you forget it', fr: 'Tu en auras besoin pour le reimporter — impossible a recuperer si tu l oublies', pt: 'Você vai precisar dela para importar de novo — não é possível recuperar se você esquecer' },
+  'Contraseña del archivo': { en: 'File password', fr: 'Mot de passe du fichier', pt: 'Senha do arquivo' },
+  'La misma que usaste al exportarlo': { en: 'The same one you used when exporting it', fr: 'Le meme que tu as utilise a l export', pt: 'A mesma que você usou ao exportar' },
+  'Configuración exportada y cifrada': { en: 'Configuration exported and encrypted', fr: 'Configuration exportee et chiffree', pt: 'Configuração exportada e criptografada' },
+  'El archivo no es válido.': { en: 'The file is not valid.', fr: 'Fichier invalide.', pt: 'O arquivo não é válido.' },
+  'Contraseña incorrecta o archivo dañado.': { en: 'Wrong password or corrupted file.', fr: 'Mot de passe incorrect ou fichier corrompu.', pt: 'Senha incorreta ou arquivo corrompido.' },
+  'Confirma la contraseña': { en: 'Confirm the password', fr: 'Confirme le mot de passe', pt: 'Confirme a senha' },
+  'Escríbela de nuevo, igual': { en: 'Type it again, the same way', fr: 'Retape le, a l identique', pt: 'Digite de novo, igual' },
+  'Las dos contraseñas no coinciden — intenta de nuevo.': { en: 'The two passwords do not match — try again.', fr: 'Les deux mots de passe ne correspondent pas — reessaie.', pt: 'As duas senhas não coincidem — tente de novo.' },
 };

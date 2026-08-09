@@ -809,10 +809,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </button>
         <button class="prefs-nav-item" data-tab="license" onclick="switchPrefsTab('license')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>
           </svg>
           <span>Licencia</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="prefs-nav-item" onclick="openAbout()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+          </svg>
+          <span>Acerca de Muxlyve</span>
         </button>
       </nav>
       <div class="prefs-panels">
@@ -890,17 +896,20 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <button onclick="relaunchApp()">Reiniciar ahora</button>
           </div>
           <!-- Exportar/importar configuración (Fase 1 del lote 2,
-               docs/PLAN_FEATURES_LOTE2.md). El chequeo de "¿es tu cuenta?" al importar es
-               Electron-only (window.msLicense) — ver importConfig() en panel-client.js. -->
+               docs/PLAN_FEATURES_LOTE2.md). Se cifra con la contraseña que pidas al
+               exportar (AES-256-GCM, ver exportConfig()/importConfig() en
+               panel-client.js) — sin esa contraseña el .mux no se puede leer ni importar.
+               El chequeo de "¿es tu cuenta?" al importar es Electron-only
+               (window.msLicense). -->
           <div class="pref-row">
             <div>
               <div>Exportar/importar configuración</div>
-              <div class="pref-desc">Destinos y ajustes en un solo archivo — para backup o migrar de máquina. Contiene tus claves de retransmisión en texto plano, guárdalo con cuidado.</div>
+              <div class="pref-desc">Destinos y ajustes en un solo archivo .mux cifrado — para backup o migrar de máquina. Te pide una contraseña al exportar; la vas a necesitar de nuevo para importarlo.</div>
             </div>
             <div style="display:flex;gap:.4rem;flex-shrink:0">
               <button type="button" class="preset-save-btn" onclick="exportConfig()">Exportar</button>
               <button type="button" class="preset-save-btn" onclick="$('#importConfigInput').click()">Importar</button>
-              <input type="file" id="importConfigInput" accept="application/json" style="display:none" onchange="importConfig(this.files[0])">
+              <input type="file" id="importConfigInput" accept=".mux,application/json" style="display:none" onchange="importConfig(this.files[0])">
             </div>
           </div>
         </div>
@@ -960,7 +969,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <span class="sys-toggle-track"></span>
             </label>
           </div>
-          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+          <div class="pref-row" style="margin-top:.85rem">
             <div>
               <div>Avisar si se corta el audio</div>
               <div class="pref-desc">Si no se detecta audio real por 20 segundos seguidos mientras estás en vivo (micrófono desconectado, app de captura caída), muestra una notificación.</div>
@@ -973,7 +982,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <!-- Traducción de chat — apagado por defecto (ver chatTranslateEnabled en
                settings.js): pega a un endpoint no-oficial de Google Translate, no una API
                con SLA. Quien lo prenda lo hace sabiendo que es best-effort. -->
-          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+          <div class="pref-row" style="margin-top:.85rem">
             <div>
               <div>Traducir mensajes del chat</div>
               <div class="pref-desc">Muestra una traducción debajo de los mensajes que no estén en el idioma de la app. Usa un servicio externo no oficial — puede fallar o dejar de funcionar sin aviso, el chat sigue andando igual si eso pasa.</div>
@@ -991,7 +1000,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div id="discordWebhooksList"></div>
             <button type="button" class="preset-save-btn" id="addDiscordWebhookBtn" onclick="addDiscordWebhookRow()" style="margin-top:.4rem">+ Añadir webhook</button>
           </div>
-          <div class="field" style="margin-top:1.3rem;padding-top:1.1rem;border-top:1px solid var(--border)">
+          <div class="field" style="margin-top:1.3rem">
             <label>Bots de Telegram <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
             <div class="pref-desc" style="margin-bottom:.5rem">Crea un bot con @BotFather en Telegram, copia el token, y el chat ID del canal o grupo donde quieres enviar el aviso.</div>
             <div id="telegramBotsList"></div>
@@ -1012,7 +1021,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             </div>
             <button class="danger-btn" onclick="openReport()">Reportar</button>
           </div>
-          <div class="pref-row" style="margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border)">
+          <div class="pref-row" style="margin-top:.85rem">
             <div>
               <div>Enviar una idea</div>
               <div class="pref-desc">¿Qué te gustaría ver en Muxlyve?</div>
@@ -1044,7 +1053,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <button class="lic-manage-btn" id="licManageBtn"
               onclick="window.open('https://users.freemius.com','_blank')"
               style="display:none">Gestionar suscripción ↗</button>
-            <button class="lic-manage-btn" onclick="openAbout()">Acerca de Muxlyve</button>
             <button class="lic-danger-btn" onclick="releaseLic()">Liberar este equipo</button>
             <p class="lic-note">Podrás activar la app en otro equipo. Necesitarás tu clave para volver a activarla aquí.</p>
           </div>
@@ -1171,7 +1179,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <button class="prefs-close" onclick="resolvePrompt(null)">✕</button>
     </div>
     <div class="field">
-      <input type="text" id="promptInput" onkeydown="if(event.key==='Enter')resolvePrompt($('#promptInput').value)">
+      <input type="text" id="promptInput" autocomplete="off" onkeydown="if(event.key==='Enter')resolvePrompt($('#promptInput').value)">
     </div>
     <div class="about-btn-row" style="margin-top:1rem">
       <button class="about-close-btn" onclick="resolvePrompt(null)">Cancelar</button>

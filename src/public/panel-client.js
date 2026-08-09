@@ -1553,22 +1553,59 @@
     catch (e) { toast(e.message, true); }
   }
 
+  // ── Cifrado del archivo .mux (exportar/importar) ──────────────────────────────────
+  // AES-256-GCM con clave derivada de una contraseña vía PBKDF2 — Web Crypto nativo del
+  // navegador, sin librerías nuevas. Todo pasa client-side: el server nunca ve la
+  // contraseña ni el archivo cifrado, solo el JSON en claro de siempre (GET/POST
+  // /api/config/export|import no cambian). Sin la contraseña, el archivo .mux no se
+  // puede ni leer ni importar — antes viajaba en JSON plano, legible por cualquiera que
+  // lo consiguiera. GCM además detecta solo (falla el decrypt) un archivo alterado o una
+  // contraseña incorrecta — no hace falta chequear eso a mano.
+  const MUX_PBKDF2_ITERATIONS = 200000;
+  async function deriveExportKey(password, salt) {
+    const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: MUX_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt'],
+    );
+  }
+  function bufToBase64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+  function base64ToBuf(b64) { return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); }
+
   // Exportar/importar configuración (Fase 1 del lote 2, docs/PLAN_FEATURES_LOTE2.md).
-  // Descarga un archivo con destinos + ajustes — GET /api/config/export ya arma el JSON
-  // del motor; acá solo se le agrega quién lo exportó (correo de la licencia, si hay
-  // Electron) y se dispara la descarga vía Blob (sin pedirle nada especial al servidor).
+  // Descarga un .mux (JSON cifrado adentro) con destinos + ajustes — GET /api/config/export
+  // ya arma el JSON del motor; acá se le agrega quién lo exportó (correo de la licencia,
+  // si hay Electron) y se cifra antes de bajar el archivo.
   async function exportConfig() {
     try {
+      const password = await showPrompt('Contraseña para el archivo', 'La vas a necesitar para importarlo — no se puede recuperar si la olvidas', 'password');
+      if (!password) return; // canceló
+      // La pide de nuevo para confirmar — un typo acá sin darse cuenta significa un
+      // archivo que después nunca va a poder abrir con la clave que CREE que puso.
+      const confirmPassword = await showPrompt('Confirma la contraseña', 'Escríbela de nuevo, igual', 'password');
+      if (!confirmPassword) return; // canceló
+      if (confirmPassword !== password) {
+        toast('Las dos contraseñas no coinciden — intenta de nuevo.', true);
+        return;
+      }
       const data = await api('GET', '/api/config/export');
       const info = await window.msLicense?.getInfo().catch(() => null);
       data.license = { email: info?.email || null };
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await deriveExportKey(password, salt);
+      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(data)));
+      const envelope = { muxlyveExport: 1, salt: bufToBase64(salt), iv: bufToBase64(iv), ciphertext: bufToBase64(ciphertext) };
+      const blob = new Blob([JSON.stringify(envelope)], { type: 'application/octet-stream' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'muxlyve-config-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.download = 'muxlyve-config-' + new Date().toISOString().slice(0, 10) + '.mux';
       a.click();
       URL.revokeObjectURL(a.href);
-      toast('Configuración exportada');
+      toast('Configuración exportada y cifrada');
     } catch (e) {
       toast(e.message, true);
     }
@@ -1584,14 +1621,33 @@
   // salta el chequeo — mismo criterio que cualquier otra función Electron-only.
   async function importConfig(file) {
     if (!file) return;
-    let parsed;
+    // Se limpia YA, no solo al terminar bien — si no, reelegir el MISMO archivo tras un
+    // intento fallido (típico: clave equivocada, querés reintentar) nunca dispara
+    // "change" de nuevo (el navegador no repite el evento si el input no cambió de
+    // valor), y el modal de contraseña deja de aparecer hasta reiniciar la app.
+    $('#importConfigInput').value = '';
+    let raw;
     try {
-      parsed = JSON.parse(await file.text());
+      raw = JSON.parse(await file.text());
     } catch {
-      toast('El archivo no es un JSON válido.', true);
+      toast('El archivo no es válido.', true);
       return;
     }
-    if (!Array.isArray(parsed.destinations) || !parsed.settings) {
+    let parsed;
+    if (raw && raw.muxlyveExport === 1 && raw.salt && raw.iv && raw.ciphertext) {
+      const password = await showPrompt('Contraseña del archivo', 'La misma que usaste al exportarlo', 'password');
+      if (!password) return; // canceló
+      try {
+        const key = await deriveExportKey(password, base64ToBuf(raw.salt));
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBuf(raw.iv) }, key, base64ToBuf(raw.ciphertext));
+        parsed = JSON.parse(new TextDecoder().decode(plaintext));
+      } catch {
+        toast('Contraseña incorrecta o archivo dañado.', true);
+        return;
+      }
+    } else if (Array.isArray(raw?.destinations) && raw?.settings) {
+      parsed = raw; // export sin cifrar de antes de este cambio — se sigue aceptando
+    } else {
       toast('El archivo no tiene el formato esperado (¿es un export de Muxlyve?).', true);
       return;
     }
@@ -1608,7 +1664,6 @@
     try {
       await api('POST', '/api/config/import', { destinations: parsed.destinations, settings: parsed.settings });
       toast('Configuración importada');
-      $('#importConfigInput').value = ''; // permite volver a elegir el mismo archivo despues
       refresh();
       loadConfig();
     } catch (e) {
@@ -2340,10 +2395,18 @@
   // Reemplaza prompt() nativo — mismo motivo/patrón que showConfirm de arriba. Devuelve
   // el texto (recortado) o null si canceló / lo dejó vacío.
   let resolvePromptFn = null;
-  function showPrompt(title, placeholder) {
+  // type: 'text' (default) o 'password' — este último para la contraseña de
+  // exportar/importar cifrado (ver exportConfig()/importConfig() más abajo), enmascara la
+  // entrada igual que cualquier campo de clave.
+  function showPrompt(title, placeholder, type) {
     $('#promptTitle').textContent = title || 'Confirmar';
     $('#promptInput').value = '';
     $('#promptInput').placeholder = placeholder || '';
+    $('#promptInput').type = type || 'text';
+    // Chrome ignora autocomplete="off" en campos de contraseña a propósito, pero SÍ
+    // respeta "new-password" — sin esto puede ofrecer autocompletar con una clave vieja
+    // guardada de un intento anterior, que no es la que el usuario está tecleando ahora.
+    $('#promptInput').autocomplete = type === 'password' ? 'new-password' : 'off';
     $('#promptOverlay').classList.add('open');
     setTimeout(() => $('#promptInput').focus(), 50);
     return new Promise((resolve) => { resolvePromptFn = resolve; });

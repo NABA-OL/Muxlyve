@@ -242,15 +242,20 @@
      queda fijado por el más alto de los 4 (Sistema, normalmente) aunque esté oculto —
      visibility:hidden sigue contando para el layout, a diferencia de display:none. Así
      el modal no salta de tamaño al cambiar de sección, solo cambia el contenido visible. */
+  /* Sin scrollbar visible a propósito — con "Mostrar barras de scroll: Siempre" en macOS
+     se dibuja gruesa y se monta encima del texto/toggles de la derecha (el padding-right
+     de acá no le alcanza). El scroll con rueda/trackpad sigue andando igual, solo se
+     esconde la barra en sí (scrollbar-width para Firefox, ::-webkit-scrollbar abajo para
+     Electron/Chrome/Safari). */
   .prefs-panels { flex: 1; min-width: 0; max-height: 60vh; overflow-y: auto; padding-right: .25rem;
-    display: grid; }
+    display: grid; scrollbar-width: none; }
+  .prefs-panels::-webkit-scrollbar { display: none; }
   .prefs-panel { grid-area: 1 / 1; opacity: 0; visibility: hidden; pointer-events: none; }
   .prefs-panel.active { opacity: 1; visibility: visible; pointer-events: auto;
     animation: prefsPanelFade .18s var(--ease-out); }
   @keyframes prefsPanelFade { from { opacity: 0; } to { opacity: 1; } }
   .pref-row { display: flex; align-items: center; justify-content: space-between;
-    padding: .5rem 0; border-bottom: 1px solid var(--border); }
-  .pref-row:last-child { border-bottom: none; }
+    padding: .5rem 0; }
   .pref-row label:first-child { font-size: .85rem; color: var(--text); }
   .pref-row .pref-desc { font-size: .72rem; color: var(--muted); margin-top: .15rem; }
   .sys-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
