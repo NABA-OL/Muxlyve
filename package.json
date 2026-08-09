@@ -71,6 +71,7 @@
       "icon": "build/icon-muxlyve.ico"
     },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowElevation": true,
