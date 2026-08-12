@@ -85,7 +85,15 @@ let splash = null;
 let tray = null;
 
 // ── Splash screen ─────────────────────────────────────────────────────────────
+// El motor arranca tan rápido que sin este piso el splash cerraba a mitad de la
+// animación de entrada (ícono/título ni terminaban de aparecer) — waitForPanel()
+// resolvía casi al instante y finishLoad() interrumpía todo de una. MIN_SPLASH_MS
+// garantiza que se vea completo sin importar cuánto tarde el motor en responder.
+const MIN_SPLASH_MS = 2000;
+let splashShownAt = 0;
+
 function showSplash() {
+  splashShownAt = Date.now();
   splash = new BrowserWindow({
     width: 460, height: 310,
     frame: false,
@@ -719,6 +727,8 @@ app.whenReady().then(async () => {
   }
   // Señal al splash: completa animación a 100%, luego fade.
   if (splash) {
+    const elapsed = Date.now() - splashShownAt;
+    if (elapsed < MIN_SPLASH_MS) await new Promise(r => setTimeout(r, MIN_SPLASH_MS - elapsed));
     splash.webContents.executeJavaScript('window.finishLoad && window.finishLoad()').catch(() => {});
     await new Promise(r => setTimeout(r, 1050)); // 500ms barra + 300ms hold + margen
   }
