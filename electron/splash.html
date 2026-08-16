@@ -73,6 +73,14 @@
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
   .accent { color: #7c5cff; }
+  /* Saludo con nickname — solo aparece si electron/main.js mandó ?nickname= (ver script
+     abajo). Sin nickname el elemento queda vacío y con display:none, cero espacio. */
+  .greeting {
+    display: none;
+    font-size: .78rem; color: #8b949e; letter-spacing: .02em;
+    margin-bottom: 18px;
+    animation: fade-in .4s .5s ease both;
+  }
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -112,6 +120,7 @@
     <span class="letter accent" style="animation-delay:.25s">v</span>
     <span class="letter accent" style="animation-delay:.30s">e</span>
   </div>
+  <div class="greeting" id="greeting"></div>
   <div class="spinner-wrap"><div class="spinner"></div></div>
 </div>
 <script>
@@ -119,6 +128,14 @@ window.finishLoad = function() {
   // Sin barra que completar — el círculo gira hasta que el body se desvanece.
   setTimeout(function() { document.body.style.opacity = '0'; }, 650);
 };
+
+(function() {
+  var nickname = new URLSearchParams(window.location.search).get('nickname');
+  if (!nickname) return;
+  var el = document.getElementById('greeting');
+  el.textContent = '¡Hola, ' + nickname + '!';
+  el.style.display = 'block';
+})();
 </script>
 <script type="module">
   // Import relativo a este archivo (../src/public/hero-bg.js) — el splash carga por

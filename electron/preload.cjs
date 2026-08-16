@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('msLicense', {
   release:   ()    => ipcRenderer.invoke('license:release'),
   getInfo:   ()    => ipcRenderer.invoke('license:info'),
   getStatus: ()    => ipcRenderer.invoke('license:status'),
+  setNickname: (nickname) => ipcRenderer.invoke('license:set-nickname', nickname),
+  setAvatar: (imageBase64, mimeType) => ipcRenderer.invoke('license:set-avatar', imageBase64, mimeType),
+  removeAvatar: () => ipcRenderer.invoke('license:remove-avatar'),
 });
 contextBridge.exposeInMainWorld('msOAuth', {
   connect:    (platform) => ipcRenderer.invoke('oauth:connect', platform),

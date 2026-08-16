@@ -85,9 +85,17 @@ async function apiPost(endpoint, body) {
 }
 
 // Contrato esperado del backend:
-//   POST /api/licenses/activate  → { valid, token, email }
-//   POST /api/licenses/validate  → { valid, reason? }
+//   POST /api/licenses/activate  → { valid, token, email, name?, nickname?, avatarUrl? }
+//   POST /api/licenses/validate  → { valid, reason?, name?, nickname?, avatarUrl? }
 //   POST /api/licenses/release   → { ok }
+//   POST /api/licenses/nickname/set → { key, token, machineId, nickname } → { ok, nickname } | { ok:false, error }
+//   POST /api/licenses/avatar/set   → { key, token, machineId, imageBase64, mimeType } → { ok, avatarUrl } | { ok:false, error }
+//   POST /api/licenses/avatar/remove → { key, token, machineId } → { ok }
+// name = nombre real capturado por Freemius en la compra (solo lectura acá). nickname =
+// como el usuario quiere que le llamemos, editable desde Preferencias → Perfil — separado
+// a propósito (ver conversación: "me puedo llamar Nicolás pero mi nickname puede ser NABAOL").
+// avatarUrl = URL pública de la foto de perfil que devuelve el backend tras subirla (el
+// storage real vive en la web, acá solo se cachea la URL).
 
 export async function checkLicense({ isPackaged }) {
   if (!isPackaged && process.env.MS_FORCE_LICENSE !== "1")
@@ -114,6 +122,9 @@ export async function checkLicense({ isPackaged }) {
         status: newStatus,
         expiresAt: "expiresAt" in result ? result.expiresAt : stored.expiresAt,
         renewsAt: "renewsAt" in result ? result.renewsAt : stored.renewsAt,
+        name: "name" in result ? result.name : stored.name,
+        nickname: "nickname" in result ? result.nickname : stored.nickname,
+        avatarUrl: "avatarUrl" in result ? result.avatarUrl : stored.avatarUrl,
       });
       if (newStatus === "cancelled") {
         return { unlocked: false, reason: "subscription-cancelled" };
@@ -166,6 +177,9 @@ export async function activateLicense(key) {
         renewsAt: result.renewsAt ?? null,
         activatedAt: now,
         validatedAt: now,
+        name: result.name || "",
+        nickname: result.nickname || "",
+        avatarUrl: result.avatarUrl || "",
       });
       return { ok: true, email: result.email || "" };
     }
@@ -256,7 +270,78 @@ export function getLicenseInfo() {
     renewsAt: stored.renewsAt || null,
     activatedAt: stored.activatedAt,
     machineId: getMachineId(),
+    name: stored.name || "",
+    nickname: stored.nickname || "",
+    avatarUrl: stored.avatarUrl || "",
   };
+}
+
+const NICKNAME_RE = /^.{1,24}$/;
+
+// Guarda el nickname en la web (fuente de verdad, para que aparezca en otro equipo con la
+// misma licencia) y en caché local (license.enc) — así getLicenseInfo() no pega a la red
+// cada vez que el panel lo muestra.
+export async function setNickname(nickname) {
+  const trimmed = typeof nickname === "string" ? nickname.trim() : "";
+  if (!NICKNAME_RE.test(trimmed)) {
+    return { ok: false, error: "El nickname debe tener entre 1 y 24 caracteres." };
+  }
+  const stored = loadLicense();
+  if (!stored) return { ok: false, error: "No hay licencia activa." };
+  try {
+    const result = await apiPost("/api/licenses/nickname/set", {
+      key: stored.key,
+      token: stored.token,
+      machineId: getMachineId(),
+      nickname: trimmed,
+    });
+    if (!result.ok) return { ok: false, error: result.error || "No se pudo guardar el nickname." };
+    saveLicense({ ...stored, nickname: result.nickname ?? trimmed });
+    return { ok: true, nickname: result.nickname ?? trimmed };
+  } catch (err) {
+    return { ok: false, error: err.data?.error || err.message || "No se pudo conectar al servidor." };
+  }
+}
+
+// imageBase64: SIN el prefijo "data:image/...;base64," — solo los datos. El renderer
+// (panel-client.js) ya redimensiona a 256x256 antes de mandar, así que esto nunca sube
+// un archivo enorme sin querer.
+export async function setAvatar(imageBase64, mimeType) {
+  if (typeof imageBase64 !== "string" || !imageBase64) {
+    return { ok: false, error: "Imagen inválida." };
+  }
+  const stored = loadLicense();
+  if (!stored) return { ok: false, error: "No hay licencia activa." };
+  try {
+    const result = await apiPost("/api/licenses/avatar/set", {
+      key: stored.key,
+      token: stored.token,
+      machineId: getMachineId(),
+      imageBase64,
+      mimeType: mimeType || "image/jpeg",
+    });
+    if (!result.ok) return { ok: false, error: result.error || "No se pudo subir la foto." };
+    saveLicense({ ...stored, avatarUrl: result.avatarUrl || "" });
+    return { ok: true, avatarUrl: result.avatarUrl || "" };
+  } catch (err) {
+    return { ok: false, error: err.data?.error || err.message || "No se pudo conectar al servidor." };
+  }
+}
+
+export async function removeAvatar() {
+  const stored = loadLicense();
+  if (!stored) return { ok: false, error: "No hay licencia activa." };
+  try {
+    await apiPost("/api/licenses/avatar/remove", {
+      key: stored.key,
+      token: stored.token,
+      machineId: getMachineId(),
+    });
+  } catch {
+    // Igual que releaseLicense: limpiar localmente aunque el backend falle.
+  }
+  saveLicense({ ...stored, avatarUrl: "" });
+  return { ok: true };
 }
 
 export async function refreshLicenseStatus() {

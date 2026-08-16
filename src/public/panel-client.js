@@ -355,10 +355,13 @@
     if (state.live) sessionLastUptime = state.uptime;
     if (!wasLive && state.live) {
       resetSessionStats();
+      window.msApp?.notify?.('Muxlyve', window._nickname ? `¡Estás en vivo, ${window._nickname}!` : '¡Ya estás en vivo!');
     }
     if (wasLive && !state.live) showSessionSummary();
     $('#liveDot').className = 'dot' + (state.live ? ' on' : '');
-    $('#liveTxt').textContent = state.live ? 'En vivo' : 'esperando señal';
+    $('#liveTxt').textContent = state.live
+      ? 'En vivo'
+      : (window._nickname ? `Hola, ${window._nickname}` : 'esperando señal');
     $('#uptime').textContent = state.live ? fmtUptime(state.uptime) : '';
     $('#videoWrap').classList.toggle('live', state.live);
     updatePreview(state.live);
@@ -1486,7 +1489,8 @@
     const hasElectron = !!window.msApp;
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'history', 'support', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
+    $('#prefsNavProfile').style.display = hasElectron ? '' : 'none';
+    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'history', 'support', 'profile', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -1945,6 +1949,10 @@
     if (!info) { $('#licEmail').textContent = '—'; return; }
 
     $('#licEmail').textContent = info.email || '—';
+    window._nickname = info.nickname || '';
+    window._licName = info.name || '';
+    $('#licNicknameInput').value = window._nickname;
+    renderAvatar(info.avatarUrl || '');
 
     const planLabels = { monthly: 'Mensual', annual: 'Anual', lifetime: 'Vitalicio' };
     $('#licPlan').textContent = planLabels[info.plan] || info.plan || 'Vitalicio';
@@ -1975,6 +1983,134 @@
       : '—';
 
     $('#licManageBtn').style.display = info.plan !== 'lifetime' ? '' : 'none';
+  }
+
+  function renderAvatar(url) {
+    window._avatarUrl = url || '';
+    const img = $('#profileAvatarImg');
+    const placeholder = $('#profileAvatarPlaceholder');
+    const removeBtn = $('#profileAvatarRemoveBtn');
+    if (url) {
+      img.src = url;
+      img.style.display = 'block';
+      placeholder.style.display = 'none';
+      removeBtn.style.display = '';
+    } else {
+      img.removeAttribute('src');
+      img.style.display = 'none';
+      placeholder.style.display = 'flex';
+      removeBtn.style.display = 'none';
+    }
+    // Mismo estado, reflejado en el botón redondo del rail (fuera del modal de Preferencias).
+    const sideImg = $('#sidebarAvatarImg');
+    const sidePlaceholder = $('#sidebarAvatarPlaceholder');
+    if (url) {
+      sideImg.src = url;
+      sideImg.style.display = 'block';
+      sidePlaceholder.style.display = 'none';
+    } else {
+      sideImg.removeAttribute('src');
+      sideImg.style.display = 'none';
+      sidePlaceholder.style.display = 'block';
+    }
+  }
+
+  async function openProfile() {
+    await openPrefs();
+    switchPrefsTab('profile');
+  }
+
+  const AVATAR_MAX_PX = 256; // lado máximo tras redimensionar — mantiene el upload liviano
+  // Redimensiona en el canvas ANTES de mandar — nunca sube el archivo original tal cual
+  // (podría pesar varios MB de una foto de celular), siempre manda como mucho 256x256 JPEG.
+  function resizeImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+        img.onload = () => {
+          const scale = Math.min(1, AVATAR_MAX_PX / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          resolve(dataUrl.split(',')[1]); // sin el prefijo data:image/...;base64,
+        };
+        // data: URL, no blob: — la CSP del panel (img-src 'self' data: https:) no admite
+        // blob:, así que URL.createObjectURL() acá quedaba bloqueado en silencio (onerror).
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onAvatarFileChosen(event) {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // permite elegir el mismo archivo dos veces seguidas
+    if (!file) return;
+    let base64;
+    try { base64 = await resizeImageFile(file); }
+    catch (e) { toast(e.message, true); return; }
+    const result = await window.msLicense?.setAvatar(base64, 'image/jpeg').catch((e) => ({ ok: false, error: e.message }));
+    if (result?.ok) { renderAvatar(result.avatarUrl); toast('Foto de perfil actualizada.'); }
+    else toast(result?.error || 'No se pudo subir la foto.', true);
+  }
+
+  async function removeAvatarPic() {
+    const result = await window.msLicense?.removeAvatar().catch((e) => ({ ok: false, error: e.message }));
+    if (result?.ok) { renderAvatar(''); toast('Foto de perfil quitada.'); }
+    else toast(result?.error || 'No se pudo quitar la foto.', true);
+  }
+
+  async function saveNickname() {
+    const nickname = $('#licNicknameInput').value.trim();
+    if (!nickname) { toast('Escribe un nickname.', true); return; }
+    const result = await window.msLicense?.setNickname(nickname).catch((e) => ({ ok: false, error: e.message }));
+    if (result?.ok) {
+      window._nickname = result.nickname ?? nickname;
+      $('#licNicknameInput').value = window._nickname;
+      toast('Nickname guardado.');
+    } else {
+      toast(result?.error || 'No se pudo guardar el nickname.', true);
+    }
+  }
+
+  // Se llama una sola vez al arrancar (ver bootstrap al final del archivo) — si la
+  // licencia todavía no tiene nickname, saluda por el nombre real (Freemius, "name") y lo
+  // pide. Cerrar sin completar no bloquea nada, se puede poner después desde Preferencias.
+  async function checkNicknamePrompt() {
+    if (!window.msLicense) return; // headless/dev sin Electron — no hay licencia que chequear
+    const info = await window.msLicense.getStatus().catch(() => window.msLicense.getInfo()).catch(() => null);
+    if (!info) return;
+    // Siempre cachear acá, no solo cuando falta nickname — header/tray/notificaciones
+    // leen window._nickname desde el arranque, no solo cuando se abre Preferencias.
+    window._nickname = info.nickname || '';
+    window._licName = info.name || '';
+    $('#avatarBtn').style.display = '';
+    renderAvatar(info.avatarUrl || '');
+    if (info.nickname) return;
+    const firstName = info.name ? info.name.trim().split(/\s+/)[0] : '';
+    $('#nicknameGreetTitle').textContent = firstName ? `¡Hola, ${firstName}!` : '¡Hola!';
+    $('#nicknameOverlay').classList.add('open');
+  }
+  function closeNicknamePrompt() { $('#nicknameOverlay').classList.remove('open'); }
+  async function confirmNickname() {
+    const nickname = $('#nicknameModalInput').value.trim();
+    if (!nickname) { toast('Escribe un nickname.', true); return; }
+    const result = await window.msLicense?.setNickname(nickname).catch((e) => ({ ok: false, error: e.message }));
+    if (result?.ok) {
+      window._nickname = result.nickname ?? nickname;
+      const input = $('#licNicknameInput');
+      if (input) input.value = window._nickname;
+      closeNicknamePrompt();
+      toast(`¡Listo, ${window._nickname}!`);
+    } else {
+      toast(result?.error || 'No se pudo guardar el nickname.', true);
+    }
   }
 
   // Fondo shader del modal Acerca de (ver hero-bg.js) — import() dinámico, no un
@@ -2049,6 +2185,8 @@
   }
   function closeSessionSummary() { $('#summaryOverlay').classList.remove('open'); }
   function showSessionSummary() {
+    const title = $('#summaryTitle');
+    title.textContent = window._nickname ? `${window._nickname}, este fue tu resumen de hoy` : 'Resumen del stream';
     const body = $('#summaryBody');
     body.innerHTML = '';
     body.appendChild(summaryRow('Duración', fmtUptime(sessionLastUptime)));
@@ -2614,6 +2752,7 @@
   refresh();
   loadAuthStatus();
   loadPresets();
+  checkNicknamePrompt();
   showSidebarTab('chat'); // arranca siempre mostrando el chat
   connectChatStream();
   pollViewers();

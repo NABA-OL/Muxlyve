@@ -12,6 +12,9 @@ import {
   releaseLicense,
   getLicenseInfo,
   refreshLicenseStatus,
+  setNickname,
+  setAvatar,
+  removeAvatar,
 } from './license.js';
 import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle, checkLiveTokens } from './oauth.js';
 import { initUpdater, checkForUpdatesManually } from './updater.js';
@@ -105,7 +108,10 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG, version: app.getVersion() } });
+  // nickname ya está en caché local (checkLicense() corrió antes que esto, ver
+  // app.whenReady) — nunca pega a la red acá, solo lee lo que ya se guardó.
+  const nickname = getLicenseInfo()?.nickname || '';
+  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG, version: app.getVersion(), nickname } });
 }
 
 function closeSplash() {
@@ -176,6 +182,17 @@ function titleBarConfig(height = TITLEBAR_HEIGHT, isDark = true) {
   return {}; // otros: barra nativa normal, sin fundir.
 }
 
+// Título de ventana + tooltip de bandeja con el nickname, ej. "Muxlyve — NABA-OL". Se
+// llama tras cada carga de página (la ventana principal es una SPA, el panel nunca vuelve
+// a navegar después del load inicial, así que esto no compite con re-renders) y de nuevo
+// si el nickname cambia desde Preferencias → Licencia (ver license:set-nickname abajo).
+function updateBrandedTitle() {
+  const nickname = getLicenseInfo()?.nickname || '';
+  const title = nickname ? `Muxlyve — ${nickname}` : 'Muxlyve';
+  if (win && !win.isDestroyed()) win.setTitle(title);
+  if (tray) tray.setToolTip(title);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200, height: 860, minWidth: 900, minHeight: 600,
@@ -192,6 +209,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   win.once('ready-to-show', () => { if (!START_HIDDEN) win.show(); });
+  win.webContents.on('did-finish-load', updateBrandedTitle);
   win.loadURL(PANEL_URL);
   // Ajuste independiente de "iniciar minimizado" — si está activo, cerrar con la X oculta
   // a la bandeja en vez de salir. Solo se sale de verdad desde el menú de la bandeja
@@ -313,7 +331,7 @@ function createTray() {
   const icon = base.isEmpty() ? base : base.resize({ width: 20, height: 20 });
   if (process.platform === 'darwin' && !icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip('Muxlyve');
+  updateBrandedTitle(); // tooltip con nickname si ya está cacheado — fallback 'Muxlyve' si no
   tray.setContextMenu(buildTrayMenu()); // fallback estático — se pisa apenas hay un right-click real
   tray.on('right-click', async () => {
     await refreshTrayMenu(); // setContextMenu con datos frescos...
@@ -396,6 +414,15 @@ ipcMain.handle('license:activate', async (_, key) => {
   if (result.ok) resolveActivation();
   return result;
 });
+
+ipcMain.handle('license:set-nickname', async (_, nickname) => {
+  const result = await setNickname(nickname);
+  if (result.ok) updateBrandedTitle();
+  return result;
+});
+
+ipcMain.handle('license:set-avatar', (_, imageBase64, mimeType) => setAvatar(imageBase64, mimeType));
+ipcMain.handle('license:remove-avatar', () => removeAvatar());
 
 ipcMain.handle('license:release', async () => {
   const result = await releaseLicense();
@@ -566,6 +593,7 @@ ipcMain.handle('report:send', async (_, description) => {
     const license = getLicenseInfo();
     const body = JSON.stringify({
       email: license?.email || '',
+      nickname: license?.nickname || '',
       appVersion: app.getVersion(),
       platform: process.platform,
       // process.getSystemVersion() da la versión real del SO (ej. macOS 15.1) — os.release()
@@ -597,6 +625,7 @@ ipcMain.handle('feedback:send', async (_, description) => {
     const license = getLicenseInfo();
     const body = JSON.stringify({
       email: license?.email || '',
+      nickname: license?.nickname || '',
       appVersion: app.getVersion(),
       platform: process.platform,
       description: description || '',
