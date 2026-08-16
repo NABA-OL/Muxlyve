@@ -98,7 +98,7 @@ let splashShownAt = 0;
 function showSplash() {
   splashShownAt = Date.now();
   splash = new BrowserWindow({
-    width: 460, height: 310,
+    width: 700, height: 440,
     frame: false,
     resizable: false,
     center: true,
@@ -108,10 +108,12 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  // nickname ya está en caché local (checkLicense() corrió antes que esto, ver
-  // app.whenReady) — nunca pega a la red acá, solo lee lo que ya se guardó.
-  const nickname = getLicenseInfo()?.nickname || '';
-  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG, version: app.getVersion(), nickname } });
+  // nickname/avatarUrl ya están en caché local (checkLicense() corrió antes que esto,
+  // ver app.whenReady) — nunca pega a la red acá, solo lee lo que ya se guardó.
+  const info = getLicenseInfo();
+  splash.loadFile(SPLASH_HTML, {
+    query: { lang: APP_LANG, version: app.getVersion(), nickname: info?.nickname || '', avatarUrl: info?.avatarUrl || '' },
+  });
 }
 
 function closeSplash() {
