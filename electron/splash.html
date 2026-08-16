@@ -73,43 +73,29 @@
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
   .accent { color: #7c5cff; }
-  .track {
-    width: 160px; height: 2px;
-    background: #1e2635; border-radius: 1px;
-    overflow: hidden; margin-bottom: 14px;
-    animation: fade-in .4s .82s ease both;
-  }
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  .bar {
-    height: 100%; width: 0;
-    background: linear-gradient(90deg, #7c5cff, #4da3ff);
-    border-radius: 1px;
-    /* Arranca junto con .track (mismo delay) — sin esto la barra ya viene corriendo
-       tiempo invisible mientras .track todavía está en fade-in, y se ve "adelantada"
-       apenas se hace visible. Duración estirada (2s -> 3.2s): se sentía apurada —
-       window.finishLoad() la corta a 100% igual apenas el motor real avisa que está
-       listo, así que estirarla no atrasa un arranque rápido. */
-    animation: load-init 3.2s .82s cubic-bezier(.4,0,.2,1) forwards;
+  /* Envoltorio aparte del círculo: fade-in y giro animan "transform" cada uno, si
+     estuvieran en el mismo elemento se pisarían entre sí (solo gana el último). */
+  .spinner-wrap {
+    margin-bottom: 4px;
+    animation: fade-in .4s .82s ease both;
   }
-  @keyframes load-init {
-    0%   { width: 0%; }
-    35%  { width: 32%; }
-    70%  { width: 47%; }
-    100% { width: 57%; }
+  .spinner {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    /* "Gotica" con rastro: gradiente cónico que va de transparente a morado sólido —
+       al girar, la parte sólida se ve como la cabeza y el degradado detrás como la
+       cola que se desvanece, en vez de un arco fijo (como antes con border-top-color). */
+    background: conic-gradient(from 0deg, transparent 0%, #7c5cff 100%);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+    animation: spin .8s linear infinite;
   }
-  .status {
-    font-size: .72rem; color: #8b949e; letter-spacing: .05em;
-    text-transform: uppercase;
-    animation: fade-in .4s .87s ease both;
-  }
-  .version {
-    font-size: .65rem; color: #4d5563; letter-spacing: .03em;
-    margin-top: 9px;
-    font-family: ui-monospace, monospace;
-    animation: fade-in .4s .92s ease both;
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 </style>
 </head>
@@ -126,44 +112,13 @@
     <span class="letter accent" style="animation-delay:.25s">v</span>
     <span class="letter accent" style="animation-delay:.30s">e</span>
   </div>
-  <div class="track"><div class="bar" id="bar"></div></div>
-  <div class="status" id="status">Iniciando motor…</div>
-  <div class="version" id="version"></div>
+  <div class="spinner-wrap"><div class="spinner"></div></div>
 </div>
 <script>
 window.finishLoad = function() {
-  var bar    = document.getElementById('bar');
-  var status = document.getElementById('status');
-  if (!bar) return;
-  // Freeze bar at current computed width, then transition to 100%
-  var w = getComputedStyle(bar).width;
-  bar.style.animation = 'none';
-  bar.style.width = w;
-  requestAnimationFrame(function() {
-    requestAnimationFrame(function() {
-      bar.style.transition = 'width .5s cubic-bezier(.22,1,.36,1)';
-      bar.style.width = '100%';
-    });
-  });
-
-  var urlParams = new URLSearchParams(window.location.search);
-  var lang = urlParams.get('lang') || 'en';
-  if (status) status.textContent = lang === 'es' ? 'Listo' : 'Ready';
-
-  // Fade body after bar completes + brief hold
+  // Sin barra que completar — el círculo gira hasta que el body se desvanece.
   setTimeout(function() { document.body.style.opacity = '0'; }, 650);
 };
-
-// Auto-translate initial text + versión (electron/main.js pasa ?version= con app.getVersion())
-(function() {
-  var urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('lang') === 'en') {
-    document.getElementById('status').textContent = 'Starting engine…';
-  }
-  var version = urlParams.get('version');
-  var versionEl = document.getElementById('version');
-  if (version && versionEl) versionEl.textContent = 'v' + version;
-})();
 </script>
 <script type="module">
   // Import relativo a este archivo (../src/public/hero-bg.js) — el splash carga por
