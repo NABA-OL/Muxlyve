@@ -1058,7 +1058,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div>Plugin de Stream Deck</div>
               <div class="pref-desc">Prende/apaga destinos y guarda clips desde botones físicos, sin tocar la app.</div>
             </div>
-            <button onclick="window.open('https://marketplace.elgato.com/search?query=Muxlyve','_blank')">Abrir en Marketplace ↗</button>
+            <button onclick="window.open('https://marketplace.elgato.com/product/muxlyve-3bb96a31-6c46-4a52-be62-9868e624b117','_blank')">Abrir en Marketplace ↗</button>
           </div>
         </div>
         <!-- Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) — tabla simple,
