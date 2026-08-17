@@ -60,6 +60,7 @@ const TRAY_ICON_PATH = path.join(__dirname, process.platform === 'darwin'
   : '../src/public/tray-icon-win.png');
 const PRELOAD       = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
+const ONBOARDING_HTML = path.join(__dirname, 'onboarding.html');
 const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // Flag propio (no depende del SO) para saber si el login item nos arrancó en modo oculto —
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
@@ -410,6 +411,34 @@ function resolveActivation() {
   }, 900);
 }
 
+// ── Onboarding (nickname + foto) ───────────────────────────────────────────────
+// Se muestra apenas hay licencia activa SIN nickname todavía (recién activada, o una
+// licencia vieja de antes de que esto existiera) — ANTES del splash, para que el splash y
+// el resto de la app ya arranquen con el nickname/foto puestos, en vez de pedirlo recién
+// con el panel ya cargado (ver conversación). "Omitir por ahora" cierra sin guardar nada;
+// se puede completar después desde Preferencias → Perfil, mismo mecanismo (msLicense).
+function showOnboarding() {
+  return new Promise((resolve) => {
+    const onboardingWin = new BrowserWindow({
+      width: 460, height: 640,
+      resizable: false,
+      center: true,
+      backgroundColor: '#0d1117',
+      title: APP_LANG === 'es' ? 'Muxlyve — Perfil' : 'Muxlyve — Profile',
+      icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
+    });
+    onboardingWin.webContents.setWindowOpenHandler(({ url }) => {
+      openExternalSafe(url);
+      return { action: 'deny' };
+    });
+    const name = getLicenseInfo()?.name || '';
+    onboardingWin.loadFile(ONBOARDING_HTML, { query: { lang: APP_LANG, name } });
+    onboardingWin.on('closed', resolve);
+  });
+}
+
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 ipcMain.handle('license:activate', async (_, key) => {
   const result = await activateLicense(key);
@@ -682,6 +711,15 @@ app.whenReady().then(async () => {
   if (!license.unlocked) {
     console.log('[electron] Mostrando pantalla de activación.');
     await showActivationWindow(); // espera hasta que el usuario active o cierre
+  }
+
+  // Nickname/foto — recién activada o una licencia vieja sin esto todavía. getLicenseInfo()
+  // devuelve null en modo dev sin licencia real (bypass) — sin licencia real no hay dónde
+  // guardar, no tiene sentido pedirlo. START_HIDDEN (login item silencioso) tampoco debe
+  // interrumpir con una ventana que el usuario no espera ver.
+  const licenseInfo = getLicenseInfo();
+  if (!START_HIDDEN && licenseInfo && !licenseInfo.nickname) {
+    await showOnboarding();
   }
 
   // Config dir fuera de app.asar cuando está empaquetado.

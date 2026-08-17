@@ -1987,11 +1987,16 @@
 
   function renderAvatar(url) {
     window._avatarUrl = url || '';
+    // Cache-buster: el backend reutiliza la misma URL al reemplazar la foto (mismo blob
+    // sobrescrito, no un archivo nuevo por subida) — sin esto el navegador sirve la versión
+    // vieja de su caché de imágenes aunque el contenido en el servidor ya cambió. No afecta
+    // en nada si la URL fuera única por subida, solo fuerza a pedirla de nuevo siempre.
+    const bustedUrl = url ? url + (url.includes('?') ? '&' : '?') + '_=' + Date.now() : url;
     const img = $('#profileAvatarImg');
     const placeholder = $('#profileAvatarPlaceholder');
     const removeBtn = $('#profileAvatarRemoveBtn');
     if (url) {
-      img.src = url;
+      img.src = bustedUrl;
       img.style.display = 'block';
       placeholder.style.display = 'none';
       removeBtn.style.display = '';
@@ -2005,7 +2010,7 @@
     const sideImg = $('#sidebarAvatarImg');
     const sidePlaceholder = $('#sidebarAvatarPlaceholder');
     if (url) {
-      sideImg.src = url;
+      sideImg.src = bustedUrl;
       sideImg.style.display = 'block';
       sidePlaceholder.style.display = 'none';
     } else {
@@ -2064,6 +2069,42 @@
     const result = await window.msLicense?.removeAvatar().catch((e) => ({ ok: false, error: e.message }));
     if (result?.ok) { renderAvatar(''); toast('Foto de perfil quitada.'); }
     else toast(result?.error || 'No se pudo quitar la foto.', true);
+  }
+
+  // Mismo mecanismo que electron/onboarding.html: baja el avatar de DiceBear (CC0) y lo
+  // manda por el mismo setAvatar() de siempre — el backend nunca sabe si la foto vino de un
+  // archivo subido o de un avatar generado, es la misma ruta. Convertido a JPEG en canvas
+  // (no se manda el PNG tal cual): el backend valida mimeType contra lo que ya espera de las
+  // fotos subidas (siempre image/jpeg, ver resizeImageFile más abajo) — mandar 'image/png'
+  // sin avisarle antes al backend rebotaba con INVALID_MIME_TYPE. Sin paso de confirmar acá
+  // (a diferencia de onboarding): un click aplica de una un avatar al azar nuevo, otro click
+  // da otra variante — es una acción directa de ajustes, no un primer-uso guiado.
+  function fetchDiceBearAsJpeg(style, seed) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous'; // sin esto el canvas queda "tainted" y toDataURL tira
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, canvas.width, canvas.height); // por si el estilo tiene transparencia
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/jpeg', .9).split(',')[1]);
+      };
+      img.onerror = () => reject(new Error('No se pudo generar el avatar.'));
+      img.src = `https://api.dicebear.com/10.x/${style}/png?seed=${encodeURIComponent(seed)}`;
+    });
+  }
+  async function pickDiceBearAvatar(style) {
+    const seed = Math.random().toString(36).slice(2);
+    try {
+      const base64 = await fetchDiceBearAsJpeg(style, seed);
+      const result = await window.msLicense?.setAvatar(base64, 'image/jpeg').catch((e) => ({ ok: false, error: e.message }));
+      if (result?.ok) { renderAvatar(result.avatarUrl); toast('Foto de perfil actualizada.'); }
+      else toast(result?.error || 'No se pudo subir la foto.', true);
+    } catch {
+      toast('No se pudo generar el avatar.', true);
+    }
   }
 
   async function saveNickname() {

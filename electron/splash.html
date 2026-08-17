@@ -146,7 +146,10 @@ window.finishLoad = function() {
   var avatarUrl = params.get('avatarUrl');
   if (avatarUrl) {
     var img = document.getElementById('splashAvatar');
-    img.src = avatarUrl;
+    // Cache-buster: el backend sobrescribe el mismo blob al cambiar de foto, la URL no
+    // cambia — sin esto Electron podía servir la versión vieja desde su caché de disco
+    // entre arranques aunque la foto ya se hubiera actualizado.
+    img.src = avatarUrl + (avatarUrl.indexOf('?') !== -1 ? '&' : '?') + '_=' + Date.now();
     img.style.display = 'block';
   }
 })();

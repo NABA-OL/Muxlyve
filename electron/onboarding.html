@@ -1,0 +1,329 @@
+<!-- Desarrollado por BlacKraken Solutions (NABA-OL) -->
+<!doctype html>
+<html lang="es">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muxlyve — Perfil</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface-2: #1c2230;
+      --border: #2a3140;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #7c5cff;
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 100vh;
+      padding: 1.5rem;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.75rem 1.75rem 1.5rem;
+      width: 100%;
+      max-width: 420px;
+      -webkit-app-region: no-drag;
+    }
+
+    h1 { font-size: 1.15rem; font-weight: 600; margin-bottom: .2rem; }
+    .sub { font-size: .83rem; color: var(--muted); margin-bottom: 1.4rem; }
+    label { font-size: .73rem; color: var(--muted); display: block; margin-bottom: .4rem; text-transform: uppercase; letter-spacing: .05em; }
+
+    input[type=text] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: .6rem .75rem;
+      font-size: .9rem;
+      margin-bottom: 1.25rem;
+    }
+    input[type=text]:focus { outline: none; border-color: var(--accent); }
+    input[type=text]::placeholder { color: var(--muted); }
+
+    /* Tres opciones de foto en fila: subir propia, o dos avatares generados (DiceBear,
+       CC0). Cada una es un tile cuadrado clickeable — la seleccionada queda con borde
+       de acento. Los generados muestran una vista previa real (no un ícono genérico) y
+       un botón chico para pedir otra variante sin cambiar de estilo. */
+    /* wrap: con 4 opciones ya no entran cómodas en una sola fila a este ancho de card —
+       se acomodan solas en 2x2 (flex-basis 40% + gap deja ~2 por fila). */
+    .avatar-options { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.5rem; }
+    .avatar-tile {
+      flex: 1 1 40%; display: flex; flex-direction: column; align-items: center; gap: .4rem;
+      padding: .6rem .4rem; border-radius: 10px; border: 1.5px solid var(--border);
+      background: var(--surface-2); cursor: pointer; position: relative;
+      transition: border-color .15s var(--ease-out);
+    }
+    .avatar-tile:hover { border-color: var(--muted); }
+    .avatar-tile.selected { border-color: var(--accent); }
+    .avatar-tile-preview {
+      width: 56px; height: 56px; border-radius: 50%; object-fit: cover;
+      background: var(--bg); display: flex; align-items: center; justify-content: center;
+    }
+    .avatar-tile-label { font-size: .68rem; color: var(--muted); text-align: center; }
+    .avatar-tile.selected .avatar-tile-label { color: var(--text); }
+    .avatar-reroll {
+      position: absolute; top: 4px; right: 4px; width: 20px; height: 20px;
+      border-radius: 50%; background: var(--bg); border: 1px solid var(--border);
+      color: var(--muted); font-size: .7rem; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .avatar-reroll:hover { color: var(--text); border-color: var(--muted); }
+    #avatarFileInput { display: none; }
+
+    button {
+      width: 100%;
+      margin-top: 0;
+      padding: .65rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s var(--ease-out), transform .1s var(--ease-out);
+    }
+    button:hover:not(:disabled) { opacity: .88; }
+    button:active:not(:disabled) { transform: scale(.97); }
+    button:disabled { opacity: .45; cursor: default; }
+
+    .skip-btn {
+      background: transparent; color: var(--muted); font-weight: 400; font-size: .8rem;
+      margin-top: .6rem; padding: .4rem;
+    }
+    .skip-btn:hover:not(:disabled) { opacity: 1; color: var(--text); }
+
+    #status { margin-top: .7rem; font-size: .8rem; min-height: 1.1em; color: #f85149; text-align: center; }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <h1 id="title">¡Hola!</h1>
+    <p class="sub" id="sub">Contanos cómo te gustaría que te llamemos en Muxlyve.</p>
+
+    <label for="nicknameInput">Nickname</label>
+    <input id="nicknameInput" type="text" maxlength="24" placeholder="Tu nickname" autocomplete="off" spellcheck="false">
+
+    <label>Foto de perfil</label>
+    <div class="avatar-options">
+      <div class="avatar-tile" id="tileUpload" onclick="selectTile('upload')">
+        <div class="avatar-tile-preview" id="uploadPreview">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted)">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <span class="avatar-tile-label">Subir foto</span>
+        <input type="file" id="avatarFileInput" accept="image/png,image/jpeg,image/webp" onchange="onFileChosen(event)">
+      </div>
+      <div class="avatar-tile" id="tilePlanets" onclick="selectTile('planets')">
+        <button type="button" class="avatar-reroll" onclick="reroll(event,'planets')" title="Otra variante">↻</button>
+        <img class="avatar-tile-preview" id="planetsPreview" alt="">
+        <span class="avatar-tile-label">Planets</span>
+      </div>
+      <div class="avatar-tile" id="tileVoxel" onclick="selectTile('voxel-art')">
+        <button type="button" class="avatar-reroll" onclick="reroll(event,'voxel-art')" title="Otra variante">↻</button>
+        <img class="avatar-tile-preview" id="voxelPreview" alt="">
+        <span class="avatar-tile-label">Voxel Art</span>
+      </div>
+      <div class="avatar-tile" id="tileAdventurer" onclick="selectTile('adventurer-neutral')">
+        <button type="button" class="avatar-reroll" onclick="reroll(event,'adventurer-neutral')" title="Otra variante">↻</button>
+        <img class="avatar-tile-preview" id="adventurerPreview" alt="">
+        <span class="avatar-tile-label">Adventurer Neutral</span>
+      </div>
+    </div>
+
+    <button id="continueBtn" onclick="submitProfile()">Continuar</button>
+    <button class="skip-btn" onclick="skip()">Omitir por ahora</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const lang = urlParams.get('lang') || 'en';
+    const name = urlParams.get('name') || '';
+    const es = lang === 'es';
+
+    const t = es ? {
+      title: name ? `¡Hola, ${name.trim().split(/\s+/)[0]}!` : '¡Hola!',
+      sub: 'Contanos cómo te gustaría que te llamemos en Muxlyve.',
+      placeholder: 'Tu nickname',
+      continueBtn: 'Continuar',
+      skipBtn: 'Omitir por ahora',
+      errNickname: 'Escribe un nickname primero.',
+      errGeneric: 'Algo falló, probá de nuevo.',
+      saving: 'Guardando…',
+    } : {
+      title: name ? `Hi, ${name.trim().split(/\s+/)[0]}!` : 'Hi!',
+      sub: 'Tell us what you\'d like us to call you in Muxlyve.',
+      placeholder: 'Your nickname',
+      continueBtn: 'Continue',
+      skipBtn: 'Skip for now',
+      errNickname: 'Type a nickname first.',
+      errGeneric: 'Something failed, try again.',
+      saving: 'Saving…',
+    };
+
+    document.getElementById('title').textContent = t.title;
+    document.getElementById('sub').textContent = t.sub;
+    document.getElementById('nicknameInput').placeholder = t.placeholder;
+    document.getElementById('continueBtn').textContent = t.continueBtn;
+    document.querySelector('.skip-btn').textContent = t.skipBtn;
+
+    // Estilos DiceBear disponibles (CC0) — agregar uno nuevo es sumar una entrada acá +
+    // su tile en el HTML, nada más se toca (seeds/previews/selectTile ya son genéricos).
+    const DICEBEAR_STYLES = {
+      planets: { tile: 'tilePlanets', preview: 'planetsPreview' },
+      'voxel-art': { tile: 'tileVoxel', preview: 'voxelPreview' },
+      'adventurer-neutral': { tile: 'tileAdventurer', preview: 'adventurerPreview' },
+    };
+    // Semillas propias (no el texto del nickname) — así cambiar el nickname más tarde no
+    // reordena/cambia el avatar generado de golpe. Un reroll random las reemplaza.
+    let seeds = {};
+    for (const style in DICEBEAR_STYLES) seeds[style] = Math.random().toString(36).slice(2);
+    let selected = null; // 'upload' | uno de las keys de DICEBEAR_STYLES | null
+    let uploadedBase64 = null; // { base64, mimeType } una vez elegido un archivo
+
+    function diceBearUrl(style, seed, format) {
+      return `https://api.dicebear.com/10.x/${style}/${format}?seed=${encodeURIComponent(seed)}`;
+    }
+
+    function renderDiceBearPreviews() {
+      for (const style in DICEBEAR_STYLES) {
+        document.getElementById(DICEBEAR_STYLES[style].preview).src = diceBearUrl(style, seeds[style], 'svg');
+      }
+    }
+    renderDiceBearPreviews();
+
+    function reroll(event, style) {
+      event.stopPropagation(); // no dispara selectTile del tile padre
+      seeds[style] = Math.random().toString(36).slice(2);
+      renderDiceBearPreviews();
+      if (selected === style) selectTile(style); // ya estaba elegido, se queda elegido con la nueva variante
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('read-failed'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error('read-failed'));
+          img.onload = () => {
+            const MAX = 256;
+            const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+            const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', .85).split(',')[1]);
+          };
+          img.src = reader.result; // data: URL, no blob: (mismo motivo que panel-client.js)
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function onFileChosen(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        uploadedBase64 = await fileToBase64(file);
+        document.getElementById('uploadPreview').outerHTML =
+          `<img class="avatar-tile-preview" id="uploadPreview" src="data:image/jpeg;base64,${uploadedBase64}" alt="">`;
+        selected = 'upload';
+        document.querySelectorAll('.avatar-tile').forEach((el) => el.classList.remove('selected'));
+        document.getElementById('tileUpload').classList.add('selected');
+      } catch {
+        setStatus(t.errGeneric);
+      }
+    }
+    // selectTile('upload') abre el picker de archivo — evita que ese primer click marque
+    // el tile como seleccionado antes de que el usuario realmente elija un archivo.
+    function selectTile(which) {
+      if (which === 'upload') { document.getElementById('avatarFileInput').click(); return; }
+      selected = which;
+      document.querySelectorAll('.avatar-tile').forEach((el) => el.classList.remove('selected'));
+      document.getElementById(DICEBEAR_STYLES[which].tile).classList.add('selected');
+    }
+
+    function setStatus(msg) { document.getElementById('status').textContent = msg || ''; }
+
+    // Convertido a JPEG en canvas, no el PNG tal cual — el backend valida mimeType contra
+    // lo que ya espera de las fotos subidas (siempre image/jpeg, ver fileToBase64 arriba),
+    // mandar 'image/png' sin avisarle antes rebotaba con INVALID_MIME_TYPE.
+    function fetchDiceBearAsJpeg(style, seed) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous'; // sin esto el canvas queda "tainted" y toDataURL tira
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg', .9).split(',')[1]);
+        };
+        img.onerror = () => reject(new Error('fetch-failed'));
+        img.src = diceBearUrl(style, seed, 'png');
+      });
+    }
+
+    async function resolveSelectedAvatar() {
+      if (selected === 'upload') {
+        return uploadedBase64 ? { base64: uploadedBase64, mimeType: 'image/jpeg' } : null;
+      }
+      if (DICEBEAR_STYLES[selected]) {
+        const base64 = await fetchDiceBearAsJpeg(selected, seeds[selected]);
+        return { base64, mimeType: 'image/jpeg' };
+      }
+      return null;
+    }
+
+    async function submitProfile() {
+      const nickname = document.getElementById('nicknameInput').value.trim();
+      if (!nickname) { setStatus(t.errNickname); return; }
+      const btn = document.getElementById('continueBtn');
+      btn.disabled = true;
+      btn.textContent = t.saving;
+      setStatus('');
+      try {
+        const nickResult = await window.msLicense.setNickname(nickname);
+        if (!nickResult.ok) { setStatus(nickResult.error || t.errGeneric); btn.disabled = false; btn.textContent = t.continueBtn; return; }
+        const avatar = await resolveSelectedAvatar();
+        if (avatar) await window.msLicense.setAvatar(avatar.base64, avatar.mimeType);
+        window.close();
+      } catch {
+        setStatus(t.errGeneric);
+        btn.disabled = false;
+        btn.textContent = t.continueBtn;
+      }
+    }
+
+    function skip() { window.close(); }
+
+    document.getElementById('nicknameInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitProfile();
+    });
+  </script>
+</body>
+
+</html>

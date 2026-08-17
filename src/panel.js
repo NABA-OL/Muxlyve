@@ -408,7 +408,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
      blob: vía createObjectURL(), y ESO es lo que carga el <video>. Sin blob: acá, el CSP
      lo bloqueaba en silencio y la previsualización quedaba en negro (aunque el audio/video
      grabado en disco, que no pasa por este <video>, seguía bien). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:*; frame-src 'none'; object-src 'none'; base-uri 'self'">
+<!-- connect-src incluye api.dicebear.com: pickDiceBearAvatar() (panel-client.js, Preferencias
+     → Perfil) hace fetch() ahí para bajar el PNG del avatar elegido y mandarlo como base64 —
+     sin este origen explícito el fetch queda bloqueado en silencio (igual que pasó antes con
+     blob: en media-src, ver comentario arriba) y tira "No se pudo generar el avatar." -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* https://api.dicebear.com; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Muxlyve — Panel</title>
 <link rel="icon" href="/icon-muxlyve.svg">
@@ -1051,22 +1055,37 @@ export const PANEL_HTML = /* html */ `<!doctype html>
              tocan una vez. Mismo criterio que la separación de "Acerca de". -->
         <div class="prefs-panel" id="prefsProfileBlock" data-panel="profile">
           <div class="lic-row" style="align-items:center">
-            <div style="display:flex;align-items:center;gap:1rem">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;width:100%">
               <div style="position:relative;flex-shrink:0">
-                <img id="profileAvatarImg" src="" alt="" style="width:64px;height:64px;border-radius:50%;
+                <img id="profileAvatarImg" src="" alt="" style="width:72px;height:72px;border-radius:50%;
                   object-fit:cover;background:var(--surface-2);border:1px solid var(--border);display:none">
-                <div id="profileAvatarPlaceholder" style="width:64px;height:64px;border-radius:50%;
+                <div id="profileAvatarPlaceholder" style="width:72px;height:72px;border-radius:50%;
                   background:var(--surface-2);border:1px solid var(--border);display:flex;
                   align-items:center;justify-content:center;color:var(--muted)">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
                   </svg>
                 </div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:.4rem">
+              <div style="display:flex;flex-direction:column;gap:.5rem;width:100%">
                 <input type="file" id="profileAvatarFile" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="onAvatarFileChosen(event)">
-                <button class="lic-manage-btn" style="width:auto;margin-bottom:0;padding:.35rem .7rem" onclick="$('#profileAvatarFile').click()">Cambiar foto</button>
-                <button class="lic-danger-btn" id="profileAvatarRemoveBtn" style="width:auto;padding:.35rem .7rem;display:none" onclick="removeAvatarPic()">Quitar foto</button>
+                <button class="lic-manage-btn" style="width:100%;margin-bottom:0;display:flex;align-items:center;justify-content:center;gap:.5rem" onclick="$('#profileAvatarFile').click()">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  Subir foto
+                </button>
+                <!-- Mismas opciones que en la ventana de primer uso (electron/onboarding.html)
+                     — generar con DiceBear (Planets/Voxel Art/Adventurer Neutral, CC0). Cada
+                     click aplica de una un avatar nuevo al azar (sin paso de "confirmar" como
+                     en onboarding) — es una acción directa de ajustes, volver a clickear da
+                     otra variante. -->
+                <div style="display:flex;gap:.4rem">
+                  <button class="lic-manage-btn" style="flex:1;margin-bottom:0;padding:.35rem .4rem;font-size:.76rem" onclick="pickDiceBearAvatar('planets')">Planets</button>
+                  <button class="lic-manage-btn" style="flex:1;margin-bottom:0;padding:.35rem .4rem;font-size:.76rem" onclick="pickDiceBearAvatar('voxel-art')">Voxel Art</button>
+                  <button class="lic-manage-btn" style="flex:1;margin-bottom:0;padding:.35rem .4rem;font-size:.76rem" onclick="pickDiceBearAvatar('adventurer-neutral')">Adventurer Neutral</button>
+                </div>
+                <button class="lic-danger-btn" id="profileAvatarRemoveBtn" style="width:100%;display:none" onclick="removeAvatarPic()">Quitar foto</button>
               </div>
             </div>
           </div>
