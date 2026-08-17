@@ -1,7 +1,10 @@
-// Desarrollado por "BlacKraken Solutions"
-// Correo: nabaol.dev@gmail.com
-// Fecha: 2026-08-08
-//
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: [FECHA_ACTUAL: 2026-08-08]
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Traducción de mensajes de chat — pega al endpoint no-oficial de Google Translate
 // (translate.googleapis.com/translate_a/single). NO es una API soportada ni documentada
 // por Google, es el mismo truco que usan varias apps chiquitas para traducir gratis sin

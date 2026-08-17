@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Puente para aplicar modo lento/solo-emotes desde CUALQUIER ventana (panel principal o
 // popout de chat) por HTTP en vez de IPC — el popout no tiene preload/contextBridge (ver
 // electron/main.js openChatWindow), así que IPC no le sirve. electron/oauth.js registra

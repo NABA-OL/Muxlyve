@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Lógica de chat compartida entre las 3 vistas (panel principal, popout de chat, overlay
 // de OBS) — antes vivía triplicada (una copia por vista), un fix en una se olvidaba en
 // las otras. Ver Fase 2 de docs/PLAN_REFACTOR_PANEL.md.

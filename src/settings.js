@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Ajustes editables desde el panel que no son "destinos" (config/destinations.json) —
 // hoy solo la clave de retransmisión. Mismo criterio que destinations.js: JSON en
 // MS_CONFIG_DIR (o config/ del paquete), funciona igual en Electron y headless/Docker.

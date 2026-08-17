@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Genera electron/oauth-credentials.js (gitignored) a partir de .env, para hornear
 // los client IDs/secret dentro del binario empaquetado. Se ejecuta antes de cada build
 // (predist/predist:mac/predist:publish) — nunca se commitea a git.

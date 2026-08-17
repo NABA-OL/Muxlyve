@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // discordToTelegramMarkdown() traduce el markdown escrito para Discord (**negrita**,
 // *itálica*/_itálica_) a MarkdownV2 de Telegram, que usa sintaxis distinta (un solo
 // asterisco es negrita, no itálica) y exige escapar ~14 caracteres reservados en el

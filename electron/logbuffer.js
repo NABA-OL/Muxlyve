@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Captura console.log/error/warn en un buffer en memoria + archivo rotativo en userData,
 // para poder adjuntar las últimas líneas a un reporte de error sin que el usuario tenga
 // que abrir una terminal (la app empaquetada no muestra consola).

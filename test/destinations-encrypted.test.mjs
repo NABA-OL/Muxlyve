@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Con MASTER_KEY definida, la URL debe quedar cifrada (AES-256-GCM) en disco y descifrarse
 // de vuelta al cargar. Va en un archivo aparte de destinations.test.mjs porque MASTER_KEY
 // se lee una sola vez al importar el módulo — no se puede alternar dentro del mismo proceso.

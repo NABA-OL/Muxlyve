@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // ffmpeg-static descarga el binario que corresponde a la plataforma donde corrió
 // `npm install` (postinstall), NO a la plataforma target de electron-builder — si
 // dist:linux corre en una Mac (o Windows), este binario sigue siendo el de esa

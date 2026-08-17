@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -710,7 +715,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
             </div>
           </div>
-          <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
+          <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Stream Deck → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
         </div></div>
       </div>
     </div>
@@ -807,6 +812,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Webhooks</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="streamdeck" id="prefsNavStreamDeck" onclick="switchPrefsTab('streamdeck')" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="10" r="1.5"/><circle cx="12" cy="10" r="1.5"/><circle cx="16" cy="10" r="1.5"/><circle cx="8" cy="14" r="1.5"/><circle cx="12" cy="14" r="1.5"/><circle cx="16" cy="14" r="1.5"/>
+          </svg>
+          <span>Stream Deck</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="history" onclick="switchPrefsTab('history')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>
@@ -901,20 +913,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
             </div>
             <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
-          </div>
-          <div class="pref-row">
-            <div>
-              <div>Permitir Stream Deck / chat desde otra máquina</div>
-              <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
-            </div>
-            <label class="sys-toggle">
-              <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
-              <span class="sys-toggle-track"></span>
-            </label>
-          </div>
-          <div class="pref-row" id="allowLanRestartRow" style="display:none">
-            <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
-            <button onclick="relaunchApp()">Reiniciar ahora</button>
           </div>
           <!-- Exportar/importar configuración (Fase 1 del lote 2,
                docs/PLAN_FEATURES_LOTE2.md). Se cifra con la contraseña que pidas al
@@ -1033,6 +1031,34 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="pref-desc" style="margin-bottom:.5rem">Crea un bot con @BotFather en Telegram, copia el token, y el chat ID del canal o grupo donde quieres enviar el aviso.</div>
             <div id="telegramBotsList"></div>
             <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
+          </div>
+        </div>
+        <!-- Stream Deck — antes vivía como toggle suelto dentro de Sistema, movido acá
+             a su propio menú (ver conversación) junto con el link al plugin. -->
+        <div class="prefs-panel" id="prefsStreamDeckBlock" data-panel="streamdeck">
+          <div class="pref-row">
+            <div>
+              <div>Permitir Stream Deck / chat desde otra máquina</div>
+              <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row" id="allowLanRestartRow" style="display:none">
+            <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
+            <button onclick="relaunchApp()">Reiniciar ahora</button>
+          </div>
+          <!-- TODO: cambiar por la URL del producto real apenas el plugin esté publicado
+               en el Marketplace — de momento apunta a la búsqueda por "Muxlyve", nunca da
+               un link roto aunque el producto todavía no exista. -->
+          <div class="pref-row" style="margin-top:.5rem">
+            <div>
+              <div>Plugin de Stream Deck</div>
+              <div class="pref-desc">Prende/apaga destinos y guarda clips desde botones físicos, sin tocar la app.</div>
+            </div>
+            <button onclick="window.open('https://marketplace.elgato.com/search?query=Muxlyve','_blank')">Abrir en Marketplace ↗</button>
           </div>
         </div>
         <!-- Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) — tabla simple,

@@ -1,3 +1,10 @@
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
   // Barra de título fundida con la UI — el padding exacto depende de qué lado ocupan
   // los botones nativos (izquierda en Mac, derecha en Windows). Se aplica ya mismo,
   // antes de cualquier otra cosa, para que no haya parpadeo del layout sin compensar.
@@ -1489,7 +1496,8 @@
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
     $('#prefsNavProfile').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'history', 'support', 'profile', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
+    $('#prefsNavStreamDeck').style.display = hasElectron ? '' : 'none';
+    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'streamdeck', 'history', 'support', 'profile', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {

@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // isValidDiscordWebhook() es el gate anti-SSRF antes de que src/notify.js llame a
 // cualquier URL pegada por el usuario — ver el comentario en src/notify.js.
 // isValidTelegramBot() es el equivalente para src/telegram.js — ahí el host es fijo

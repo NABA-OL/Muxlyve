@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Perfiles de destinos — combinaciones guardadas de "qué destinos van habilitados" (ej.
 // "Solo Twitch", "Todo", "Prueba"), para no tener que prender/apagar destino por destino
 // antes de cada stream. Se guardan por NOMBRE de destino, no por índice: los destinos se

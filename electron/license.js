@@ -1,9 +1,13 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Fase B — Activación y validación de licencia.
 // Flujo: activate once online → store signed token → revalidate every 30d.
 // Offline grace: 7 extra days if backend unreachable.
-// Dev bypass: !isPackaged or MS_DEV_UNLOCK=1 → always unlocked.
 
 import { safeStorage, app } from "electron";
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";

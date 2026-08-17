@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // shouldTriggerClip() es la decisión de autorización de !clip, sin FFmpeg de por medio
 // (ver src/chatcommands.js) — el cooldown y el estado de señal viven aparte en
 // initChatCommands(), no acá.

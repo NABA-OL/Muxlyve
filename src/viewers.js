@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Store en memoria de espectadores por plataforma — electron/oauth.js hace el polling real
 // contra Twitch/Kick (necesita los tokens OAuth, que viven ahí) y empuja acá con
 // setViewerCounts(); panel.js sirve el último valor por HTTP (GET /api/viewers) para que

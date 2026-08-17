@@ -1,6 +1,10 @@
-// Desarrollado por "BlacKraken Solutions"
-// Correo: nabaol.dev@gmail.com
-// Fecha: 2026-08-07
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: [FECHA_ACTUAL: 2026-08-07]
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 //
 // Fondo "prisma" — puerto vanilla (sin React) del shader que usa el hero de la web
 // (muxlyve-web, src/components/HeroFlowBG.tsx). Mismo shader, mismos colores de marca.
