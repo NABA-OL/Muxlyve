@@ -419,6 +419,9 @@
      que chat ID — angosto y con flex-grow en 0 para no robarle espacio a los botones. */
   .webhook-row-telegram .tg-topic { flex: 0 1 90px; }
   .webhook-save-btn, .webhook-test-btn { flex-shrink: 0; width: auto; padding: .35rem .7rem; font-size: .75rem; }
+  /* Ícono en vez de texto ("Guardar") — libera ancho para que chat ID/tema no queden tan
+     apretados al lado (ver conversación: los placeholders casi no se leían). */
+  .webhook-save-btn { display: flex; align-items: center; justify-content: center; padding: .35rem .5rem; }
   .webhook-del-btn { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
     cursor: pointer; padding: .3rem .5rem; border-radius: 6px; transition: background .15s, color .15s; }
   .webhook-del-btn:hover { background: rgba(229,72,77,.15); color: #e5484d; }
