@@ -12,8 +12,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = process.env.MS_CONFIG_DIR || path.join(__dirname, '..', 'config');
-const SESSIONS_PATH = path.join(CONFIG_DIR, 'sessions.json');
+// Función, no const — ver el mismo fix en settings.js (settingsPath()) para el porqué:
+// una const calculada al importar puede quedar pegada a la ruta de fallback dentro del
+// .asar si algo llega a importar este módulo antes de que main.js fije MS_CONFIG_DIR.
+function sessionsPath() {
+  const configDir = process.env.MS_CONFIG_DIR || path.join(__dirname, '..', 'config');
+  return path.join(configDir, 'sessions.json');
+}
 
 // Tope simple por CANTIDAD, no por fecha ("últimas 100" en vez de "últimos 90 días") —
 // más fácil de razonar y de podar: no hace falta comparar timestamps contra "hoy" en
@@ -32,9 +37,10 @@ function validSession(s) {
 // validPresets()/validDiscordWebhooks() en settings.js: el archivo lo puede haber editado
 // el usuario a mano, nunca se confía en su forma.
 export function listSessions() {
-  if (!existsSync(SESSIONS_PATH)) return [];
+  const sessionsPathValue = sessionsPath();
+  if (!existsSync(sessionsPathValue)) return [];
   try {
-    const data = JSON.parse(readFileSync(SESSIONS_PATH, 'utf-8'));
+    const data = JSON.parse(readFileSync(sessionsPathValue, 'utf-8'));
     if (!Array.isArray(data)) return [];
     return data.filter(validSession);
   } catch (err) {
@@ -49,6 +55,6 @@ export function listSessions() {
 // de "siempre al final del archivo".
 export function recordSession(entry) {
   const next = [entry, ...listSessions()].slice(0, MAX_SESSIONS);
-  writeFileSync(SESSIONS_PATH, JSON.stringify(next, null, 2) + '\n', 'utf-8');
+  writeFileSync(sessionsPath(), JSON.stringify(next, null, 2) + '\n', 'utf-8');
   return next;
 }

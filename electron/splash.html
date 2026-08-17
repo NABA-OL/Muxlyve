@@ -46,22 +46,27 @@
     align-items: center;
     position: relative; z-index: 1; /* por encima del canvas de fondo */
   }
-  .icon {
-    width: 72px; height: 72px;
-    margin-bottom: 18px;
-    animation: pop-in .55s cubic-bezier(.22,1,.36,1) both;
-  }
   @keyframes pop-in {
     from { opacity: 0; transform: scale(.7); }
     to   { opacity: 1; transform: scale(1); }
+  }
+  /* Foto de perfil — solo aparece si electron/main.js mandó ?avatarUrl= (ver script
+     abajo), mismo criterio que .greeting: sin foto, el elemento queda oculto y sin
+     espacio, no hay placeholder feo de "sin imagen". */
+  .avatar {
+    display: none;
+    width: 96px; height: 96px; border-radius: 50%;
+    object-fit: cover;
+    margin-bottom: 22px;
+    animation: pop-in .55s .65s cubic-bezier(.22,1,.36,1) both;
   }
   /* Wordmark letra por letra — "Muxlyve" aparece de a una en vez de un solo fade del
      bloque completo. Cada <span> anima con su propio delay (ver estilos inline abajo);
      el color acento arranca en la "v" de "ve", igual que en el resto de la app. */
   .wordmark {
     display: flex;
-    font-size: 1.85rem; font-weight: 700; letter-spacing: -.03em;
-    margin-bottom: 26px;
+    font-size: 2.72rem; font-weight: 700; letter-spacing: -.03em;
+    margin-bottom: 38px;
   }
   .letter {
     display: inline-block;
@@ -73,6 +78,15 @@
     to   { opacity: 1; transform: translateY(0) scale(1); }
   }
   .accent { color: #7c5cff; }
+  /* Saludo con nickname — solo aparece si electron/main.js mandó ?nickname= (ver script
+     abajo). Sin nickname el elemento queda vacío y con display:none, cero espacio. */
+  .greeting {
+    display: none;
+    /* Escalado proporcional (.78rem * ~1.47 ≈ 1.15rem) + 10px más encima, a pedido. */
+    font-size: 1.77rem; color: #8b949e; letter-spacing: .02em;
+    margin-bottom: 26px;
+    animation: fade-in .4s .5s ease both;
+  }
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -80,18 +94,18 @@
   /* Envoltorio aparte del círculo: fade-in y giro animan "transform" cada uno, si
      estuvieran en el mismo elemento se pisarían entre sí (solo gana el último). */
   .spinner-wrap {
-    margin-bottom: 4px;
+    margin-bottom: 6px;
     animation: fade-in .4s .82s ease both;
   }
   .spinner {
-    width: 20px; height: 20px;
+    width: 29px; height: 29px;
     border-radius: 50%;
     /* "Gotica" con rastro: gradiente cónico que va de transparente a morado sólido —
        al girar, la parte sólida se ve como la cabeza y el degradado detrás como la
        cola que se desvanece, en vez de un arco fijo (como antes con border-top-color). */
     background: conic-gradient(from 0deg, transparent 0%, #7c5cff 100%);
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
     animation: spin .8s linear infinite;
   }
   @keyframes spin {
@@ -102,7 +116,6 @@
 <body>
 <canvas id="splashBgCanvas" class="splash-bg-canvas" aria-hidden="true"></canvas>
 <div class="container">
-  <img src="../src/public/icon-muxlyve.svg" class="icon" alt="">
   <div class="wordmark" aria-label="Muxlyve">
     <span class="letter" style="animation-delay:.00s">M</span>
     <span class="letter" style="animation-delay:.05s">u</span>
@@ -112,6 +125,8 @@
     <span class="letter accent" style="animation-delay:.25s">v</span>
     <span class="letter accent" style="animation-delay:.30s">e</span>
   </div>
+  <div class="greeting" id="greeting"></div>
+  <img class="avatar" id="splashAvatar" src="" alt="">
   <div class="spinner-wrap"><div class="spinner"></div></div>
 </div>
 <script>
@@ -119,6 +134,25 @@ window.finishLoad = function() {
   // Sin barra que completar — el círculo gira hasta que el body se desvanece.
   setTimeout(function() { document.body.style.opacity = '0'; }, 650);
 };
+
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var nickname = params.get('nickname');
+  if (nickname) {
+    var el = document.getElementById('greeting');
+    el.textContent = '¡Hola, ' + nickname + '!';
+    el.style.display = 'block';
+  }
+  var avatarUrl = params.get('avatarUrl');
+  if (avatarUrl) {
+    var img = document.getElementById('splashAvatar');
+    // Cache-buster: el backend sobrescribe el mismo blob al cambiar de foto, la URL no
+    // cambia — sin esto Electron podía servir la versión vieja desde su caché de disco
+    // entre arranques aunque la foto ya se hubiera actualizado.
+    img.src = avatarUrl + (avatarUrl.indexOf('?') !== -1 ? '&' : '?') + '_=' + Date.now();
+    img.style.display = 'block';
+  }
+})();
 </script>
 <script type="module">
   // Import relativo a este archivo (../src/public/hero-bg.js) — el splash carga por

@@ -66,6 +66,7 @@
   .wm-li.show { max-width: 2.4ch; opacity: 1; }
   @media (prefers-reduced-motion: reduce) { .wm-li { transition: none; } }
   .status { display: flex; align-items: center; gap: .5rem; font-size: .85rem; color: var(--muted); min-width: 0; }
+  #liveTxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .status .uptime { font-variant-numeric: tabular-nums; color: var(--text); flex-shrink: 0; }
   .stream-title-display { color: var(--text); overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; min-width: 0; padding-left: .5rem; border-left: 1px solid var(--border); }
@@ -102,7 +103,7 @@
     -webkit-app-region: drag; }
   .side-actions button { -webkit-app-region: no-drag; }
   .side-actions-top { display: flex; flex-direction: column; gap: .35rem; padding-top: 1rem; }
-  .side-actions-bottom { margin-top: auto; padding-bottom: .85rem; }
+  .side-actions-bottom { display: flex; flex-direction: column; gap: .35rem; margin-top: auto; padding-bottom: .85rem; }
   /* Solo ícono, look tipo rail (WhatsApp Mac) — sin caja/borde por botón, un resaltado
      redondeado sutil en hover/activo alcanza. */
   .side-actions .sidebar-toggle-btn { background: transparent; border: none;
@@ -117,6 +118,10 @@
   #updateBtn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
   #updateBtn .upd-dot { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px;
     border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
+  /* Redonda a propósito, distinta del resto de los íconos del rail (10px radius) — una
+     foto de perfil se lee como círculo, no como ícono cuadrado. */
+  .avatar-btn { width: 35px; height: 35px; border-radius: 50%; overflow: hidden; }
+  .avatar-btn img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 
   /* ── Canvas fondo ── */
   #bgCanvas { position: fixed; inset: 0; width: 100%; height: 100%;
@@ -294,7 +299,16 @@
      shader (ver hero-bg.js) tenga espacio real donde respirar — un canvas angosto se ve
      recortado, no "prisma". position:relative + overflow:hidden acá para que el canvas
      (position:absolute) quede clippeado a las esquinas redondeadas del modal. */
-  .about-modal { width: 590px; min-height: 570px; text-align: center;
+  .about-modal {
+    /* Fuerza oscuro acá adentro sin importar el tema de la app — el shader de
+       .about-bg-canvas pinta con mix-blend-mode:screen sobre negro (ver hero-bg.js), que
+       contra un fondo claro (tema claro, --surface blanco) se vuelve invisible: "screen"
+       contra blanco siempre da blanco, no hay glow que se note. Redefiniendo las variables
+       acá, todo lo que las use adentro (fondo, texto, bordes) cae en los valores oscuros
+       de siempre sin tocar --surface/--text globales ni el resto de la app. */
+    --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
+    --text: #e6edf3; --muted: #8b949e;
+    width: 590px; min-height: 570px; text-align: center;
     position: relative; overflow: hidden; display: flex; flex-direction: column; }
   /* mix-blend-mode:screen en vez de opacity baja: el renderer del shader pinta sobre
      negro (ver clearColor en hero-bg.js) — con opacity, ese negro se mezcla con el fondo

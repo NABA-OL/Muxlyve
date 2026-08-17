@@ -408,7 +408,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
      blob: vía createObjectURL(), y ESO es lo que carga el <video>. Sin blob: acá, el CSP
      lo bloqueaba en silencio y la previsualización quedaba en negro (aunque el audio/video
      grabado en disco, que no pasa por este <video>, seguía bien). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:*; frame-src 'none'; object-src 'none'; base-uri 'self'">
+<!-- connect-src incluye api.dicebear.com: pickDiceBearAvatar() (panel-client.js, Preferencias
+     → Perfil) hace fetch() ahí para bajar el PNG del avatar elegido y mandarlo como base64 —
+     sin este origen explícito el fetch queda bloqueado en silencio (igual que pasó antes con
+     blob: en media-src, ver comentario arriba) y tira "No se pudo generar el avatar." -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* https://api.dicebear.com; frame-src 'none'; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Muxlyve — Panel</title>
 <link rel="icon" href="/icon-muxlyve.svg">
@@ -470,6 +474,16 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
         <circle cx="12" cy="12" r="3"/>
+      </svg>
+    </button>
+    <!-- Foto de perfil — solo con Electron (hay licencia/nickname), ver bootstrap en
+         panel-client.js. Lleva directo a Preferencias → Perfil, no a la pestaña default.
+         Al fondo del todo a propósito (ver conversación: el usuario la quería después de
+         Ajustes, no antes — así se pierde la sensación de que la foto "pesaba" más). -->
+    <button class="sidebar-toggle-btn avatar-btn" id="avatarBtn" style="display:none" onclick="openProfile()" title="Perfil">
+      <img id="sidebarAvatarImg" src="" alt="" style="display:none">
+      <svg id="sidebarAvatarPlaceholder" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
       </svg>
     </button>
   </div>
@@ -807,6 +821,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Soporte</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="profile" id="prefsNavProfile" onclick="switchPrefsTab('profile')" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span>Perfil</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="license" onclick="switchPrefsTab('license')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>
@@ -1029,11 +1050,64 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <button class="success-btn" onclick="openFeedback()">Feedback</button>
           </div>
         </div>
-        <div class="prefs-panel" id="prefsLicenseBlock" data-panel="license">
+        <!-- Perfil: correo/nickname/foto — separado de Licencia porque se toca seguido
+             (nickname, foto), a diferencia del plan/fecha/liberar equipo de abajo, que se
+             tocan una vez. Mismo criterio que la separación de "Acerca de". -->
+        <div class="prefs-panel" id="prefsProfileBlock" data-panel="profile">
+          <div class="lic-row" style="align-items:center">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;width:100%">
+              <div style="position:relative;flex-shrink:0">
+                <img id="profileAvatarImg" src="" alt="" style="width:72px;height:72px;border-radius:50%;
+                  object-fit:cover;background:var(--surface-2);border:1px solid var(--border);display:none">
+                <div id="profileAvatarPlaceholder" style="width:72px;height:72px;border-radius:50%;
+                  background:var(--surface-2);border:1px solid var(--border);display:flex;
+                  align-items:center;justify-content:center;color:var(--muted)">
+                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                  </svg>
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:.5rem;width:100%">
+                <input type="file" id="profileAvatarFile" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="onAvatarFileChosen(event)">
+                <button class="lic-manage-btn" style="width:100%;margin-bottom:0;display:flex;align-items:center;justify-content:center;gap:.5rem" onclick="$('#profileAvatarFile').click()">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                  </svg>
+                  Subir foto
+                </button>
+                <!-- Mismas opciones que en la ventana de primer uso (electron/onboarding.html)
+                     — generar con DiceBear (Planets/Voxel Art/Adventurer Neutral, CC0). Cada
+                     click aplica de una un avatar nuevo al azar (sin paso de "confirmar" como
+                     en onboarding) — es una acción directa de ajustes, volver a clickear da
+                     otra variante. -->
+                <div style="display:flex;gap:.4rem">
+                  <button class="lic-manage-btn" style="flex:1;margin-bottom:0;padding:.35rem .4rem;font-size:.76rem" onclick="pickDiceBearAvatar('planets')">Planets</button>
+                  <button class="lic-manage-btn" style="flex:1;margin-bottom:0;padding:.35rem .4rem;font-size:.76rem" onclick="pickDiceBearAvatar('voxel-art')">Voxel Art</button>
+                  <button class="lic-manage-btn" style="flex:1;margin-bottom:0;padding:.35rem .4rem;font-size:.76rem" onclick="pickDiceBearAvatar('adventurer-neutral')">Adventurer Neutral</button>
+                </div>
+                <button class="lic-danger-btn" id="profileAvatarRemoveBtn" style="width:100%;display:none" onclick="removeAvatarPic()">Quitar foto</button>
+              </div>
+            </div>
+          </div>
           <div class="lic-row">
             <span class="lic-label">Correo</span>
             <span class="lic-value" id="licEmail">…</span>
           </div>
+          <!-- Nickname: separado del "name" real que captura Freemius en la compra (ver
+               electron/license.js) — esto es cómo el usuario quiere que la app le hable,
+               editable acá, se guarda en la web (misma licencia en otro equipo lo ve igual)
+               y en caché local para no pegarle a la red cada vez que se muestra. -->
+          <div class="lic-row">
+            <span class="lic-label">Nickname</span>
+            <div style="display:flex;align-items:center;gap:.5rem">
+              <input type="text" id="licNicknameInput" maxlength="24" placeholder="Cómo querés que te llamemos"
+                style="flex:1;min-width:0;font-size:.85rem;padding:.35rem .5rem;border-radius:6px;
+                border:1px solid var(--border);background:var(--surface);color:var(--text)">
+              <button class="lic-manage-btn" style="width:auto;flex:0 0 auto;margin-bottom:0;padding:.35rem .7rem;white-space:nowrap" onclick="saveNickname()">Guardar</button>
+            </div>
+          </div>
+        </div>
+        <div class="prefs-panel" id="prefsLicenseBlock" data-panel="license">
           <div class="lic-status-row">
             <div>
               <div class="lic-label" style="margin-bottom:.25rem">Plan</div>
@@ -1059,6 +1133,22 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         </div>
       </div>
     </div>
+  </div>
+</div>
+<!-- Bienvenida + pedido de nickname — se abre sola (ver checkNicknamePrompt() en
+     panel-client.js) la primera vez que la licencia no tiene nickname todavía. Cerrar
+     sin completar no bloquea nada — se puede poner después desde Preferencias → Perfil. -->
+<div class="prefs-overlay" id="nicknameOverlay" onclick="if(event.target===this)closeNicknamePrompt()">
+  <div class="prefs-modal lic-modal">
+    <div class="prefs-head">
+      <h2 id="nicknameGreetTitle">¡Hola!</h2>
+      <button class="prefs-close" onclick="closeNicknamePrompt()">✕</button>
+    </div>
+    <p class="pref-desc" style="margin:.4rem 0 .8rem">¿Cómo querés que te llamemos en la app?</p>
+    <input type="text" id="nicknameModalInput" maxlength="24" placeholder="Tu nickname"
+      style="width:100%;font-size:.9rem;padding:.5rem .6rem;border-radius:8px;
+      border:1px solid var(--border);background:var(--surface);color:var(--text)">
+    <button style="width:100%;margin-top:.8rem" onclick="confirmNickname()">Listo</button>
   </div>
 </div>
 <div class="prefs-overlay" id="reportOverlay" onclick="if(event.target===this)closeReport()">
@@ -1225,7 +1315,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
 <div class="prefs-overlay" id="summaryOverlay" onclick="if(event.target===this)closeSessionSummary()">
   <div class="prefs-modal" style="width:380px">
     <div class="prefs-head">
-      <h2>Resumen del stream</h2>
+      <h2 id="summaryTitle">Resumen del stream</h2>
       <button class="prefs-close" onclick="closeSessionSummary()">✕</button>
     </div>
     <div id="summaryBody" style="display:flex;flex-direction:column;gap:.5rem;font-size:.9rem;margin-bottom:1rem"></div>

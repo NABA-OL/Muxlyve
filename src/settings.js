@@ -8,8 +8,16 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = process.env.MS_CONFIG_DIR || path.join(__dirname, '..', 'config');
-const SETTINGS_PATH = path.join(CONFIG_DIR, 'settings.json');
+// Función, no const — electron/oauth.js importa este módulo (vía src/chat.js) en su
+// nivel superior, que se evalúa ANTES de que electron/main.js fije MS_CONFIG_DIR (eso
+// pasa recién dentro de app.whenReady()). Una const calculada al importar quedaba pegada
+// para siempre a la ruta de fallback DENTRO del .asar empaquetado (de solo lectura) — todo
+// guardado fallaba con ENOTDIR sin importar qué env var se fijara después. Calculándolo en
+// cada llamada, ya lee MS_CONFIG_DIR con su valor real para cuando de verdad se usa.
+function settingsPath() {
+  const configDir = process.env.MS_CONFIG_DIR || path.join(__dirname, '..', 'config');
+  return path.join(configDir, 'settings.json');
+}
 
 const DEFAULT_STREAM_KEY = process.env.STREAM_KEY || 'mistream';
 // Segmento de URL RTMP y del path del flv — mismo criterio que las claves de destino,
@@ -156,9 +164,10 @@ function validPresets(list) {
 // Stream Deck (sin acceso a ese localStorage) siempre guardaba en la carpeta default,
 // nunca en la que el usuario configuró.
 export function loadSettings() {
-  if (!existsSync(SETTINGS_PATH)) return { ...DEFAULT_SETTINGS };
+  const settingsPathValue = settingsPath();
+  if (!existsSync(settingsPathValue)) return { ...DEFAULT_SETTINGS };
   try {
-    const data = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
+    const data = JSON.parse(readFileSync(settingsPathValue, 'utf-8'));
     return {
       streamKey: isValidStreamKey(data.streamKey) ? data.streamKey : DEFAULT_STREAM_KEY,
       recArmed: !!data.recArmed,
@@ -192,5 +201,5 @@ export function loadSettings() {
 // sin esto pisaría el resto del archivo (streamKey, el otro armed) con undefined.
 export function saveSettings(partial) {
   const next = { ...loadSettings(), ...partial };
-  writeFileSync(SETTINGS_PATH, JSON.stringify(next, null, 2) + '\n', 'utf-8');
+  writeFileSync(settingsPath(), JSON.stringify(next, null, 2) + '\n', 'utf-8');
 }

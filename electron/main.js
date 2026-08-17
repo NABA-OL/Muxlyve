@@ -12,6 +12,9 @@ import {
   releaseLicense,
   getLicenseInfo,
   refreshLicenseStatus,
+  setNickname,
+  setAvatar,
+  removeAvatar,
 } from './license.js';
 import { connect as oauthConnect, disconnect as oauthDisconnect, getStatus as oauthStatus, resumeChatIfConnected, setStreamTitle, checkLiveTokens } from './oauth.js';
 import { initUpdater, checkForUpdatesManually } from './updater.js';
@@ -57,6 +60,7 @@ const TRAY_ICON_PATH = path.join(__dirname, process.platform === 'darwin'
   : '../src/public/tray-icon-win.png');
 const PRELOAD       = path.join(__dirname, 'preload.cjs');
 const ACTIVATE_HTML = path.join(__dirname, 'activate.html');
+const ONBOARDING_HTML = path.join(__dirname, 'onboarding.html');
 const SPLASH_HTML   = path.join(__dirname, 'splash.html');
 // Flag propio (no depende del SO) para saber si el login item nos arrancó en modo oculto —
 // lo agregamos nosotros mismos a los args del login item, ver app:set-login-item.
@@ -95,7 +99,7 @@ let splashShownAt = 0;
 function showSplash() {
   splashShownAt = Date.now();
   splash = new BrowserWindow({
-    width: 460, height: 310,
+    width: 700, height: 440,
     frame: false,
     resizable: false,
     center: true,
@@ -105,7 +109,12 @@ function showSplash() {
     alwaysOnTop: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
-  splash.loadFile(SPLASH_HTML, { query: { lang: APP_LANG, version: app.getVersion() } });
+  // nickname/avatarUrl ya están en caché local (checkLicense() corrió antes que esto,
+  // ver app.whenReady) — nunca pega a la red acá, solo lee lo que ya se guardó.
+  const info = getLicenseInfo();
+  splash.loadFile(SPLASH_HTML, {
+    query: { lang: APP_LANG, version: app.getVersion(), nickname: info?.nickname || '', avatarUrl: info?.avatarUrl || '' },
+  });
 }
 
 function closeSplash() {
@@ -176,6 +185,17 @@ function titleBarConfig(height = TITLEBAR_HEIGHT, isDark = true) {
   return {}; // otros: barra nativa normal, sin fundir.
 }
 
+// Título de ventana + tooltip de bandeja con el nickname, ej. "Muxlyve — NABA-OL". Se
+// llama tras cada carga de página (la ventana principal es una SPA, el panel nunca vuelve
+// a navegar después del load inicial, así que esto no compite con re-renders) y de nuevo
+// si el nickname cambia desde Preferencias → Licencia (ver license:set-nickname abajo).
+function updateBrandedTitle() {
+  const nickname = getLicenseInfo()?.nickname || '';
+  const title = nickname ? `Muxlyve — ${nickname}` : 'Muxlyve';
+  if (win && !win.isDestroyed()) win.setTitle(title);
+  if (tray) tray.setToolTip(title);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200, height: 860, minWidth: 900, minHeight: 600,
@@ -192,6 +212,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   win.once('ready-to-show', () => { if (!START_HIDDEN) win.show(); });
+  win.webContents.on('did-finish-load', updateBrandedTitle);
   win.loadURL(PANEL_URL);
   // Ajuste independiente de "iniciar minimizado" — si está activo, cerrar con la X oculta
   // a la bandeja en vez de salir. Solo se sale de verdad desde el menú de la bandeja
@@ -313,7 +334,7 @@ function createTray() {
   const icon = base.isEmpty() ? base : base.resize({ width: 20, height: 20 });
   if (process.platform === 'darwin' && !icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip('Muxlyve');
+  updateBrandedTitle(); // tooltip con nickname si ya está cacheado — fallback 'Muxlyve' si no
   tray.setContextMenu(buildTrayMenu()); // fallback estático — se pisa apenas hay un right-click real
   tray.on('right-click', async () => {
     await refreshTrayMenu(); // setContextMenu con datos frescos...
@@ -390,12 +411,49 @@ function resolveActivation() {
   }, 900);
 }
 
+// ── Onboarding (nickname + foto) ───────────────────────────────────────────────
+// Se muestra apenas hay licencia activa SIN nickname todavía (recién activada, o una
+// licencia vieja de antes de que esto existiera) — ANTES del splash, para que el splash y
+// el resto de la app ya arranquen con el nickname/foto puestos, en vez de pedirlo recién
+// con el panel ya cargado (ver conversación). "Omitir por ahora" cierra sin guardar nada;
+// se puede completar después desde Preferencias → Perfil, mismo mecanismo (msLicense).
+function showOnboarding() {
+  return new Promise((resolve) => {
+    const onboardingWin = new BrowserWindow({
+      width: 460, height: 640,
+      resizable: false,
+      center: true,
+      backgroundColor: '#0d1117',
+      title: APP_LANG === 'es' ? 'Muxlyve — Perfil' : 'Muxlyve — Profile',
+      icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
+    });
+    onboardingWin.webContents.setWindowOpenHandler(({ url }) => {
+      openExternalSafe(url);
+      return { action: 'deny' };
+    });
+    const name = getLicenseInfo()?.name || '';
+    onboardingWin.loadFile(ONBOARDING_HTML, { query: { lang: APP_LANG, name } });
+    onboardingWin.on('closed', resolve);
+  });
+}
+
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 ipcMain.handle('license:activate', async (_, key) => {
   const result = await activateLicense(key);
   if (result.ok) resolveActivation();
   return result;
 });
+
+ipcMain.handle('license:set-nickname', async (_, nickname) => {
+  const result = await setNickname(nickname);
+  if (result.ok) updateBrandedTitle();
+  return result;
+});
+
+ipcMain.handle('license:set-avatar', (_, imageBase64, mimeType) => setAvatar(imageBase64, mimeType));
+ipcMain.handle('license:remove-avatar', () => removeAvatar());
 
 ipcMain.handle('license:release', async () => {
   const result = await releaseLicense();
@@ -566,6 +624,7 @@ ipcMain.handle('report:send', async (_, description) => {
     const license = getLicenseInfo();
     const body = JSON.stringify({
       email: license?.email || '',
+      nickname: license?.nickname || '',
       appVersion: app.getVersion(),
       platform: process.platform,
       // process.getSystemVersion() da la versión real del SO (ej. macOS 15.1) — os.release()
@@ -597,6 +656,7 @@ ipcMain.handle('feedback:send', async (_, description) => {
     const license = getLicenseInfo();
     const body = JSON.stringify({
       email: license?.email || '',
+      nickname: license?.nickname || '',
       appVersion: app.getVersion(),
       platform: process.platform,
       description: description || '',
@@ -651,6 +711,15 @@ app.whenReady().then(async () => {
   if (!license.unlocked) {
     console.log('[electron] Mostrando pantalla de activación.');
     await showActivationWindow(); // espera hasta que el usuario active o cierre
+  }
+
+  // Nickname/foto — recién activada o una licencia vieja sin esto todavía. getLicenseInfo()
+  // devuelve null en modo dev sin licencia real (bypass) — sin licencia real no hay dónde
+  // guardar, no tiene sentido pedirlo. START_HIDDEN (login item silencioso) tampoco debe
+  // interrumpir con una ventana que el usuario no espera ver.
+  const licenseInfo = getLicenseInfo();
+  if (!START_HIDDEN && licenseInfo && !licenseInfo.nickname) {
+    await showOnboarding();
   }
 
   // Config dir fuera de app.asar cuando está empaquetado.
