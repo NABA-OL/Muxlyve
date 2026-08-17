@@ -28,10 +28,9 @@
     { id: 'kick',    name: 'Kick',    color: '#53fc18' },
     { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
   ];
-  // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
-  // producción empaquetada (en dev sigue funcionando para poder seguir probando/iterando
-  // con Google). Cuando llegue la aprobación, cambiar esto a false y listo.
-  const YOUTUBE_OAUTH_PENDING = true;
+  // Google aprobó la verificación OAuth (2026-08-16) — login de YouTube habilitado en
+  // producción empaquetada, no solo en dev.
+  const YOUTUBE_OAUTH_PENDING = false;
   let lastState = null;
   let lastAuthStatus = {};
   // Idioma actual del cliente — el <html lang="es"> del template ya llega traducido por
