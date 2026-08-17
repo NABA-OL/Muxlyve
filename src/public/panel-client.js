@@ -1758,18 +1758,21 @@
         '</label>' +
         '<input type="text" class="tg-token" placeholder="Token del bot (@BotFather)">' +
         '<input type="text" class="tg-chat" placeholder="Chat ID">' +
+        '<input type="text" class="tg-topic" placeholder="Tema (opcional)" title="Número de tema, solo grupos con \'Temas\' activado">' +
         '<button class="browse-btn webhook-save-btn">Guardar</button>' +
         '<button class="browse-btn webhook-test-btn">Probar</button>' +
         '<button class="webhook-del-btn" title="Borrar">✕</button>';
       const tokenInput = row.querySelector('.tg-token');
       const chatInput = row.querySelector('.tg-chat');
+      const topicInput = row.querySelector('.tg-topic');
       const enabledChk = row.querySelector('.webhook-enabled-chk');
       tokenInput.value = bot.botToken;
       chatInput.value = bot.chatId;
+      topicInput.value = bot.topicId || '';
       enabledChk.checked = bot.enabled;
-      row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value));
+      row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value, topicInput.value));
       enabledChk.addEventListener('change', () => toggleTelegramBot(i, enabledChk.checked));
-      row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value));
+      row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value, topicInput.value));
       row.querySelector('.webhook-del-btn').addEventListener('click', () => removeTelegramBot(i));
       box.appendChild(row);
     });
@@ -1777,7 +1780,7 @@
   }
   function addTelegramBotRow() {
     if (window._telegramBots.length >= MAX_TELEGRAM_BOTS) return;
-    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '', enabled: true }]);
+    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '', topicId: '', enabled: true }]);
     const inputs = $('#telegramBotsList').querySelectorAll('.tg-token');
     inputs[inputs.length - 1]?.focus();
   }
@@ -1786,9 +1789,9 @@
   // autosave por campo guardaba apenas se completaba el token (sin chat ID todavía),
   // el backend lo rechazaba, y el error volvía a pintar la fila con el valor viejo —
   // borrando lo que el usuario acababa de escribir. Ver .webhook-row-telegram en el CSS.
-  async function saveTelegramBotRow(i, botToken, chatId) {
+  async function saveTelegramBotRow(i, botToken, chatId, topicId) {
     const next = window._telegramBots.slice();
-    next[i] = { ...next[i], botToken: botToken.trim(), chatId: chatId.trim() };
+    next[i] = { ...next[i], botToken: botToken.trim(), chatId: chatId.trim(), topicId: (topicId || '').trim() };
     await persistTelegramBots(next);
   }
   async function toggleTelegramBot(i, enabled) {
@@ -1808,9 +1811,9 @@
       toast('Bots de Telegram actualizados');
     } catch (e) { toast(e.message, true); } // no re-renderiza — no pisa lo que el usuario tiene escrito
   }
-  async function testTelegramBotRow(botToken, chatId) {
+  async function testTelegramBotRow(botToken, chatId, topicId) {
     try {
-      const r = await api('POST', '/api/notify-test-telegram', { botToken, chatId });
+      const r = await api('POST', '/api/notify-test-telegram', { botToken, chatId, topicId });
       toast(r.ok ? 'Aviso de prueba enviado a Telegram' : (r.error || 'No se pudo enviar'), !r.ok);
     } catch (e) { toast(e.message, true); }
   }

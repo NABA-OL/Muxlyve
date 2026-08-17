@@ -239,11 +239,12 @@ export async function handle(req, res, url, ctx) {
         .map((b) => ({
           botToken: String(b?.botToken || '').trim(),
           chatId: String(b?.chatId || '').trim(),
+          topicId: String(b?.topicId || '').trim(),
           enabled: typeof b?.enabled === 'boolean' ? b.enabled : true,
         }))
         .filter((b) => b.botToken || b.chatId);
       if (cleaned.some((b) => !isValidTelegramBot(b))) {
-        json(res, 400, { error: t('Uno de los bots de Telegram tiene el token o el chat ID inválido.') });
+        json(res, 400, { error: t('Uno de los bots de Telegram tiene el token, el chat ID o el tema inválido.') });
         return true;
       }
       patch.telegramBots = cleaned;
@@ -283,12 +284,12 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // POST /api/notify-test-telegram  { botToken, chatId, kind? } -> mismo criterio, para
-  // un bot de Telegram puntual.
+  // POST /api/notify-test-telegram  { botToken, chatId, kind?, topicId? } -> mismo criterio,
+  // para un bot de Telegram puntual.
   if (req.method === 'POST' && url.pathname === '/api/notify-test-telegram') {
     let input;
     try { input = await readBody(req); } catch (e) { json(res, 400, { error: e.message }); return true; }
-    json(res, 200, await testTelegramBot(input.botToken, input.chatId, input.kind === 'end' ? 'end' : 'start'));
+    json(res, 200, await testTelegramBot(input.botToken, input.chatId, input.kind === 'end' ? 'end' : 'start', input.topicId));
     return true;
   }
 
@@ -310,7 +311,7 @@ export async function handle(req, res, url, ctx) {
     }
     for (let i = 0; i < activeTelegram.length; i++) {
       const bot = activeTelegram[i];
-      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId, kind)) });
+      results.push({ platform: 'telegram', index: i + 1, ...(await testTelegramBot(bot.botToken, bot.chatId, kind, bot.topicId)) });
     }
     json(res, 200, { results });
     return true;

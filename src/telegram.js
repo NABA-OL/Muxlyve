@@ -49,15 +49,19 @@ export function discordToTelegramMarkdown(text) {
   return result;
 }
 
-async function postToTelegram(botToken, chatId, text) {
+async function postToTelegram(botToken, chatId, text, topicId) {
   // encodeURIComponent en el token: ya pasó por isValidTelegramBot (regex) antes de
   // llegar acá, pero esto es la segunda capa — nunca confiar en un solo punto de
   // validación para algo que termina armando una URL.
   const url = `https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`;
+  // message_thread_id: solo se agrega si el usuario puso un tema — mandarlo en un chat sin
+  // "Temas" activado hace que Telegram rechace el mensaje entero, así que no se manda "por
+  // las dudas" con un valor vacío.
+  const threadField = topicId ? { message_thread_id: Number(topicId) } : {};
   const send = (body) => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, ...threadField }),
     signal: AbortSignal.timeout(10000),
   });
 
@@ -91,7 +95,7 @@ export async function notifyTelegram(kind = 'start') {
   lastNotifyAt[kind] = Date.now();
   const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   const results = await Promise.allSettled(
-    active.map((bot) => postToTelegram(bot.botToken, bot.chatId, message)),
+    active.map((bot) => postToTelegram(bot.botToken, bot.chatId, message, bot.topicId)),
   );
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') console.log(`[notify] Telegram #${i + 1} (${kind}) — aviso enviado.`);
@@ -101,15 +105,19 @@ export async function notifyTelegram(kind = 'start') {
 
 // Botón "Probar" de cada fila — prueba un bot puntual sin necesidad de guardarlo antes.
 // Ignora el cooldown a propósito.
-export async function testTelegramBot(botToken, chatId, kind = 'start') {
-  const clean = { botToken: String(botToken || '').trim(), chatId: String(chatId || '').trim() };
+export async function testTelegramBot(botToken, chatId, kind = 'start', topicId = '') {
+  const clean = {
+    botToken: String(botToken || '').trim(),
+    chatId: String(chatId || '').trim(),
+    topicId: String(topicId || '').trim(),
+  };
   if (!isValidTelegramBot(clean)) {
-    return { ok: false, error: 'Bot token o chat ID inválido.' };
+    return { ok: false, error: 'Bot token, chat ID o tema inválido.' };
   }
   const { liveMessage, endMessage } = loadSettings();
   const message = (kind === 'end' ? endMessage : liveMessage) || DEFAULT_MESSAGES[kind];
   try {
-    await postToTelegram(clean.botToken, clean.chatId, `[Prueba de Muxlyve]\n${message}`);
+    await postToTelegram(clean.botToken, clean.chatId, `[Prueba de Muxlyve]\n${message}`, clean.topicId);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };

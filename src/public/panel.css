@@ -415,6 +415,9 @@
      pintar la fila con el valor viejo, borrando lo recién tecleado. El token ocupa su
      propia línea completa para que el chat ID + los 3 botones entren cómodos debajo. */
   .webhook-row-telegram .tg-token { flex: 1 1 100%; }
+  /* Tema es un número corto (message_thread_id de Telegram), no necesita el mismo ancho
+     que chat ID — angosto y con flex-grow en 0 para no robarle espacio a los botones. */
+  .webhook-row-telegram .tg-topic { flex: 0 1 90px; }
   .webhook-save-btn, .webhook-test-btn { flex-shrink: 0; width: auto; padding: .35rem .7rem; font-size: .75rem; }
   .webhook-del-btn { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
     cursor: pointer; padding: .3rem .5rem; border-radius: 6px; transition: background .15s, color .15s; }
