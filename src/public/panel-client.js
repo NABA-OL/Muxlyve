@@ -2753,9 +2753,9 @@
       pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
       row.appendChild(pinBtn);
     }
-    // Moderar (timeout/ban): solo Twitch, y no sobre tu propio mensaje.
-    if (msg.platform === 'twitch' && msg.userId && !msg.isBroadcaster) {
-      row.appendChild(createModBtn(msg.userId));
+    // Moderar (timeout/ban): Twitch y YouTube, y no sobre tu propio mensaje.
+    if ((msg.platform === 'twitch' || msg.platform === 'youtube') && msg.userId && !msg.isBroadcaster) {
+      row.appendChild(createModBtn(msg.userId, msg.platform));
     }
     box.appendChild(row);
     while (box.children.length > 200) box.removeChild(box.firstChild);

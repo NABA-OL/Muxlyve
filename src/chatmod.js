@@ -74,16 +74,18 @@ export async function getChatPinned() {
   return getPinnedHandler();
 }
 
-// Mismo puente, para timeout/ban — solo Twitch (ver electron/oauth.js banTwitchUser).
-// duration en segundos: presente = timeout, ausente/null = ban permanente — mismo
-// criterio que la API de Twitch (moderation/bans), no se reinterpreta acá.
+// Mismo puente, para timeout/ban — Twitch y YouTube (ver electron/oauth.js
+// banChatUserDispatch). duration en segundos: presente = timeout, ausente/null = ban
+// permanente — mismo criterio que la API de Twitch (moderation/bans) y YouTube
+// (liveChatBans, type temporary/permanent), no se reinterpreta acá. platform decide a
+// cuál de las dos pega el dispatcher — el id de usuario de una no sirve en la otra.
 let banHandler = null;
 
 export function setChatBanHandler(fn) {
   banHandler = fn;
 }
 
-export async function banChatUser(userId, duration, reason) {
+export async function banChatUser(userId, duration, reason, platform) {
   if (!banHandler) return { ok: false, error: 'No disponible — requiere la app de escritorio.' };
-  return banHandler(userId, duration, reason);
+  return banHandler(userId, duration, reason, platform);
 }

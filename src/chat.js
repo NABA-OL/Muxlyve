@@ -253,6 +253,12 @@ async function ytPollLoop() {
         // sin ampliar ningún scope — a diferencia de Twitch/Kick no hace falta un helper
         // aparte, YouTube ya entrega el booleano listo.
         isMod: !!(item.authorDetails?.isChatModerator || item.authorDetails?.isChatOwner),
+        // channelId del autor — es el "userId" que pide liveChatBans.insert para banear
+        // (ver banYoutubeUser en electron/oauth.js). isChatOwner = el propio streamer, para
+        // no ofrecer "banearse a sí mismo" en la UI (mismo criterio que isBroadcaster de
+        // Twitch).
+        userId: item.authorDetails?.channelId || null,
+        isBroadcaster: !!item.authorDetails?.isChatOwner,
         timestamp: Date.now(),
       });
     }
@@ -284,6 +290,14 @@ export function stopYoutubeChat() {
   ytTimer = null;
   ytLiveChatId = null;
   ytPageToken = null;
+}
+
+// El mismo liveChatId que ya está sondeando ytPollLoop — reusarlo (en vez de que
+// banYoutubeUser/sendYoutubeMessage en oauth.js vuelvan a pedirlo) evita una llamada extra
+// a la API y garantiza que apuntan al chat que el streamer está viendo en pantalla ahora
+// mismo, no a uno recién resuelto que podría ya no ser el activo.
+export function getYoutubeLiveChatId() {
+  return ytLiveChatId;
 }
 
 // ── Kick chat (fase 3) ───────────────────────────────────────────────────────

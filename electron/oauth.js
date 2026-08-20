@@ -9,7 +9,7 @@ import { BrowserWindow, safeStorage, app, session, net } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
+import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl, getYoutubeLiveChatId } from '../src/chat.js';
 import { setViewerCounts } from '../src/viewers.js';
 import { setChatModeHandler, setChatSendHandler, setChatPinHandler, setChatUnpinHandler, setChatGetPinnedHandler, setChatBanHandler } from '../src/chatmod.js';
 import { tMap } from '../src/i18n.js';
@@ -51,7 +51,11 @@ const PLATFORMS = {
     name: 'YouTube',
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
-    scope: 'https://www.googleapis.com/auth/youtube.readonly',
+    // youtube.force-ssl → banear/silenciar (banYoutubeUser) y enviar mensaje
+    // (sendYoutubeMessage) — en revisión de Google, ver YOUTUBE_MODERATION_PENDING abajo.
+    // Cambiar el scope invalida los tokens ya emitidos — quien ya conectó YouTube antes de
+    // esto necesita reconectar.
+    scope: 'https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl',
     pkce: false,
     envKey: 'GOOGLE',
     // Google NO acepta esquemas personalizados (muxlyve://) para clientes tipo "Aplicación
@@ -77,6 +81,16 @@ const PLATFORMS = {
     useLocalhost: true,
   },
 };
+
+// Google todavía no aprobó youtube.force-ssl (scope agregado arriba en PLATFORMS.youtube)
+// — bloquea banear/silenciar y enviar mensaje en YouTube SOLO en producción empaquetada
+// (en dev sigue andando, para grabar el video de demostración que pide la revisión de
+// Google y para seguir probando). Mismo patrón que YOUTUBE_OAUTH_PENDING (panel-client.js)
+// tuvo para el login. Cuando llegue la aprobación, cambiar esto a false y listo.
+const YOUTUBE_MODERATION_PENDING = true;
+function youtubeModerationBlockedMsg() {
+  return t('YouTube: moderación disponible en una próxima versión (en espera de aprobación de Google).');
+}
 
 function tokensPath() {
   return path.join(app.getPath('userData'), 'oauth-tokens.json');
@@ -666,9 +680,7 @@ setChatModeHandler(setTwitchChatMode);
 
 // ── Enviar mensaje como el streamer ─────────────────────────────────────────────────
 // Mismo patrón que el título: aplica a las plataformas conectadas que lo soporten.
-// YouTube queda fuera — mismo criterio que el título/moderación (scope más amplio,
-// revisión de Google pendiente).
-const CHAT_SEND_PLATFORMS = ['twitch', 'kick'];
+const CHAT_SEND_PLATFORMS = ['twitch', 'kick', 'youtube'];
 
 async function sendTwitchMessage(text) {
   const tok = readTokens().twitch;
@@ -710,13 +722,35 @@ async function sendKickMessage(text) {
   return { ok: true };
 }
 
+// POST /youtube/v3/liveChat/messages — necesita el liveChatId del chat activo (el mismo
+// que ya está sondeando src/chat.js, ver getYoutubeLiveChatId) y youtube.force-ssl.
+async function sendYoutubeMessage(text) {
+  if (YOUTUBE_MODERATION_PENDING && app.isPackaged) return { ok: false, error: youtubeModerationBlockedMsg() };
+  const liveChatId = getYoutubeLiveChatId();
+  if (!liveChatId) return { ok: false, error: t('No hay chat de YouTube activo ahora mismo.') };
+  const token = await getValidToken('youtube');
+  if (!token) return { ok: false, error: t('Sesión de YouTube inválida — reconecta.') };
+  const res = await fetch('https://www.googleapis.com/youtube/v3/liveChat/messages?part=snippet', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snippet: { liveChatId, type: 'textMessageEvent', textMessageDetails: { messageText: text } } }),
+  });
+  if (!res.ok) {
+    const text2 = await res.text().catch(() => '');
+    return { ok: false, error: `YouTube ${res.status}: ${text2.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
 export async function sendChatMessage(text) {
   const tokens = readTokens();
   const results = {};
   for (const platform of CHAT_SEND_PLATFORMS) {
     if (!tokens[platform]) continue;
     try {
-      results[platform] = platform === 'twitch' ? await sendTwitchMessage(text) : await sendKickMessage(text);
+      results[platform] = platform === 'twitch' ? await sendTwitchMessage(text)
+        : platform === 'kick' ? await sendKickMessage(text)
+        : await sendYoutubeMessage(text);
     } catch (err) {
       results[platform] = { ok: false, error: err.message };
     }
@@ -848,4 +882,39 @@ export async function banTwitchUser(userId, duration, reason) {
   }
   return { ok: true };
 }
-setChatBanHandler(banTwitchUser);
+// POST /youtube/v3/liveChat/bans — channelId (no un id numérico como Twitch/Kick, YouTube
+// identifica autores por canal) + type temporary/permanent + banDurationSeconds si aplica.
+export async function banYoutubeUser(channelId, duration, reason) {
+  if (YOUTUBE_MODERATION_PENDING && app.isPackaged) return { ok: false, error: youtubeModerationBlockedMsg() };
+  if (!channelId) return { ok: false, error: t('Falta el channel id — no se puede moderar.') };
+  const liveChatId = getYoutubeLiveChatId();
+  if (!liveChatId) return { ok: false, error: t('No hay chat de YouTube activo ahora mismo.') };
+  const token = await getValidToken('youtube');
+  if (!token) return { ok: false, error: t('Sesión de YouTube inválida — reconecta.') };
+  const snippet = {
+    liveChatId,
+    type: duration ? 'temporary' : 'permanent',
+    bannedUserDetails: { channelId: String(channelId) },
+  };
+  if (duration) snippet.banDurationSeconds = Number(duration);
+  const res = await fetch('https://www.googleapis.com/youtube/v3/liveChat/bans?part=snippet', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snippet }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `YouTube ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+// Dispatcher por plataforma — a diferencia de sendChatMessage (que manda a TODAS las
+// plataformas conectadas a la vez), el ban es sobre un mensaje puntual de UNA plataforma
+// específica (el id de usuario de cada una es incompatible con las otras), así que acá sí
+// hace falta saber cuál.
+async function banChatUserDispatch(userId, duration, reason, platform) {
+  if (platform === 'youtube') return banYoutubeUser(userId, duration, reason);
+  return banTwitchUser(userId, duration, reason);
+}
+setChatBanHandler(banChatUserDispatch);

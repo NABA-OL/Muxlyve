@@ -114,9 +114,9 @@ async function syncPinnedMessage() {
 }
 
 // ── Timeout/ban (Fase 5, docs/PLAN_FEATURES_LOTE2.md) ───────────────────────────────────
-// Solo Twitch — igual que el pin, Kick no lo expone en API pública y YouTube no lo tiene
-// en absoluto (ver CLAUDE.md). El overlay de OBS (CHAT_OVERLAY_HTML) no llama a
-// createModBtn() en absoluto — es de solo lectura, mismo criterio que el pin.
+// Twitch y YouTube (liveChatBans, scope youtube.force-ssl — ver electron/oauth.js) — Kick
+// no lo expone en API pública (ver CLAUDE.md). El overlay de OBS (CHAT_OVERLAY_HTML) no
+// llama a createModBtn() en absoluto — es de solo lectura, mismo criterio que el pin.
 const MOD_ICON_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>';
 const MOD_ACTIONS = [
   { label: 'Timeout 1 min', duration: 60 },
@@ -129,14 +129,14 @@ function closeAllModMenus() {
   document.querySelectorAll('.chat-mod-menu').forEach((m) => m.remove());
 }
 
-async function runModAction(btn, userId, action) {
+async function runModAction(btn, userId, platform, action) {
   closeAllModMenus();
   btn.disabled = true;
   try {
     const res = await fetch('/api/chat-ban', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, duration: action.duration, reason: 'Moderado desde Muxlyve' }),
+      body: JSON.stringify({ userId, duration: action.duration, reason: 'Moderado desde Muxlyve', platform }),
     });
     const r = await res.json();
     if (typeof toast === 'function') {
@@ -153,10 +153,10 @@ async function runModAction(btn, userId, action) {
 // menú abierto a la vez (closeAllModMenus antes de abrir uno nuevo); se cierra solo al
 // tocar afuera. Devuelve el botón ya armado, listo para agregar a la fila del mensaje —
 // ambas vistas (panel y popout) lo crean igual, ver appendChatMessage()/append().
-function createModBtn(userId) {
+function createModBtn(userId, platform) {
   const btn = document.createElement('button');
   btn.className = 'chat-mod-btn';
-  btn.title = 'Moderar (Twitch)';
+  btn.title = platform === 'youtube' ? 'Moderar (YouTube)' : 'Moderar (Twitch)';
   btn.innerHTML = MOD_ICON_SVG;
   btn.onclick = (e) => {
     e.stopPropagation();
@@ -170,7 +170,7 @@ function createModBtn(userId) {
       const item = document.createElement('button');
       item.type = 'button';
       item.textContent = action.label;
-      item.onclick = (ev) => { ev.stopPropagation(); runModAction(btn, userId, action); };
+      item.onclick = (ev) => { ev.stopPropagation(); runModAction(btn, userId, platform, action); };
       menu.appendChild(item);
     }
     document.body.appendChild(menu);
