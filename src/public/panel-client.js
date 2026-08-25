@@ -33,7 +33,7 @@
     { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
     { id: 'youtube', name: 'YouTube', color: '#ff0000' },
     { id: 'kick',    name: 'Kick',    color: '#53fc18' },
-    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
+    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55' },
   ];
   // Google aprobó la verificación OAuth (2026-08-16) — login de YouTube habilitado en
   // producción empaquetada, no solo en dev.
@@ -189,6 +189,56 @@
     if (n.includes('kick')) return 'kick';
     if (n.includes('tiktok')) return 'tiktok';
     return null;
+  }
+
+  // Plataformas donde la sección "Vertical" NO aplica (ver CLAUDE.md "Dual-format
+  // vertical"):
+  // - Kick: sin soporte de vertical, confirmado.
+  // - Twitch: SÍ tiene dual format, pero verificado contra help.twitch.tv/s/article/
+  //   dual-format-vertical-video que NUNCA pasa por un relay como Muxlyve — exige
+  //   Enhanced Broadcasting nativo de OBS con la cuenta de Twitch conectada directo
+  //   (no "Personalizado"), no existe una clave/URL vertical que pegar acá. Su propio
+  //   FAQ confirma que restreaming a otras plataformas se hace EN PARALELO, no a través
+  //   del mismo pipeline. No hay nada útil que este campo pueda ofrecer para Twitch.
+  // - TikTok: sin verificar todavía contra doc oficial (mecanismo real desconocido) —
+  //   fuera por ahora, no por descartado sino por prudencia tras el caso Twitch. Sacar
+  //   de este set en cuanto se confirme cómo funciona de verdad.
+  const NO_VERTICAL = new Set(['kick', 'twitch', 'tiktok']);
+
+  // Sección "Vertical" dentro de la tarjeta de una plataforma — segunda conexión RTMP
+  // independiente de la horizontal, mismo destino (d.verticalUrl/verticalEnabled, ver
+  // src/destinations.js). Reusa el patrón .pb-subblock (ya definido en panel.css, sin usar
+  // hasta ahora) en vez de inventar un mecanismo de colapso nuevo. Solo se ofrece cuando ya
+  // existe una fila de destino para la plataforma (rtmpDest) — v1 asume que el usuario
+  // configura horizontal primero; agregar vertical "desde cero" es directo si hace falta.
+  function verticalSectionHtml(p, d) {
+    if (NO_VERTICAL.has(p.id)) return '';
+    const vOpen = localStorage.getItem('ms_pbv_' + p.id) === '1';
+    const vPill = pillFor({ status: d.verticalStatus, lagging: d.verticalLagging, attempts: d.verticalAttempts, enabled: d.verticalEnabled });
+    const vMetrics = metricsFor({ status: d.verticalStatus, metrics: d.verticalMetrics });
+    let html = '<div class="pb-subblock' + (vOpen ? ' open' : '') + '" id="pbv-' + p.id + '">';
+    html += '<div class="pb-head" onclick="toggleVerticalSection(\'' + p.id + '\')">';
+    html += '<i class="pb-chevron">&#9654;</i><span class="pb-head-name">Vertical</span>';
+    html += '<span class="pill ' + vPill.cls + '">' + vPill.text + '</span>';
+    html += '</div><div class="pb-body"><div class="pb-body-inner">';
+    if (vMetrics) html += '<div class="card-head"><span class="metrics">' + vMetrics + '</span></div>';
+    // YouTube Studio da una "Clave: Vertical" real (mismo servidor que la horizontal,
+    // rtmp://a.rtmp.youtube.com/live2, solo cambia la clave) detrás de un toggle
+    // "Transmisión dual" — verificado 2026-08-22, ver CLAUDE.md. No hay endpoint público
+    // para autocompletarla (a diferencia de la horizontal vía OAuth), toca copiarla a mano.
+    if (p.id === 'youtube') html += '<p class="auto-note">&#8505; En YouTube Studio &#8594; Transmisión en vivo, activa "Transmisión dual" y copia la "Clave: Vertical" (mismo servidor que la horizontal, distinta clave).</p>';
+    html += '<div class="field"><label>URL RTMP vertical</label>';
+    html += '<div class="eyerow"><input type="password" class="pb-vert-url" value="" autocomplete="off">';
+    html += '<button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">' + eyeSvg(false) + '</button></div></div>';
+    html += '<div class="row"><label class="switch">';
+    html += '<input type="checkbox" class="pb-vert-toggle-cb" data-name="' + d.name + '"' + (d.verticalEnabled ? ' checked' : '') + ' onchange="toggleVertRtmp(this)">';
+    html += '<span class="thumb"></span></label>';
+    html += '<button class="save" data-name="' + d.name + '" onclick="saveVertRtmp(this)">Guardar</button>';
+    if (d.verticalStatus === 'failed') html += '<button class="retry" data-name="' + d.name + '" onclick="retryVertRtmp(this)">Reintentar</button>';
+    html += '</div>';
+    if (d.verticalEnabled && !lastState.liveVertical) html += '<p class="auto-note">* Arrancará cuando conectes la segunda salida vertical de OBS a este mismo ingest (ver Ajustes &#8594; Conexión RTMP).</p>';
+    html += '</div></div></div>';
+    return html;
   }
 
   // Devuelve { cls, text } para la píldora de estado de un destino.
@@ -453,7 +503,8 @@
         if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
         bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
         if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>';
-        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
+        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; La clave de TikTok caduca si pasa mucho sin usarse (no mientras estés en vivo) — si dejaste de transmitir hace rato, puede que ya no sirva.</p>';
+        bodyHtml += verticalSectionHtml(p, d);
         bodyHtml += '</div>';
       } else {
         const isTikTok = p.id === 'tiktok';
@@ -463,10 +514,13 @@
             'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
         }
         if (isTikTok) {
-          bodyHtml += '<p class="auto-note">&#8505; TikTok no tiene login — consigue tu URL y clave así: ' +
+          bodyHtml += '<p class="auto-note">&#8505; Conectar tu cuenta arriba solo muestra tu usuario — ' +
+            'TikTok no tiene API pública para traer la clave de transmisión, toca conseguirla a mano: ' +
             'abre la app de TikTok &#8594; toca + &#8594; LIVE &#8594; icono de ajustes antes de salir ' +
             'en vivo &#8594; "Transmitir desde PC/consola". Copia el Server URL y la Stream Key que te ' +
-            'muestre y pégalos abajo. Esa clave expira en unas horas — genérala justo antes de transmitir.</p>';
+            'muestre y pégalos abajo. Esa clave caduca si no la usas en unas horas — actívala justo antes ' +
+            'de salir en vivo. Una vez conectada, se mantiene mientras dure tu transmisión, no hace falta ' +
+            'regenerarla a mitad de directo.</p>';
         }
         const openStyle = pbAddOpen[p.id] ? ' style="display:none"' : '';
         const formStyle = pbAddOpen[p.id] ? '' : ' style="display:none"';
@@ -490,7 +544,11 @@
         '</div>' +
         '<div class="pb-body"><div class="pb-body-inner">' + bodyHtml + '</div></div>';
 
-      if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
+      if (rtmpDest) {
+        block.querySelector('.pb-url').value = rtmpDest.url;
+        const vertInput = block.querySelector('.pb-vert-url');
+        if (vertInput) vertInput.value = rtmpDest.verticalUrl || '';
+      }
       if (pbAddDraft[p.id]) {
         const draftInput = block.querySelector('#pb-new-url-' + p.id);
         if (draftInput) draftInput.value = pbAddDraft[p.id];
@@ -577,6 +635,16 @@
     localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
   }
 
+  // Colapsa/expande la sección "Vertical" de una tarjeta — mismo mecanismo que
+  // togglePlatformBlock, clase .open aparte (ms_pbv_*) para no interferir con el estado
+  // de la tarjeta completa.
+  function toggleVerticalSection(pid) {
+    const block = document.getElementById('pbv-' + pid);
+    if (!block) return;
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pbv_' + pid, isOpen ? '1' : '0');
+  }
+
   function showAddPlatformRtmp(pid) {
     pbAddOpen[pid] = true;
     const form = $('#pb-add-form-' + pid);
@@ -635,16 +703,39 @@
     save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked, card.querySelector('.pb-maxbitrate').value);
   }
 
-  async function doRetry(name) {
+  // Sección "Vertical" de la tarjeta (ver verticalSectionHtml) — vive dentro del mismo
+  // .pb-rtmp que los campos horizontales, así que se leen de ahí también: save() siempre
+  // manda el destino completo, nunca solo la mitad (ver el fix en validateDestination,
+  // src/routes/destinations.js, que preserva lo no enviado — pero mandar todo es más
+  // simple y evita depender de ese detalle desde acá).
+  function saveVertRtmp(btn) {
+    const name = btn.dataset.name;
+    const card = btn.closest('.pb-rtmp');
+    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked, card.querySelector('.pb-maxbitrate').value,
+      card.querySelector('.pb-vert-url').value, card.querySelector('.pb-vert-toggle-cb').checked);
+  }
+  function retryVertRtmp(btn) { doRetry(btn.dataset.name, 'v'); }
+  function toggleVertRtmp(cb) {
+    const card = cb.closest('.pb-rtmp');
+    save(cb.dataset.name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked, card.querySelector('.pb-maxbitrate').value,
+      card.querySelector('.pb-vert-url').value, cb.checked);
+  }
+
+  async function doRetry(name, channel) {
     try {
-      await withDestBusy(async () => { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name))); });
+      const qs = '/api/retry?name=' + encodeURIComponent(name) + (channel === 'v' ? '&channel=v' : '');
+      await withDestBusy(async () => { render(await api('POST', qs)); });
       toast('Reintentando ' + name);
     } catch (e) { toast(e.message, true); }
   }
 
-  async function save(name, url, enabled, maxBitrate) {
+  async function save(name, url, enabled, maxBitrate, verticalUrl, verticalEnabled) {
     try {
-      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled, maxBitrate })); });
+      const body = { name, url, enabled, maxBitrate };
+      // Solo se agregan si el caller los mandó — así el guardado horizontal de siempre
+      // (savePbRtmp/togglePbRtmp, que no pasan estos dos argumentos) no toca el vertical.
+      if (verticalUrl !== undefined) { body.verticalUrl = verticalUrl; body.verticalEnabled = verticalEnabled; }
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', body)); });
       toast(enabled ? name + ' activado' : name + ' guardado');
     } catch (e) { toast(e.message, true); refresh(); }
   }

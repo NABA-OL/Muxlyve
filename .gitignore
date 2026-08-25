@@ -15,6 +15,12 @@ config/crypto-salt.json
 *.log
 media/
 dist-app/
+/ffmpeg
+/ffmpeg-mac/
+/ffmpeg-n9.0*/
+/ffmpeg-*.tar.xz
+/ffmpeg-*.7z
+/capture.flv
 demo/dist/
 build/mac/
 build/icon.icns

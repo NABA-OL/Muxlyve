@@ -8,8 +8,8 @@
 import NodeMediaServer from 'node-media-server';
 import { readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { loadAll, isPlayable } from './destinations.js';
-import { onPublish, onUnpublish } from './relays.js';
+import { loadAll, isPlayable, isPlayableVertical } from './destinations.js';
+import { onPublish, onUnpublish, onPublishVertical, onUnpublishVertical } from './relays.js';
 import { startPanel } from './panel.js';
 import { loadSettings } from './settings.js';
 import { initChatCommands } from './chatcommands.js';
@@ -44,15 +44,35 @@ const config = {
 
 const nms = new NodeMediaServer(config);
 
+// Sufijo que distingue el ingest VERTICAL del horizontal — misma clave de siempre más este
+// sufijo, sin ajuste nuevo que pedirle al usuario (ver CLAUDE.md "Dual-format vertical").
+// OBS manda esto como una SEGUNDA conexión RTMP totalmente aparte (segunda salida en OBS,
+// ej. Aitum Vertical Canvas como output normal) — no tiene nada que ver con la feature
+// nativa "Video multipista" de OBS, que quedó descartada por depender de GPU específica y
+// de que el servicio esté en la whitelist de OBS.
+const VERTICAL_SUFFIX = '-vertical';
+
 nms.on('prePublish', (id, StreamPath) => {
   const key = StreamPath.split('/').pop();
-  if (key !== loadSettings().streamKey) {
+  const streamKey = loadSettings().streamKey;
+  const isVertical = key === `${streamKey}${VERTICAL_SUFFIX}`;
+  if (key !== streamKey && !isVertical) {
     console.warn(`[ingest] Clave invalida (${key}). Rechazando.`);
     nms.getSession(id).reject();
     return;
   }
   const sourceUrl = `rtmp://127.0.0.1:${RTMP_PORT}${StreamPath}`;
   const destinations = loadAll();
+
+  if (isVertical) {
+    const activeV = destinations.filter(isPlayableVertical);
+    console.log(activeV.length === 0
+      ? '[ingest] Señal VERTICAL conectada. Sin destinos verticales activos — actívalos en el panel.'
+      : `[ingest] Señal VERTICAL conectada. Auto-iniciando ${activeV.length} destino(s).`);
+    setTimeout(() => onPublishVertical(sourceUrl, destinations), 1500);
+    return;
+  }
+
   const active = destinations.filter(isPlayable);
   if (active.length === 0) {
     console.warn('[ingest] Señal Conectada. Sin destinos activos — actívalos en el panel para iniciar el reenvío.');
@@ -64,7 +84,13 @@ nms.on('prePublish', (id, StreamPath) => {
   setTimeout(() => onPublish(sourceUrl, destinations), 1500);
 });
 
-nms.on('donePublish', () => {
+nms.on('donePublish', (id, StreamPath) => {
+  const key = StreamPath.split('/').pop();
+  if (key === `${loadSettings().streamKey}${VERTICAL_SUFFIX}`) {
+    console.log('[ingest] Señal VERTICAL desconectada. Deteniendo reenvios verticales.');
+    onUnpublishVertical();
+    return;
+  }
   console.log('[ingest] Señal Desconectada. Deteniendo reenvios.');
   onUnpublish();
 });

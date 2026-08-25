@@ -1,5 +1,43 @@
 [
   {
+    "startedAt": 1787540294498,
+    "endedAt": 1787545939369,
+    "durationSeconds": 5644,
+    "destinations": [],
+    "peakViewers": {
+      "kick": 1
+    }
+  },
+  {
+    "startedAt": 1787437846375,
+    "endedAt": 1787437977560,
+    "durationSeconds": 131,
+    "destinations": [
+      "YouTube"
+    ],
+    "peakViewers": {}
+  },
+  {
+    "startedAt": 1787354714946,
+    "endedAt": 1787354761264,
+    "durationSeconds": 46,
+    "destinations": [
+      "YouTube"
+    ],
+    "peakViewers": {}
+  },
+  {
+    "startedAt": 1787353305236,
+    "endedAt": 1787354630711,
+    "durationSeconds": 1325,
+    "destinations": [
+      "YouTube"
+    ],
+    "peakViewers": {
+      "youtube": 1
+    }
+  },
+  {
     "startedAt": 1786212959586,
     "endedAt": 1786213004163,
     "durationSeconds": 44,

@@ -1,3 +1,8 @@
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-25
+ */
   :root {
     --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
     --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
@@ -726,7 +731,12 @@
   .pb-subblock > .pb-head { background: transparent; padding: .3rem .1rem; }
   .pb-subblock > .pb-head:hover { background: transparent; }
   .pb-subblock > .pb-head:hover .pb-head-name { color: var(--text); }
-  .pb-subblock.open > .pb-body { border-top-width: 0; }
+  .pb-subblock.open > .pb-head .pb-chevron { transform: rotate(90deg); }
+  /* .pb-subblock nunca se había usado hasta ahora (ver Vertical dentro de cada tarjeta
+     de plataforma) — .pb-block.open ya trae grid-template-rows:1fr, pero esa regla no
+     alcanza acá porque .pb-subblock no lleva la clase .pb-block. Sin esto el toggle
+     cambiaba la clase .open pero no pasaba nada visualmente. */
+  .pb-subblock.open > .pb-body { grid-template-rows: 1fr; border-top-width: 0; }
   /* .conn en el wrapper del submenú no alcanza a los .field (quedan 2 niveles más abajo,
      dentro de .pb-body-inner) — el gap real va acá, donde sí son hijos directos. */
   .pb-subblock.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; padding: .5rem .1rem .15rem; }

@@ -1,6 +1,8 @@
-// Desarrollado por "BlacKraken Solutions"
-// Correo: nabaol.dev@gmail.com
-// Fecha: 2026-07-25
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-25
+ */
 // Fase 3 del refactor (docs/PLAN_REFACTOR_PANEL.md) — destinos RTMP y perfiles (presets):
 // /api/destinations, /api/retry, /api/presets*. Ver contrato en src/routes/system.js.
 import { loadAll, saveAll, isValidUrl } from '../destinations.js';
@@ -29,7 +31,26 @@ export function validateDestination(input, t) {
   // FFmpeg lo va a rechazar o el resultado se va a ver mal, no rompe nada de la app.
   const maxBitrateRaw = Number(input.maxBitrate);
   const maxBitrate = Number.isFinite(maxBitrateRaw) && maxBitrateRaw > 0 ? Math.round(maxBitrateRaw) : null;
-  return { dest: { name, url, enabled, maxBitrate } };
+
+  const dest = { name, url, enabled, maxBitrate };
+
+  // Segunda conexión RTMP independiente para vertical (ver CLAUDE.md "Dual-format
+  // vertical") — mismas reglas que url/enabled, campo aparte para poder prender/apagar
+  // cada orientación por separado. Solo se tocan si el caller los manda explícitamente:
+  // el guardado horizontal de siempre (savePbRtmp/addDest, que nunca mandan estos campos)
+  // no debe borrar un verticalUrl ya guardado — ver el merge `{...d, ...dest}` en el POST
+  // de abajo, que pisa con lo que venga en `dest`.
+  if ('verticalUrl' in input || 'verticalEnabled' in input) {
+    const verticalUrl = typeof input.verticalUrl === 'string' ? input.verticalUrl.trim() : '';
+    const verticalEnabled = Boolean(input.verticalEnabled);
+    if (verticalUrl.length > MAX_URL) return { error: t('URL vertical máxima ') + MAX_URL + t(' caracteres.') };
+    if (verticalEnabled && !isValidUrl(verticalUrl)) {
+      return { error: t('Para activar vertical, la URL debe empezar por rtmp://, rtmps:// o srt:// y no ser un placeholder.') };
+    }
+    dest.verticalUrl = verticalUrl;
+    dest.verticalEnabled = verticalEnabled;
+  }
+  return { dest };
 }
 
 export async function handle(req, res, url, ctx) {
@@ -121,7 +142,7 @@ export async function handle(req, res, url, ctx) {
     const list = loadAll();
     const idx = list.findIndex((d) => d.name === dest.name);
     const next = idx >= 0
-      ? list.map((d, i) => (i === idx ? { ...d, url: dest.url, enabled: dest.enabled, maxBitrate: dest.maxBitrate } : d))
+      ? list.map((d, i) => (i === idx ? { ...d, ...dest } : d))
       : [...list, dest];
     saveAll(next);
     applyChange(dest); // arranca/para el relay en caliente si hay emisión
@@ -130,12 +151,15 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // POST /api/retry?name=X  -> reintento manual de un destino 'failed'
+  // POST /api/retry?name=X&channel=v  -> reintento manual de un destino 'failed'.
+  // channel opcional, default 'h' (horizontal) — 'v' reintenta el canal vertical de ese
+  // mismo destino (ver CLAUDE.md "Dual-format vertical").
   if (req.method === 'POST' && url.pathname === '/api/retry') {
     const name = url.searchParams.get('name');
+    const channel = url.searchParams.get('channel') === 'v' ? 'v' : 'h';
     const dest = loadAll().find((d) => d.name === name);
     if (!dest) { json(res, 404, { error: t('Destino no encontrado.') }); return true; }
-    retry(dest);
+    retry(dest, channel);
     json(res, 200, buildState());
     return true;
   }

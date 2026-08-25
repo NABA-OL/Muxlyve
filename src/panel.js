@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { timingSafeEqual, createHash } from 'node:crypto';
-import { isLive, relayInfo, uptimeSeconds, recorderInfo, fullRecordingInfo } from './relays.js';
-import { loadAll, isPlayable } from './destinations.js';
+import { isLive, isLiveVertical, relayInfo, uptimeSeconds, recorderInfo, fullRecordingInfo } from './relays.js';
+import { loadAll, isPlayable, isPlayableVertical } from './destinations.js';
 import { ingestInfo } from './monitor.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
@@ -152,6 +152,7 @@ function serveWithEtag(req, res, contentType, item) {
 function buildState() {
   const destinations = loadAll().map((d) => {
     const info = relayInfo(d.name);
+    const vInfo = relayInfo(d.name, 'v');
     return {
       name: d.name,
       url: d.url || '',
@@ -165,9 +166,19 @@ function buildState() {
       lagging: info.lagging,
       maxBitrate: d.maxBitrate || null,
       transcoding: info.transcoding,
+      // Canal vertical — segunda conexión RTMP independiente (ver CLAUDE.md "Dual-format
+      // vertical"). Mismas formas que los campos de arriba, con prefijo vertical*.
+      verticalUrl: d.verticalUrl || '',
+      verticalEnabled: Boolean(d.verticalEnabled),
+      verticalPlayable: isPlayableVertical(d),
+      verticalRelaying: vInfo.status === 'live' || vInfo.status === 'connecting',
+      verticalStatus: vInfo.status,
+      verticalAttempts: vInfo.attempts,
+      verticalMetrics: vInfo.metrics,
+      verticalLagging: vInfo.lagging,
     };
   });
-  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), fullRecorder: fullRecordingInfo(), ingest: ingestInfo() };
+  return { live: isLive(), liveVertical: isLiveVertical(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), fullRecorder: fullRecordingInfo(), ingest: ingestInfo() };
 }
 
 function readBody(req) {
@@ -661,6 +672,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                 <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
               </div>
             </details>
+            <p class="auto-note">&#8505; Para transmitir también en vertical (ver la sección "Vertical" en cada tarjeta de plataforma que lo soporte): configura una SEGUNDA salida en tu software de streaming, mismo servidor de arriba, con la clave <b>+ "-vertical"</b> (ej. si tu clave es <code>mistream</code>, usa <code>mistream-vertical</code>). Twitch es la excepción: su dual format se configura directo en OBS con Enhanced Broadcasting + tu cuenta de Twitch conectada, aparte de esta clave.</p>
           </div>
           <div class="field" id="lanField" style="display:none">
             <label>Desde otra máquina en tu red</label>
