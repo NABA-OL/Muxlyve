@@ -20,7 +20,7 @@
 // solo comando que valida "todo lo que carga el navegador", sin tener que acordarse de
 // revisar cada .js nuevo por separado.
 //
-// Uso: node scripts/validate-panel-script.mjs  (o vía `npm run validate:panel`)
+// Uso: node scripts/validate-panel-script.mjs  (o vía `pnpm run validate:panel`)
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

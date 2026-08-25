@@ -5,6 +5,7 @@
   "author": "BLACKRAKEN SOLUTIONS <nabaol.dev@gmail.com>",
   "type": "module",
   "main": "electron/main.js",
+  "packageManager": "pnpm@11.24.0",
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
@@ -12,7 +13,7 @@
     "validate:panel": "node scripts/validate-panel-script.mjs",
     "build:demo": "node demo/build-demo.mjs",
     "test:unit": "node --test \"test/**/*.test.mjs\"",
-    "test": "npm run test:unit && bash scripts/smoke-test.sh",
+    "test": "pnpm run test:unit && bash scripts/smoke-test.sh",
     "electron": "node -r dotenv/config ./node_modules/electron/cli.js .",
     "predist": "node scripts/generate-installer-bmps.mjs && node -r dotenv/config scripts/generate-oauth-credentials.mjs",
     "dist": "node -r dotenv/config node_modules/electron-builder/cli.js --win",
