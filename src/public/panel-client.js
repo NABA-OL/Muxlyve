@@ -205,6 +205,11 @@
   //   de este set en cuanto se confirme cómo funciona de verdad.
   const NO_VERTICAL = new Set(['kick', 'twitch', 'tiktok']);
 
+  // Feature completa (motor + UI) pausada a pedido del usuario 2026-08-25 — no se borra
+  // nada, solo se oculta de la interfaz por ahora. Poner en true para reactivarla (junto
+  // con la nota de Ajustes → Conexión RTMP, ver panel.js).
+  const VERTICAL_UI_ENABLED = false;
+
   // Sección "Vertical" dentro de la tarjeta de una plataforma — segunda conexión RTMP
   // independiente de la horizontal, mismo destino (d.verticalUrl/verticalEnabled, ver
   // src/destinations.js). Reusa el patrón .pb-subblock (ya definido en panel.css, sin usar
@@ -212,7 +217,7 @@
   // existe una fila de destino para la plataforma (rtmpDest) — v1 asume que el usuario
   // configura horizontal primero; agregar vertical "desde cero" es directo si hace falta.
   function verticalSectionHtml(p, d) {
-    if (NO_VERTICAL.has(p.id)) return '';
+    if (!VERTICAL_UI_ENABLED || NO_VERTICAL.has(p.id)) return '';
     const vOpen = localStorage.getItem('ms_pbv_' + p.id) === '1';
     const vPill = pillFor({ status: d.verticalStatus, lagging: d.verticalLagging, attempts: d.verticalAttempts, enabled: d.verticalEnabled });
     const vMetrics = metricsFor({ status: d.verticalStatus, metrics: d.verticalMetrics });

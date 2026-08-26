@@ -672,7 +672,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                 <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
               </div>
             </details>
+            <!-- Nota de vertical PAUSADA a pedido del usuario 2026-08-25, junto con
+                 VERTICAL_UI_ENABLED en panel-client.js — no se borra, solo se oculta.
+                 Descomentar ambas al reactivar la feature.
             <p class="auto-note">&#8505; Para transmitir también en vertical (ver la sección "Vertical" en cada tarjeta de plataforma que lo soporte): configura una SEGUNDA salida en tu software de streaming, mismo servidor de arriba, con la clave <b>+ "-vertical"</b> (ej. si tu clave es <code>mistream</code>, usa <code>mistream-vertical</code>). Twitch es la excepción: su dual format se configura directo en OBS con Enhanced Broadcasting + tu cuenta de Twitch conectada, aparte de esta clave.</p>
+            -->
           </div>
           <div class="field" id="lanField" style="display:none">
             <label>Desde otra máquina en tu red</label>
