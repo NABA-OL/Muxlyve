@@ -628,7 +628,14 @@ async function findActiveYoutubeBroadcastId(token) {
 // con Twitch/Kick) lo más probable es que no matchee nada acá, y eso es correcto: YouTube
 // de verdad no tiene esa categoría, mejor avisar que inventar una cercana.
 async function findYoutubeCategoryId(category, token) {
-  const res = await fetch('https://www.googleapis.com/youtube/v3/videoCategories?part=snippet&regionCode=US', {
+  // BUG real (2026-08-27): sin `hl`, YouTube devuelve snippet.title SIEMPRE en inglés
+  // ("Gaming"), sin importar regionCode — por eso "Videojuegos" nunca matcheaba ni exacto
+  // ni parcial. `hl` sí controla el idioma de display — se pide en el idioma ACTUAL de la
+  // app, no hardcoded a es/en: Muxlyve soporta 4 (SUPPORTED_APP_LANGS en electron/main.js:
+  // es/en/fr/pt) y los 4 pueden fallar igual si no matchean el idioma real de la consulta.
+  const APP_LANGS = ['es', 'en', 'fr', 'pt'];
+  const hl = APP_LANGS.includes(process.env.APP_LANG) ? process.env.APP_LANG : 'es';
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/videoCategories?part=snippet&regionCode=US&hl=${hl}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return null;

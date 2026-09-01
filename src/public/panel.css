@@ -229,6 +229,35 @@
   }
   .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
   .prefs-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+
+  /* Recorrido guiado de primer uso (ver startTour(), panel-client.js). El "apagado" de
+     fondo NO es un overlay aparte — es el propio box-shadow del elemento resaltado con un
+     spread gigante (9999px), truco clásico que evita tener que armar un mask/cutout SVG:
+     cubre toda la pantalla salvo el propio elemento, que queda arriba con z-index. */
+  .tour-spotlight {
+    position: relative !important;
+    z-index: 200 !important;
+    border-radius: 10px;
+    box-shadow: 0 0 0 4px var(--accent), 0 0 0 9999px rgba(0,0,0,.72);
+    transition: box-shadow .2s var(--ease-out);
+  }
+  .tour-tip {
+    position: fixed;
+    z-index: 201;
+    max-width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: .9rem 1rem;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    font-size: .85rem;
+  }
+  .tour-tip h3 { margin: 0 0 .4rem; font-size: .95rem; }
+  .tour-tip p { margin: 0 0 .8rem; color: var(--muted); line-height: 1.4; }
+  .tour-tip .row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+  .tour-step-count { font-size: .72rem; color: var(--muted); }
+  .tour-skip-btn { background: transparent; border: none; color: var(--muted); font-size: .78rem; cursor: pointer; padding: 0; }
+  .tour-skip-btn:hover { color: var(--text); }
   .prefs-close { background: transparent; color: var(--muted); border: 1px solid transparent;
     font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
   .prefs-close:hover { color: var(--text); background: var(--surface-2); }

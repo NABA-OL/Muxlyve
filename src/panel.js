@@ -1105,6 +1105,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         <div class="prefs-panel" id="prefsProfileBlock" data-panel="profile">
           <div class="lic-row" style="align-items:center">
             <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;width:100%">
+              <!-- Mismo saludo que splash.html/onboarding.html/el header cuando no hay
+                   transmisión — se llena en loadLicenseInfo() (panel-client.js), a la vez
+                   que window._nickname. -->
+              <h2 id="profileGreeting" style="margin:0;font-size:1.1rem;font-weight:600">¡Hola!</h2>
               <div style="position:relative;flex-shrink:0">
                 <img id="profileAvatarImg" src="" alt="" style="width:72px;height:72px;border-radius:50%;
                   object-fit:cover;background:var(--surface-2);border:1px solid var(--border);display:none">
@@ -1256,6 +1260,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <div class="about-footer">
         <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
         <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
+        <a class="about-link" href="#" onclick="event.preventDefault();closeAbout();startTour()">Ver recorrido de bienvenida</a>
         <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
       </div>
     </div>

@@ -80,6 +80,7 @@ export async function handle(req, res, url, ctx) {
       endMessage: settings.endMessage || '',
       audioSilenceAlertEnabled: settings.audioSilenceAlertEnabled,
       chatTranslateEnabled: settings.chatTranslateEnabled,
+      tourDone: settings.tourDone,
     });
     return true;
   }
@@ -209,6 +210,7 @@ export async function handle(req, res, url, ctx) {
     if ('chatCommandsEnabled' in input) patch.chatCommandsEnabled = !!input.chatCommandsEnabled;
     if ('audioSilenceAlertEnabled' in input) patch.audioSilenceAlertEnabled = !!input.audioSilenceAlertEnabled;
     if ('chatTranslateEnabled' in input) patch.chatTranslateEnabled = !!input.chatTranslateEnabled;
+    if ('tourDone' in input) patch.tourDone = !!input.tourDone;
     if ('discordWebhooks' in input) {
       const list = Array.isArray(input.discordWebhooks) ? input.discordWebhooks : [];
       if (list.length > MAX_DISCORD_WEBHOOKS) {

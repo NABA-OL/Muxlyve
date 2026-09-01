@@ -51,6 +51,11 @@ const DEFAULT_SETTINGS = {
   // Apagado por defecto a propósito — pega a un endpoint no-oficial de traducción (ver
   // src/translate.js), quien lo prenda lo hace sabiendo que es best-effort.
   chatTranslateEnabled: false,
+  // Recorrido guiado de primer uso (ver startTour() en panel-client.js) — false hasta
+  // que el usuario lo termine o lo salte, una sola vez por instalación. Server-side
+  // (no localStorage) a propósito: mismo criterio que recArmed/clipsDir, sobrevive un
+  // reinstall que reuse MS_CONFIG_DIR y no depende de qué navegador/ventana lo abrió.
+  tourDone: false,
 };
 
 function validDir(d) {
@@ -202,6 +207,7 @@ export function loadSettings() {
       destinationPresets: validPresets(data.destinationPresets),
       audioSilenceAlertEnabled: data.audioSilenceAlertEnabled === undefined ? true : !!data.audioSilenceAlertEnabled,
       chatTranslateEnabled: !!data.chatTranslateEnabled,
+      tourDone: !!data.tourDone,
     };
   } catch (err) {
     console.error('[config] No se pudo leer settings.json:', err.message);

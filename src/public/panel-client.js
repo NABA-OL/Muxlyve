@@ -38,6 +38,17 @@
   // Google aprobó la verificación OAuth (2026-08-16) — login de YouTube habilitado en
   // producción empaquetada, no solo en dev.
   const YOUTUBE_OAUTH_PENDING = false;
+
+  // Antes de abrir la ventana de autenticación, avisar si esa plataforma trae la clave de
+  // retransmisión automática al conectar o no — pedido del usuario 2026-08-29, tras
+  // confundir Kick (nunca la trajo, no tiene endpoint público para eso) con Twitch/YouTube
+  // (sí la traen). Ver connectPlatform() más abajo.
+  const CONNECT_INFO = {
+    twitch: 'Twitch obtiene tu clave de retransmisión automáticamente al conectar tu cuenta.',
+  youtube: 'YouTube obtiene tu clave de retransmisión automáticamente al conectar tu cuenta (requiere haber iniciado "Transmitir en vivo" al menos una vez en YouTube Studio).',
+  kick: 'Kick no permite obtener la clave mediante la conexión de la cuenta. Debes copiar y pegar tu clave de retransmisión manualmente desde el panel de Kick.',
+  tiktok: 'TikTok requiere una integración aprobada para obtener la clave automáticamente. De lo contrario, debes ingresar la clave de retransmisión manualmente.',
+  };
   let lastState = null;
   let lastAuthStatus = {};
   // Idioma actual del cliente — el <html lang="es"> del template ya llega traducido por
@@ -519,13 +530,10 @@
             'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
         }
         if (isTikTok) {
-          bodyHtml += '<p class="auto-note">&#8505; Conectar tu cuenta arriba solo muestra tu usuario — ' +
-            'TikTok no tiene API pública para traer la clave de transmisión, toca conseguirla a mano: ' +
-            'abre la app de TikTok &#8594; toca + &#8594; LIVE &#8594; icono de ajustes antes de salir ' +
-            'en vivo &#8594; "Transmitir desde PC/consola". Copia el Server URL y la Stream Key que te ' +
-            'muestre y pégalos abajo. Esa clave caduca si no la usas en unas horas — actívala justo antes ' +
-            'de salir en vivo. Una vez conectada, se mantiene mientras dure tu transmisión, no hace falta ' +
-            'regenerarla a mitad de directo.</p>';
+          bodyHtml += '<p class="auto-note">&#8505; Al conectar tu cuenta de TikTok solo se vincula tu perfil. ' +
+            'Como TikTok no permite obtener la clave de forma automática, debes ingresarla manualmente: ' +
+            'Copia la URL del servidor y la clave de transmisión y pégalas abajo. ' +
+            '<em>Nota: La clave es temporal y expira si no transmites pronto; genérala justo antes de iniciar en vivo.</em></p>';
         }
         const openStyle = pbAddOpen[p.id] ? ' style="display:none"' : '';
         const formStyle = pbAddOpen[p.id] ? '' : ' style="display:none"';
@@ -936,7 +944,10 @@
       if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
       const failed = entries.filter(([, r]) => !r.ok);
       if (!failed.length) { input.value = ''; }
-      else toast('Falló en ' + failed.map(([p]) => p).join(', '), true);
+      else {
+        const [, firstErr] = failed[0];
+        toast((firstErr.error || ('Falló en ' + failed.map(([p]) => p).join(', '))), true);
+      }
     } catch (e) {
       toast(e.message, true);
     } finally {
@@ -1115,6 +1126,11 @@
       window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
       renderTelegramBots(c.telegramBots || []);
+      window._tourDone = !!c.tourDone;
+      // Deja que el resto del arranque (checkNicknamePrompt, showSidebarTab, etc.)
+      // termine de asentarse antes de resaltar nada — sin este margen el spotlight podía
+      // salir apuntando a un botón que otro paso del boot todavía iba a mover/mostrar.
+      setTimeout(maybeStartTour, 600);
     } catch {}
   }
 
@@ -2063,6 +2079,7 @@
     window._nickname = info.nickname || '';
     window._licName = info.name || '';
     $('#licNicknameInput').value = window._nickname;
+    $('#profileGreeting').textContent = window._nickname ? `¡Hola, ${window._nickname}!` : '¡Hola!';
     renderAvatar(info.avatarUrl || '');
 
     const planLabels = { monthly: 'Mensual', annual: 'Anual', lifetime: 'Vitalicio' };
@@ -2225,6 +2242,7 @@
     if (result?.ok) {
       window._nickname = result.nickname ?? nickname;
       $('#licNicknameInput').value = window._nickname;
+      $('#profileGreeting').textContent = window._nickname ? `¡Hola, ${window._nickname}!` : '¡Hola!';
       toast('Nickname guardado.');
     } else {
       toast(result?.error || 'No se pudo guardar el nickname.', true);
@@ -2262,6 +2280,90 @@
       toast(`¡Listo, ${window._nickname}!`);
     } else {
       toast(result?.error || 'No se pudo guardar el nickname.', true);
+    }
+  }
+
+  // ── Recorrido guiado de primer uso ──────────────────────────────────────────────────
+  // Pedido del usuario 2026-08-30: resaltar los puntos clave de la app (conexiones,
+  // RTMP, chat, ajustes) la primera vez que se usa, sin construir una librería de tours
+  // aparte — reusa el truco de box-shadow gigante (.tour-spotlight, panel.css) en vez de
+  // un overlay/mask nuevo. Se guarda server-side (settings.json vía POST /api/settings)
+  // para que no vuelva a salir en la próxima sesión, ni si se abre desde otra ventana.
+  const TOUR_STEPS = [
+    { el: '#connBtn', title: 'Conexiones', text: 'Acá agregas y activas tus plataformas — Twitch, YouTube, Kick y TikTok.' },
+    { el: '#rtmpBtn', title: 'Conexión RTMP', text: 'Acá está la URL y la clave que configuras en tu software de streaming (OBS y similares) para empezar a transmitir.' },
+    { el: '#chatBtn', title: 'Chat', text: 'Chat unificado de todas tus plataformas conectadas, en un solo lugar.' },
+    { el: '#prefsBtn', title: 'Preferencias', text: 'Ajustes de la app: perfil, grabación de clips, webhooks, Stream Deck y más.' },
+  ];
+  let tourStep = 0;
+
+  function maybeStartTour() {
+    if (window._tourDone) return;
+    if ($('#nicknameOverlay')?.classList.contains('open')) return; // prioridad al nickname
+    startTour();
+  }
+  // Reusable desde "Acerca de Muxlyve" (ver botón "Ver recorrido") para repetirlo a pedido,
+  // sin importar si ya se marcó como visto.
+  function startTour() {
+    tourStep = 0;
+    showTourStep();
+  }
+  function clearTourSpotlight() {
+    document.querySelectorAll('.tour-spotlight').forEach((e) => e.classList.remove('tour-spotlight'));
+  }
+  function showTourStep() {
+    clearTourSpotlight();
+    const step = TOUR_STEPS[tourStep];
+    if (!step) { endTour(true); return; }
+    const el = $(step.el);
+    // Botón no visible ahora mismo (ej. escondido por alguna condición) — no bloquear el
+    // recorrido entero por un paso puntual, sigue con el siguiente.
+    if (!el || el.offsetParent === null) { tourStep++; showTourStep(); return; }
+    el.classList.add('tour-spotlight');
+    let tip = $('#tourTip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'tourTip';
+      tip.className = 'tour-tip';
+      document.body.appendChild(tip);
+    }
+    const isLast = tourStep === TOUR_STEPS.length - 1;
+    tip.innerHTML =
+      '<h3>' + step.title + '</h3>' +
+      '<p>' + step.text + '</p>' +
+      '<div class="row">' +
+        '<span class="tour-step-count">' + (tourStep + 1) + ' / ' + TOUR_STEPS.length + '</span>' +
+        '<div style="display:flex;gap:.6rem;align-items:center">' +
+          '<button class="tour-skip-btn" onclick="endTour(true)">Saltar</button>' +
+          '<button class="save" onclick="nextTourStep()">' + (isLast ? 'Listo' : 'Siguiente') + '</button>' +
+        '</div>' +
+      '</div>';
+    const rect = el.getBoundingClientRect();
+    const margin = 12;
+    const tipW = 260;
+    let left = rect.left - tipW - margin;
+    if (left < margin) left = rect.right + margin;
+    if (left + tipW > window.innerWidth - margin) left = window.innerWidth - tipW - margin;
+    tip.style.left = Math.max(margin, left) + 'px';
+    // Alto real recién se sabe con el contenido puesto — se mide después de pintarlo.
+    const tipH = tip.offsetHeight || 140;
+    let top = rect.top + rect.height / 2 - tipH / 2;
+    if (top < margin) top = margin;
+    if (top + tipH > window.innerHeight - margin) top = window.innerHeight - tipH - margin;
+    tip.style.top = Math.max(margin, top) + 'px';
+  }
+  function nextTourStep() {
+    tourStep++;
+    if (tourStep >= TOUR_STEPS.length) { endTour(true); return; }
+    showTourStep();
+  }
+  async function endTour(markDone) {
+    clearTourSpotlight();
+    const tip = $('#tourTip');
+    if (tip) tip.remove();
+    if (markDone && !window._tourDone) {
+      window._tourDone = true;
+      try { await api('POST', '/api/settings', { tourDone: true }); } catch {}
     }
   }
 
@@ -2760,12 +2862,16 @@
       toast('YouTube: esta funcionalidad estará disponible en una próxima versión (en espera de aprobación de Google).', true);
       return;
     }
+    const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
+    if (CONNECT_INFO[platform]) {
+      const ok = await showConfirm(CONNECT_INFO[platform], 'Entendido, continuar', 'Conectar ' + label);
+      if (!ok) return;
+    }
     const btn = $('#pb-' + platform + ' .auth-conn');
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
       const r = await window.msOAuth.connect(platform);
       if (r.ok) {
-        const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
         toast('✓ ' + label + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
         // Trae la clave de stream lista (p.ej. Twitch) — evita que el usuario tenga que
         // ir a buscarla y pegarla a mano tras conectar.
