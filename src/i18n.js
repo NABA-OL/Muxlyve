@@ -1,3 +1,10 @@
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Cada key en español mapea a un objeto { en, fr, pt } — antes era un mapa plano
 // español->inglés; ahora soporta N idiomas. panel.js's translateHtml()/t() eligen la
 // columna según APP_LANG, y si el idioma no está acá (o es 'es'), se sirve el español

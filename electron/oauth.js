@@ -1,10 +1,15 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 import { BrowserWindow, safeStorage, app, session, net } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl } from '../src/chat.js';
+import { startTwitchChat, stopTwitchChat, startYoutubeChat, stopYoutubeChat, startKickChat, stopKickChat, setKickFetchImpl, getYoutubeLiveChatId } from '../src/chat.js';
 import { setViewerCounts } from '../src/viewers.js';
 import { setChatModeHandler, setChatSendHandler, setChatPinHandler, setChatUnpinHandler, setChatGetPinnedHandler, setChatBanHandler } from '../src/chatmod.js';
 import { tMap } from '../src/i18n.js';
@@ -46,7 +51,11 @@ const PLATFORMS = {
     name: 'YouTube',
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
-    scope: 'https://www.googleapis.com/auth/youtube.readonly',
+    // youtube.force-ssl → banear/silenciar (banYoutubeUser) y enviar mensaje
+    // (sendYoutubeMessage) — en revisión de Google, ver YOUTUBE_MODERATION_PENDING abajo.
+    // Cambiar el scope invalida los tokens ya emitidos — quien ya conectó YouTube antes de
+    // esto necesita reconectar.
+    scope: 'https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl',
     pkce: false,
     envKey: 'GOOGLE',
     // Google NO acepta esquemas personalizados (muxlyve://) para clientes tipo "Aplicación
@@ -71,7 +80,43 @@ const PLATFORMS = {
     envKey: 'KICK',
     useLocalhost: true,
   },
+  tiktok: {
+    name: 'TikTok',
+    authUrl: 'https://www.tiktok.com/v2/auth/authorize/',
+    tokenUrl: 'https://open.tiktokapis.com/v2/oauth/token/',
+    // user.info.basic → avatar/nombre. user.info.profile → username (@handle) real, sin
+    // esto solo se puede mostrar display_name. Verificado 2026-08-22 contra
+    // developers.tiktok.com/doc/tiktok-api-scopes — NO existe scope de live streaming
+    // (ver CLAUDE.md, "TikTok Live API" no es un producto público real pese a que un
+    // guide de IA lo mencionaba). Esta conexión es solo para mostrar la cuenta — la clave
+    // RTMP sigue siendo manual, TikTok no la expone por API.
+    // OJO: a diferencia de las demás, TikTok separa los scopes con COMA, no con espacio.
+    scope: 'user.info.basic,user.info.profile',
+    pkce: true,
+    // TikTok usa nombres de parámetro NO estándar: client_key/client_secret en vez de
+    // client_id/client_secret (RFC normal) — ver clientIdParam más abajo, connect()/
+    // exchangeCode()/refreshAccessToken() lo respetan. Cliente confidencial: siempre
+    // exige client_secret, igual que Kick.
+    clientIdParam: 'client_key',
+    // TikTok exige PKCE con code_challenge en HEX de SHA256 — el único de los cuatro que
+    // NO usa base64url (RFC 7636 estándar, el que usan Twitch/Kick). Confirmado contra
+    // developers.tiktok.com/doc/login-kit-desktop: "You must use hex encoding of SHA256".
+    pkceHex: true,
+    envKey: 'TIKTOK',
+    // Igual que Twitch/YouTube: exige localhost/127.0.0.1 con puerto, no esquema propio.
+    useLocalhost: true,
+  },
 };
+
+// Google todavía no aprobó youtube.force-ssl (scope agregado arriba en PLATFORMS.youtube)
+// — bloquea banear/silenciar y enviar mensaje en YouTube SOLO en producción empaquetada
+// (en dev sigue andando, para grabar el video de demostración que pide la revisión de
+// Google y para seguir probando). Mismo patrón que YOUTUBE_OAUTH_PENDING (panel-client.js)
+// tuvo para el login. Cuando llegue la aprobación, cambiar esto a false y listo.
+const YOUTUBE_MODERATION_PENDING = true;
+function youtubeModerationBlockedMsg() {
+  return t('YouTube: moderación disponible en una próxima versión (en espera de aprobación de Google).');
+}
 
 function tokensPath() {
   return path.join(app.getPath('userData'), 'oauth-tokens.json');
@@ -105,9 +150,12 @@ function b64url(buf) {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-function makePkce() {
+// hex=true (solo TikTok, ver PLATFORMS.tiktok.pkceHex): el code_challenge va en hex de
+// SHA256 en vez del base64url estándar (RFC 7636) que usan Twitch/Kick.
+function makePkce(hex) {
   const verifier = b64url(randomBytes(32));
-  const challenge = b64url(createHash('sha256').update(verifier).digest());
+  const digest = createHash('sha256').update(verifier).digest();
+  const challenge = hex ? digest.toString('hex') : b64url(digest);
   return { verifier, challenge };
 }
 
@@ -115,7 +163,7 @@ async function exchangeCode(platform, code, redirectUri, verifier) {
   const cfg = PLATFORMS[platform];
 
   const params = new URLSearchParams({
-    client_id: clientId(cfg),
+    [cfg.clientIdParam || 'client_id']: clientId(cfg),
     code,
     grant_type: 'authorization_code',
     redirect_uri: redirectUri,
@@ -197,6 +245,19 @@ async function fetchProfile(platform, accessToken) {
       // a mano como siempre. El OAuth solo sirve para conectar cuenta + habilitar el chat.
       return { username, rtmpUrl: null, login, broadcasterId };
     }
+    if (platform === 'tiktok') {
+      const r = await fetch(
+        'https://open.tiktokapis.com/v2/user/info/?fields=open_id,avatar_url,display_name,username',
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (!r.ok) return { username: null, rtmpUrl: null };
+      const d = await r.json();
+      // TikTok NO tiene API pública de Live Streaming (verificado 2026-08-22 contra
+      // developers.tiktok.com — sin scope, sin producto, no existe) — esta conexión es
+      // solo para mostrar la cuenta. rtmpUrl siempre null, la clave sigue siendo manual.
+      const username = d.data?.user?.username || d.data?.user?.display_name || null;
+      return { username, rtmpUrl: null };
+    }
   } catch { /* silent */ }
   return { username: null, rtmpUrl: null };
 }
@@ -231,6 +292,14 @@ async function fetchYoutubeRtmpUrl(accessToken) {
     }
     const d = await r.json();
     console.log(`[oauth] YouTube: liveStreams.list respondió OK, ${d.items?.length || 0} stream(s) encontrado(s).`);
+    // DEBUG TEMPORAL (2026-08-22) — para decidir cómo distinguir la clave Primaria de la
+    // Vertical (dual streaming, YouTube Studio) cuando la cuenta tiene ambas. Volcar el
+    // JSON completo de una vez con una cuenta real de 2 claves, en vez de adivinar contra
+    // doc que todavía no cubre esta feature. Quitar despues de leer el resultado.
+    if (d.items?.length > 1) {
+      console.log('[oauth] YouTube: DEBUG — liveStreams.list con más de 1 item, volcando completo:');
+      console.log(JSON.stringify(d.items, null, 2));
+    }
     const info = d.items?.[0]?.cdn?.ingestionInfo;
     if (!info?.streamName || !info?.ingestionAddress) {
       console.log('[oauth] YouTube: sin ingestionInfo — probablemente nunca configuraste "Ir en vivo" en YouTube Studio.');
@@ -285,10 +354,10 @@ export async function connect(platform, panelPort) {
   const rUri = getRedirectUri(cfg, platform, panelPort);
   console.log(`[oauth] ${cfg.name}: redirect_uri enviado = ${rUri} — debe coincidir EXACTO con lo registrado en la consola del proveedor.`);
   const state = b64url(randomBytes(16));
-  const pkcePair = cfg.pkce ? makePkce() : null;
+  const pkcePair = cfg.pkce ? makePkce(cfg.pkceHex) : null;
 
   const params = new URLSearchParams({
-    client_id: id,
+    [cfg.clientIdParam || 'client_id']: id,
     redirect_uri: rUri,
     response_type: 'code',
     scope: cfg.scope,
@@ -396,7 +465,7 @@ async function refreshAccessToken(platform) {
   if (!tok?.refresh_token) return null;
   try {
     const params = new URLSearchParams({
-      client_id: clientId(cfg),
+      [cfg.clientIdParam || 'client_id']: clientId(cfg),
       refresh_token: tok.refresh_token,
       grant_type: 'refresh_token',
     });
@@ -466,10 +535,7 @@ export function getToken(platform) {
 }
 
 // Título global — aplica el mismo título a las plataformas conectadas que lo soportan.
-// YouTube queda fuera a propósito: necesita scope 'youtube'/'youtube.force-ssl' (mucho más
-// amplio que el 'youtube.readonly' actual) y tocar eso ahora complicaría la revisión de
-// verificación OAuth de Google que ya está pendiente — se retoma cuando la aprueben.
-const TITLE_SYNC_PLATFORMS = ['twitch', 'kick'];
+const TITLE_SYNC_PLATFORMS = ['twitch', 'kick', 'youtube'];
 
 // Busca la categoría por nombre y devuelve el id — Twitch/Kick exigen un id numérico
 // interno, no aceptan el nombre libre en el PATCH del canal.
@@ -545,6 +611,82 @@ async function setKickTitle(title, category) {
   return { ok: true };
 }
 
+async function findActiveYoutubeBroadcastId(token) {
+  const res = await fetch(
+    'https://www.googleapis.com/youtube/v3/liveBroadcasts?part=id&broadcastStatus=active&broadcastType=all',
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) return null;
+  const d = await res.json();
+  return d.items?.[0]?.id || null;
+}
+
+// YouTube no busca categoría por nombre libre como Twitch/Kick — tiene una taxonomía FIJA
+// y chica (~15-30 categorías oficiales tipo "Gaming", "Music", "Entertainment", no juegos
+// puntuales) con un id numérico por categoría. Match por nombre exacto primero, si no por
+// coincidencia parcial — si el usuario escribió el nombre de un juego puntual (uso típico
+// con Twitch/Kick) lo más probable es que no matchee nada acá, y eso es correcto: YouTube
+// de verdad no tiene esa categoría, mejor avisar que inventar una cercana.
+async function findYoutubeCategoryId(category, token) {
+  // BUG real (2026-08-27): sin `hl`, YouTube devuelve snippet.title SIEMPRE en inglés
+  // ("Gaming"), sin importar regionCode — por eso "Videojuegos" nunca matcheaba ni exacto
+  // ni parcial. `hl` sí controla el idioma de display — se pide en el idioma ACTUAL de la
+  // app, no hardcoded a es/en: Muxlyve soporta 4 (SUPPORTED_APP_LANGS en electron/main.js:
+  // es/en/fr/pt) y los 4 pueden fallar igual si no matchean el idioma real de la consulta.
+  const APP_LANGS = ['es', 'en', 'fr', 'pt'];
+  const hl = APP_LANGS.includes(process.env.APP_LANG) ? process.env.APP_LANG : 'es';
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/videoCategories?part=snippet&regionCode=US&hl=${hl}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const d = await res.json();
+  const items = d.items || [];
+  const needle = category.trim().toLowerCase();
+  const exact = items.find((it) => it.snippet?.title?.toLowerCase() === needle);
+  if (exact) return exact.id;
+  const partial = items.find((it) => {
+    const name = it.snippet?.title?.toLowerCase() || '';
+    return name.includes(needle) || needle.includes(name);
+  });
+  return partial?.id || null;
+}
+
+async function setYoutubeTitle(title, category) {
+  if (YOUTUBE_MODERATION_PENDING && app.isPackaged) return { ok: false, error: youtubeModerationBlockedMsg() };
+  if (!title && !category) return { ok: false, error: t('Nada que actualizar.') };
+  const token = await getValidToken('youtube');
+  if (!token) return { ok: false, error: t('Sesión de YouTube inválida — reconecta.') };
+  const videoId = await findActiveYoutubeBroadcastId(token);
+  if (!videoId) return { ok: false, error: t('No hay transmisión activa en YouTube ahora mismo.') };
+  let categoryId;
+  if (category) {
+    categoryId = await findYoutubeCategoryId(category, token);
+    if (!categoryId) return { ok: false, error: process.env.APP_LANG === 'es' || !process.env.APP_LANG ? `Categoría "${category}" no encontrada en YouTube.` : `Category "${category}" not found on YouTube.` };
+  }
+  // videos.update (PUT) exige mandar TODO el snippet de nuevo, no solo el campo que
+  // cambia — sin traer el snippet actual primero, esto pisaría categoryId/description
+  // existentes con vacío. Se trae, se cambia solo lo que corresponde, se manda completo.
+  const getRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!getRes.ok) return { ok: false, error: t('No se pudo leer el video de YouTube.') };
+  const getData = await getRes.json();
+  const snippet = getData.items?.[0]?.snippet;
+  if (!snippet) return { ok: false, error: t('No se pudo leer el video de YouTube.') };
+  if (title) snippet.title = title;
+  if (categoryId) snippet.categoryId = categoryId;
+  const res = await fetch('https://www.googleapis.com/youtube/v3/videos?part=snippet', {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: videoId, snippet }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `YouTube ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
 // Aplica título + categoría a todas las plataformas conectadas que lo soportan — devuelve
 // un resultado por plataforma para que la UI muestre exactamente cuál falló, si alguna falla.
 export async function setStreamTitle(title, category) {
@@ -553,7 +695,9 @@ export async function setStreamTitle(title, category) {
   for (const platform of TITLE_SYNC_PLATFORMS) {
     if (!tokens[platform]) continue; // no conectado — se omite en silencio, no es error
     try {
-      results[platform] = platform === 'twitch' ? await setTwitchTitle(title, category) : await setKickTitle(title, category);
+      results[platform] = platform === 'twitch' ? await setTwitchTitle(title, category)
+        : platform === 'kick' ? await setKickTitle(title, category)
+        : await setYoutubeTitle(title, category);
     } catch (err) {
       results[platform] = { ok: false, error: err.message };
     }
@@ -661,9 +805,7 @@ setChatModeHandler(setTwitchChatMode);
 
 // ── Enviar mensaje como el streamer ─────────────────────────────────────────────────
 // Mismo patrón que el título: aplica a las plataformas conectadas que lo soporten.
-// YouTube queda fuera — mismo criterio que el título/moderación (scope más amplio,
-// revisión de Google pendiente).
-const CHAT_SEND_PLATFORMS = ['twitch', 'kick'];
+const CHAT_SEND_PLATFORMS = ['twitch', 'kick', 'youtube'];
 
 async function sendTwitchMessage(text) {
   const tok = readTokens().twitch;
@@ -705,13 +847,35 @@ async function sendKickMessage(text) {
   return { ok: true };
 }
 
+// POST /youtube/v3/liveChat/messages — necesita el liveChatId del chat activo (el mismo
+// que ya está sondeando src/chat.js, ver getYoutubeLiveChatId) y youtube.force-ssl.
+async function sendYoutubeMessage(text) {
+  if (YOUTUBE_MODERATION_PENDING && app.isPackaged) return { ok: false, error: youtubeModerationBlockedMsg() };
+  const liveChatId = getYoutubeLiveChatId();
+  if (!liveChatId) return { ok: false, error: t('No hay chat de YouTube activo ahora mismo.') };
+  const token = await getValidToken('youtube');
+  if (!token) return { ok: false, error: t('Sesión de YouTube inválida — reconecta.') };
+  const res = await fetch('https://www.googleapis.com/youtube/v3/liveChat/messages?part=snippet', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snippet: { liveChatId, type: 'textMessageEvent', textMessageDetails: { messageText: text } } }),
+  });
+  if (!res.ok) {
+    const text2 = await res.text().catch(() => '');
+    return { ok: false, error: `YouTube ${res.status}: ${text2.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
 export async function sendChatMessage(text) {
   const tokens = readTokens();
   const results = {};
   for (const platform of CHAT_SEND_PLATFORMS) {
     if (!tokens[platform]) continue;
     try {
-      results[platform] = platform === 'twitch' ? await sendTwitchMessage(text) : await sendKickMessage(text);
+      results[platform] = platform === 'twitch' ? await sendTwitchMessage(text)
+        : platform === 'kick' ? await sendKickMessage(text)
+        : await sendYoutubeMessage(text);
     } catch (err) {
       results[platform] = { ok: false, error: err.message };
     }
@@ -843,4 +1007,39 @@ export async function banTwitchUser(userId, duration, reason) {
   }
   return { ok: true };
 }
-setChatBanHandler(banTwitchUser);
+// POST /youtube/v3/liveChat/bans — channelId (no un id numérico como Twitch/Kick, YouTube
+// identifica autores por canal) + type temporary/permanent + banDurationSeconds si aplica.
+export async function banYoutubeUser(channelId, duration, reason) {
+  if (YOUTUBE_MODERATION_PENDING && app.isPackaged) return { ok: false, error: youtubeModerationBlockedMsg() };
+  if (!channelId) return { ok: false, error: t('Falta el channel id — no se puede moderar.') };
+  const liveChatId = getYoutubeLiveChatId();
+  if (!liveChatId) return { ok: false, error: t('No hay chat de YouTube activo ahora mismo.') };
+  const token = await getValidToken('youtube');
+  if (!token) return { ok: false, error: t('Sesión de YouTube inválida — reconecta.') };
+  const snippet = {
+    liveChatId,
+    type: duration ? 'temporary' : 'permanent',
+    bannedUserDetails: { channelId: String(channelId) },
+  };
+  if (duration) snippet.banDurationSeconds = Number(duration);
+  const res = await fetch('https://www.googleapis.com/youtube/v3/liveChat/bans?part=snippet', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snippet }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `YouTube ${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+// Dispatcher por plataforma — a diferencia de sendChatMessage (que manda a TODAS las
+// plataformas conectadas a la vez), el ban es sobre un mensaje puntual de UNA plataforma
+// específica (el id de usuario de cada una es incompatible con las otras), así que acá sí
+// hace falta saber cuál.
+async function banChatUserDispatch(userId, duration, reason, platform) {
+  if (platform === 'youtube') return banYoutubeUser(userId, duration, reason);
+  return banTwitchUser(userId, duration, reason);
+}
+setChatBanHandler(banChatUserDispatch);

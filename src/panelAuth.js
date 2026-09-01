@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Token compartido para autenticar la API del panel cuando queda expuesta a la LAN
 // (ALLOW_LAN_PANEL=true) — ver nota de seguridad en src/panel.js. Se genera una sola vez
 // y se persiste en disco: el plugin de Stream Deck (u otro cliente remoto) lo configura

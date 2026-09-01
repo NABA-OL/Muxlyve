@@ -91,9 +91,11 @@ export async function handle(req, res, url, ctx) {
     return true;
   }
 
-  // POST /api/chat-ban  { userId, duration?, reason? } -> timeout (con duration, en
-  // segundos) o ban permanente (sin duration) — solo Twitch, ver src/chatmod.js /
-  // electron/oauth.js banTwitchUser. Fase 5 del lote 2 (docs/PLAN_FEATURES_LOTE2.md).
+  // POST /api/chat-ban  { userId, duration?, reason?, platform? } -> timeout (con
+  // duration, en segundos) o ban permanente (sin duration) — Twitch y YouTube, ver
+  // src/chatmod.js / electron/oauth.js banChatUserDispatch. Fase 5 del lote 2
+  // (docs/PLAN_FEATURES_LOTE2.md). platform default 'twitch' — clientes viejos (sin este
+  // campo) siguen apuntando adonde siempre apuntaron.
   if (req.method === 'POST' && url.pathname === '/api/chat-ban') {
     const body = await readBody(req);
     const userId = String(body.userId || '').trim();
@@ -107,7 +109,8 @@ export async function handle(req, res, url, ctx) {
       }
     }
     const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : undefined;
-    json(res, 200, await banChatUserBackend(userId, duration, reason));
+    const platform = body.platform === 'youtube' ? 'youtube' : 'twitch';
+    json(res, 200, await banChatUserBackend(userId, duration, reason, platform));
     return true;
   }
 

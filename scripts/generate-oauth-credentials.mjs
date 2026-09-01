@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Genera electron/oauth-credentials.js (gitignored) a partir de .env, para hornear
 // los client IDs/secret dentro del binario empaquetado. Se ejecuta antes de cada build
 // (predist/predist:mac/predist:publish) — nunca se commitea a git.
@@ -26,11 +31,11 @@ function loadEnv() {
 }
 
 const env = loadEnv();
-const keys = ['TWITCH_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'KICK_CLIENT_ID', 'KICK_CLIENT_SECRET'];
+const keys = ['TWITCH_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'KICK_CLIENT_ID', 'KICK_CLIENT_SECRET', 'TIKTOK_CLIENT_ID', 'TIKTOK_CLIENT_SECRET'];
 // TWITCH_CLIENT_SECRET es opcional: solo aplica si la app de Twitch es tipo "Confidential"
 // (tiene Client Secret generado). Apps "Public" funcionan con PKCE puro, sin secret.
-// Kick, en cambio, SIEMPRE exige client_secret (cliente confidencial) — por eso
-// KICK_CLIENT_SECRET va en la lista obligatoria de arriba, no acá.
+// Kick y TikTok, en cambio, SIEMPRE exigen client_secret (clientes confidenciales) — por
+// eso sus *_CLIENT_SECRET van en la lista obligatoria de arriba, no acá.
 const optionalKeys = ['TWITCH_CLIENT_SECRET'];
 const missing = keys.filter((k) => !env[k]);
 if (missing.length) {

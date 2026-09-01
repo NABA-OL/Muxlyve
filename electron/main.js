@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 import { app, BrowserWindow, shell, ipcMain, dialog, Tray, Menu, nativeImage, Notification } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { existsSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';

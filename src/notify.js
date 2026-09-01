@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Aviso "estoy en vivo" a hasta 3 webhooks de Discord — opt-in, ver discordWebhooks en
 // src/settings.js. isValidDiscordWebhook vive en settings.js (no acá) para que la use
 // tanto el guardado desde el panel como el envío real, sin import circular (este módulo

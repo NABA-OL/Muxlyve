@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Copia ffmpeg de Homebrew (TLS completo) y bundlea sus dylibs no-sistema
 // para que el .app funcione en Macs sin Homebrew instalado.
 import { execSync } from 'node:child_process';

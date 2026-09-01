@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Monitor del ingest: un único proceso FFmpeg lee el stream local y reporta
 //  - resolución + fps RECIBIDOS (banner de entrada, parseado una vez)
 //  - niveles de audio L/R en tiempo real, computados de PCM crudo en Node

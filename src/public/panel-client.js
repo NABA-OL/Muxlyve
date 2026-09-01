@@ -1,3 +1,10 @@
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
   // Barra de título fundida con la UI — el padding exacto depende de qué lado ocupan
   // los botones nativos (izquierda en Mac, derecha en Windows). Se aplica ya mismo,
   // antes de cualquier otra cosa, para que no haya parpadeo del layout sin compensar.
@@ -26,12 +33,22 @@
     { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
     { id: 'youtube', name: 'YouTube', color: '#ff0000' },
     { id: 'kick',    name: 'Kick',    color: '#53fc18' },
-    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55', soon: true },
+    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55' },
   ];
-  // Google todavía no aprobó la verificación OAuth — bloquea el login de YouTube SOLO en
-  // producción empaquetada (en dev sigue funcionando para poder seguir probando/iterando
-  // con Google). Cuando llegue la aprobación, cambiar esto a false y listo.
-  const YOUTUBE_OAUTH_PENDING = true;
+  // Google aprobó la verificación OAuth (2026-08-16) — login de YouTube habilitado en
+  // producción empaquetada, no solo en dev.
+  const YOUTUBE_OAUTH_PENDING = false;
+
+  // Antes de abrir la ventana de autenticación, avisar si esa plataforma trae la clave de
+  // retransmisión automática al conectar o no — pedido del usuario 2026-08-29, tras
+  // confundir Kick (nunca la trajo, no tiene endpoint público para eso) con Twitch/YouTube
+  // (sí la traen). Ver connectPlatform() más abajo.
+  const CONNECT_INFO = {
+    twitch: 'Twitch obtiene tu clave de retransmisión automáticamente al conectar tu cuenta.',
+  youtube: 'YouTube obtiene tu clave de retransmisión automáticamente al conectar tu cuenta (requiere haber iniciado "Transmitir en vivo" al menos una vez en YouTube Studio).',
+  kick: 'Kick no permite obtener la clave mediante la conexión de la cuenta. Debes copiar y pegar tu clave de retransmisión manualmente desde el panel de Kick.',
+  tiktok: 'TikTok requiere una integración aprobada para obtener la clave automáticamente. De lo contrario, debes ingresar la clave de retransmisión manualmente.',
+  };
   let lastState = null;
   let lastAuthStatus = {};
   // Idioma actual del cliente — el <html lang="es"> del template ya llega traducido por
@@ -183,6 +200,61 @@
     if (n.includes('kick')) return 'kick';
     if (n.includes('tiktok')) return 'tiktok';
     return null;
+  }
+
+  // Plataformas donde la sección "Vertical" NO aplica (ver CLAUDE.md "Dual-format
+  // vertical"):
+  // - Kick: sin soporte de vertical, confirmado.
+  // - Twitch: SÍ tiene dual format, pero verificado contra help.twitch.tv/s/article/
+  //   dual-format-vertical-video que NUNCA pasa por un relay como Muxlyve — exige
+  //   Enhanced Broadcasting nativo de OBS con la cuenta de Twitch conectada directo
+  //   (no "Personalizado"), no existe una clave/URL vertical que pegar acá. Su propio
+  //   FAQ confirma que restreaming a otras plataformas se hace EN PARALELO, no a través
+  //   del mismo pipeline. No hay nada útil que este campo pueda ofrecer para Twitch.
+  // - TikTok: sin verificar todavía contra doc oficial (mecanismo real desconocido) —
+  //   fuera por ahora, no por descartado sino por prudencia tras el caso Twitch. Sacar
+  //   de este set en cuanto se confirme cómo funciona de verdad.
+  const NO_VERTICAL = new Set(['kick', 'twitch', 'tiktok']);
+
+  // Feature completa (motor + UI) pausada a pedido del usuario 2026-08-25 — no se borra
+  // nada, solo se oculta de la interfaz por ahora. Poner en true para reactivarla (junto
+  // con la nota de Ajustes → Conexión RTMP, ver panel.js).
+  const VERTICAL_UI_ENABLED = false;
+
+  // Sección "Vertical" dentro de la tarjeta de una plataforma — segunda conexión RTMP
+  // independiente de la horizontal, mismo destino (d.verticalUrl/verticalEnabled, ver
+  // src/destinations.js). Reusa el patrón .pb-subblock (ya definido en panel.css, sin usar
+  // hasta ahora) en vez de inventar un mecanismo de colapso nuevo. Solo se ofrece cuando ya
+  // existe una fila de destino para la plataforma (rtmpDest) — v1 asume que el usuario
+  // configura horizontal primero; agregar vertical "desde cero" es directo si hace falta.
+  function verticalSectionHtml(p, d) {
+    if (!VERTICAL_UI_ENABLED || NO_VERTICAL.has(p.id)) return '';
+    const vOpen = localStorage.getItem('ms_pbv_' + p.id) === '1';
+    const vPill = pillFor({ status: d.verticalStatus, lagging: d.verticalLagging, attempts: d.verticalAttempts, enabled: d.verticalEnabled });
+    const vMetrics = metricsFor({ status: d.verticalStatus, metrics: d.verticalMetrics });
+    let html = '<div class="pb-subblock' + (vOpen ? ' open' : '') + '" id="pbv-' + p.id + '">';
+    html += '<div class="pb-head" onclick="toggleVerticalSection(\'' + p.id + '\')">';
+    html += '<i class="pb-chevron">&#9654;</i><span class="pb-head-name">Vertical</span>';
+    html += '<span class="pill ' + vPill.cls + '">' + vPill.text + '</span>';
+    html += '</div><div class="pb-body"><div class="pb-body-inner">';
+    if (vMetrics) html += '<div class="card-head"><span class="metrics">' + vMetrics + '</span></div>';
+    // YouTube Studio da una "Clave: Vertical" real (mismo servidor que la horizontal,
+    // rtmp://a.rtmp.youtube.com/live2, solo cambia la clave) detrás de un toggle
+    // "Transmisión dual" — verificado 2026-08-22, ver CLAUDE.md. No hay endpoint público
+    // para autocompletarla (a diferencia de la horizontal vía OAuth), toca copiarla a mano.
+    if (p.id === 'youtube') html += '<p class="auto-note">&#8505; En YouTube Studio &#8594; Transmisión en vivo, activa "Transmisión dual" y copia la "Clave: Vertical" (mismo servidor que la horizontal, distinta clave).</p>';
+    html += '<div class="field"><label>URL RTMP vertical</label>';
+    html += '<div class="eyerow"><input type="password" class="pb-vert-url" value="" autocomplete="off">';
+    html += '<button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">' + eyeSvg(false) + '</button></div></div>';
+    html += '<div class="row"><label class="switch">';
+    html += '<input type="checkbox" class="pb-vert-toggle-cb" data-name="' + d.name + '"' + (d.verticalEnabled ? ' checked' : '') + ' onchange="toggleVertRtmp(this)">';
+    html += '<span class="thumb"></span></label>';
+    html += '<button class="save" data-name="' + d.name + '" onclick="saveVertRtmp(this)">Guardar</button>';
+    if (d.verticalStatus === 'failed') html += '<button class="retry" data-name="' + d.name + '" onclick="retryVertRtmp(this)">Reintentar</button>';
+    html += '</div>';
+    if (d.verticalEnabled && !lastState.liveVertical) html += '<p class="auto-note">* Arrancará cuando conectes la segunda salida vertical de OBS a este mismo ingest (ver Ajustes &#8594; Conexión RTMP).</p>';
+    html += '</div></div></div>';
+    return html;
   }
 
   // Devuelve { cls, text } para la píldora de estado de un destino.
@@ -447,7 +519,8 @@
         if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
         bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
         if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>';
-        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; TikTok regenera la clave cada sesión (~2h).</p>';
+        if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; La clave de TikTok caduca si pasa mucho sin usarse (no mientras estés en vivo) — si dejaste de transmitir hace rato, puede que ya no sirva.</p>';
+        bodyHtml += verticalSectionHtml(p, d);
         bodyHtml += '</div>';
       } else {
         const isTikTok = p.id === 'tiktok';
@@ -457,10 +530,10 @@
             'YouTube Studio al menos una vez?). Cópiala desde ahí y pégala abajo.</p>';
         }
         if (isTikTok) {
-          bodyHtml += '<p class="auto-note">&#8505; TikTok no tiene login — consigue tu URL y clave así: ' +
-            'abre la app de TikTok &#8594; toca + &#8594; LIVE &#8594; icono de ajustes antes de salir ' +
-            'en vivo &#8594; "Transmitir desde PC/consola". Copia el Server URL y la Stream Key que te ' +
-            'muestre y pégalos abajo. Esa clave expira en unas horas — genérala justo antes de transmitir.</p>';
+          bodyHtml += '<p class="auto-note">&#8505; Al conectar tu cuenta de TikTok solo se vincula tu perfil. ' +
+            'Como TikTok no permite obtener la clave de forma automática, debes ingresarla manualmente: ' +
+            'Copia la URL del servidor y la clave de transmisión y pégalas abajo. ' +
+            '<em>Nota: La clave es temporal y expira si no transmites pronto; genérala justo antes de iniciar en vivo.</em></p>';
         }
         const openStyle = pbAddOpen[p.id] ? ' style="display:none"' : '';
         const formStyle = pbAddOpen[p.id] ? '' : ' style="display:none"';
@@ -484,7 +557,11 @@
         '</div>' +
         '<div class="pb-body"><div class="pb-body-inner">' + bodyHtml + '</div></div>';
 
-      if (rtmpDest) block.querySelector('.pb-url').value = rtmpDest.url;
+      if (rtmpDest) {
+        block.querySelector('.pb-url').value = rtmpDest.url;
+        const vertInput = block.querySelector('.pb-vert-url');
+        if (vertInput) vertInput.value = rtmpDest.verticalUrl || '';
+      }
       if (pbAddDraft[p.id]) {
         const draftInput = block.querySelector('#pb-new-url-' + p.id);
         if (draftInput) draftInput.value = pbAddDraft[p.id];
@@ -571,6 +648,16 @@
     localStorage.setItem('ms_pb_' + pid, isOpen ? '1' : '0');
   }
 
+  // Colapsa/expande la sección "Vertical" de una tarjeta — mismo mecanismo que
+  // togglePlatformBlock, clase .open aparte (ms_pbv_*) para no interferir con el estado
+  // de la tarjeta completa.
+  function toggleVerticalSection(pid) {
+    const block = document.getElementById('pbv-' + pid);
+    if (!block) return;
+    const isOpen = block.classList.toggle('open');
+    localStorage.setItem('ms_pbv_' + pid, isOpen ? '1' : '0');
+  }
+
   function showAddPlatformRtmp(pid) {
     pbAddOpen[pid] = true;
     const form = $('#pb-add-form-' + pid);
@@ -629,16 +716,39 @@
     save(cb.dataset.name, card.querySelector('.pb-url').value, cb.checked, card.querySelector('.pb-maxbitrate').value);
   }
 
-  async function doRetry(name) {
+  // Sección "Vertical" de la tarjeta (ver verticalSectionHtml) — vive dentro del mismo
+  // .pb-rtmp que los campos horizontales, así que se leen de ahí también: save() siempre
+  // manda el destino completo, nunca solo la mitad (ver el fix en validateDestination,
+  // src/routes/destinations.js, que preserva lo no enviado — pero mandar todo es más
+  // simple y evita depender de ese detalle desde acá).
+  function saveVertRtmp(btn) {
+    const name = btn.dataset.name;
+    const card = btn.closest('.pb-rtmp');
+    save(name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked, card.querySelector('.pb-maxbitrate').value,
+      card.querySelector('.pb-vert-url').value, card.querySelector('.pb-vert-toggle-cb').checked);
+  }
+  function retryVertRtmp(btn) { doRetry(btn.dataset.name, 'v'); }
+  function toggleVertRtmp(cb) {
+    const card = cb.closest('.pb-rtmp');
+    save(cb.dataset.name, card.querySelector('.pb-url').value, card.querySelector('.pb-toggle-cb').checked, card.querySelector('.pb-maxbitrate').value,
+      card.querySelector('.pb-vert-url').value, cb.checked);
+  }
+
+  async function doRetry(name, channel) {
     try {
-      await withDestBusy(async () => { render(await api('POST', '/api/retry?name=' + encodeURIComponent(name))); });
+      const qs = '/api/retry?name=' + encodeURIComponent(name) + (channel === 'v' ? '&channel=v' : '');
+      await withDestBusy(async () => { render(await api('POST', qs)); });
       toast('Reintentando ' + name);
     } catch (e) { toast(e.message, true); }
   }
 
-  async function save(name, url, enabled, maxBitrate) {
+  async function save(name, url, enabled, maxBitrate, verticalUrl, verticalEnabled) {
     try {
-      await withDestBusy(async () => { render(await api('POST', '/api/destinations', { name, url, enabled, maxBitrate })); });
+      const body = { name, url, enabled, maxBitrate };
+      // Solo se agregan si el caller los mandó — así el guardado horizontal de siempre
+      // (savePbRtmp/togglePbRtmp, que no pasan estos dos argumentos) no toca el vertical.
+      if (verticalUrl !== undefined) { body.verticalUrl = verticalUrl; body.verticalEnabled = verticalEnabled; }
+      await withDestBusy(async () => { render(await api('POST', '/api/destinations', body)); });
       toast(enabled ? name + ' activado' : name + ' guardado');
     } catch (e) { toast(e.message, true); refresh(); }
   }
@@ -834,7 +944,10 @@
       if (!entries.length) { toast('Conecta Twitch o Kick primero.', true); return; }
       const failed = entries.filter(([, r]) => !r.ok);
       if (!failed.length) { input.value = ''; }
-      else toast('Falló en ' + failed.map(([p]) => p).join(', '), true);
+      else {
+        const [, firstErr] = failed[0];
+        toast((firstErr.error || ('Falló en ' + failed.map(([p]) => p).join(', '))), true);
+      }
     } catch (e) {
       toast(e.message, true);
     } finally {
@@ -1013,6 +1126,11 @@
       window._endMessage = c.endMessage || '';
       renderDiscordWebhooks(c.discordWebhooks || []);
       renderTelegramBots(c.telegramBots || []);
+      window._tourDone = !!c.tourDone;
+      // Deja que el resto del arranque (checkNicknamePrompt, showSidebarTab, etc.)
+      // termine de asentarse antes de resaltar nada — sin este margen el spotlight podía
+      // salir apuntando a un botón que otro paso del boot todavía iba a mover/mostrar.
+      setTimeout(maybeStartTour, 600);
     } catch {}
   }
 
@@ -1490,7 +1608,8 @@
     $('#prefsNavSys').style.display = hasElectron ? '' : 'none';
     $('#prefsNavSupport').style.display = hasElectron ? '' : 'none';
     $('#prefsNavProfile').style.display = hasElectron ? '' : 'none';
-    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'history', 'support', 'profile', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
+    $('#prefsNavStreamDeck').style.display = hasElectron ? '' : 'none';
+    const available = hasElectron ? ['sys', 'clips', 'chat', 'webhooks', 'streamdeck', 'history', 'support', 'profile', 'license'] : ['clips', 'chat', 'webhooks', 'history', 'license'];
     const stored = localStorage.getItem('ms_prefs_tab');
     switchPrefsTab(available.includes(stored) ? stored : available[0]);
     if (hasElectron) {
@@ -1759,18 +1878,26 @@
         '</label>' +
         '<input type="text" class="tg-token" placeholder="Token del bot (@BotFather)">' +
         '<input type="text" class="tg-chat" placeholder="Chat ID">' +
-        '<button class="browse-btn webhook-save-btn">Guardar</button>' +
+        '<input type="text" class="tg-topic" placeholder="Tema (opcional)" title="Número de tema, solo grupos con \'Temas\' activado">' +
+        '<button class="browse-btn webhook-save-btn" title="Guardar">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>' +
+            '<polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>' +
+          '</svg>' +
+        '</button>' +
         '<button class="browse-btn webhook-test-btn">Probar</button>' +
         '<button class="webhook-del-btn" title="Borrar">✕</button>';
       const tokenInput = row.querySelector('.tg-token');
       const chatInput = row.querySelector('.tg-chat');
+      const topicInput = row.querySelector('.tg-topic');
       const enabledChk = row.querySelector('.webhook-enabled-chk');
       tokenInput.value = bot.botToken;
       chatInput.value = bot.chatId;
+      topicInput.value = bot.topicId || '';
       enabledChk.checked = bot.enabled;
-      row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value));
+      row.querySelector('.webhook-save-btn').addEventListener('click', () => saveTelegramBotRow(i, tokenInput.value, chatInput.value, topicInput.value));
       enabledChk.addEventListener('change', () => toggleTelegramBot(i, enabledChk.checked));
-      row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value));
+      row.querySelector('.webhook-test-btn').addEventListener('click', () => testTelegramBotRow(tokenInput.value, chatInput.value, topicInput.value));
       row.querySelector('.webhook-del-btn').addEventListener('click', () => removeTelegramBot(i));
       box.appendChild(row);
     });
@@ -1778,7 +1905,7 @@
   }
   function addTelegramBotRow() {
     if (window._telegramBots.length >= MAX_TELEGRAM_BOTS) return;
-    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '', enabled: true }]);
+    renderTelegramBots([...window._telegramBots, { botToken: '', chatId: '', topicId: '', enabled: true }]);
     const inputs = $('#telegramBotsList').querySelectorAll('.tg-token');
     inputs[inputs.length - 1]?.focus();
   }
@@ -1787,9 +1914,9 @@
   // autosave por campo guardaba apenas se completaba el token (sin chat ID todavía),
   // el backend lo rechazaba, y el error volvía a pintar la fila con el valor viejo —
   // borrando lo que el usuario acababa de escribir. Ver .webhook-row-telegram en el CSS.
-  async function saveTelegramBotRow(i, botToken, chatId) {
+  async function saveTelegramBotRow(i, botToken, chatId, topicId) {
     const next = window._telegramBots.slice();
-    next[i] = { ...next[i], botToken: botToken.trim(), chatId: chatId.trim() };
+    next[i] = { ...next[i], botToken: botToken.trim(), chatId: chatId.trim(), topicId: (topicId || '').trim() };
     await persistTelegramBots(next);
   }
   async function toggleTelegramBot(i, enabled) {
@@ -1809,9 +1936,9 @@
       toast('Bots de Telegram actualizados');
     } catch (e) { toast(e.message, true); } // no re-renderiza — no pisa lo que el usuario tiene escrito
   }
-  async function testTelegramBotRow(botToken, chatId) {
+  async function testTelegramBotRow(botToken, chatId, topicId) {
     try {
-      const r = await api('POST', '/api/notify-test-telegram', { botToken, chatId });
+      const r = await api('POST', '/api/notify-test-telegram', { botToken, chatId, topicId });
       toast(r.ok ? 'Aviso de prueba enviado a Telegram' : (r.error || 'No se pudo enviar'), !r.ok);
     } catch (e) { toast(e.message, true); }
   }
@@ -1952,6 +2079,7 @@
     window._nickname = info.nickname || '';
     window._licName = info.name || '';
     $('#licNicknameInput').value = window._nickname;
+    $('#profileGreeting').textContent = window._nickname ? `¡Hola, ${window._nickname}!` : '¡Hola!';
     renderAvatar(info.avatarUrl || '');
 
     const planLabels = { monthly: 'Mensual', annual: 'Anual', lifetime: 'Vitalicio' };
@@ -2114,6 +2242,7 @@
     if (result?.ok) {
       window._nickname = result.nickname ?? nickname;
       $('#licNicknameInput').value = window._nickname;
+      $('#profileGreeting').textContent = window._nickname ? `¡Hola, ${window._nickname}!` : '¡Hola!';
       toast('Nickname guardado.');
     } else {
       toast(result?.error || 'No se pudo guardar el nickname.', true);
@@ -2151,6 +2280,90 @@
       toast(`¡Listo, ${window._nickname}!`);
     } else {
       toast(result?.error || 'No se pudo guardar el nickname.', true);
+    }
+  }
+
+  // ── Recorrido guiado de primer uso ──────────────────────────────────────────────────
+  // Pedido del usuario 2026-08-30: resaltar los puntos clave de la app (conexiones,
+  // RTMP, chat, ajustes) la primera vez que se usa, sin construir una librería de tours
+  // aparte — reusa el truco de box-shadow gigante (.tour-spotlight, panel.css) en vez de
+  // un overlay/mask nuevo. Se guarda server-side (settings.json vía POST /api/settings)
+  // para que no vuelva a salir en la próxima sesión, ni si se abre desde otra ventana.
+  const TOUR_STEPS = [
+    { el: '#connBtn', title: 'Conexiones', text: 'Acá agregas y activas tus plataformas — Twitch, YouTube, Kick y TikTok.' },
+    { el: '#rtmpBtn', title: 'Conexión RTMP', text: 'Acá está la URL y la clave que configuras en tu software de streaming (OBS y similares) para empezar a transmitir.' },
+    { el: '#chatBtn', title: 'Chat', text: 'Chat unificado de todas tus plataformas conectadas, en un solo lugar.' },
+    { el: '#prefsBtn', title: 'Preferencias', text: 'Ajustes de la app: perfil, grabación de clips, webhooks, Stream Deck y más.' },
+  ];
+  let tourStep = 0;
+
+  function maybeStartTour() {
+    if (window._tourDone) return;
+    if ($('#nicknameOverlay')?.classList.contains('open')) return; // prioridad al nickname
+    startTour();
+  }
+  // Reusable desde "Acerca de Muxlyve" (ver botón "Ver recorrido") para repetirlo a pedido,
+  // sin importar si ya se marcó como visto.
+  function startTour() {
+    tourStep = 0;
+    showTourStep();
+  }
+  function clearTourSpotlight() {
+    document.querySelectorAll('.tour-spotlight').forEach((e) => e.classList.remove('tour-spotlight'));
+  }
+  function showTourStep() {
+    clearTourSpotlight();
+    const step = TOUR_STEPS[tourStep];
+    if (!step) { endTour(true); return; }
+    const el = $(step.el);
+    // Botón no visible ahora mismo (ej. escondido por alguna condición) — no bloquear el
+    // recorrido entero por un paso puntual, sigue con el siguiente.
+    if (!el || el.offsetParent === null) { tourStep++; showTourStep(); return; }
+    el.classList.add('tour-spotlight');
+    let tip = $('#tourTip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'tourTip';
+      tip.className = 'tour-tip';
+      document.body.appendChild(tip);
+    }
+    const isLast = tourStep === TOUR_STEPS.length - 1;
+    tip.innerHTML =
+      '<h3>' + step.title + '</h3>' +
+      '<p>' + step.text + '</p>' +
+      '<div class="row">' +
+        '<span class="tour-step-count">' + (tourStep + 1) + ' / ' + TOUR_STEPS.length + '</span>' +
+        '<div style="display:flex;gap:.6rem;align-items:center">' +
+          '<button class="tour-skip-btn" onclick="endTour(true)">Saltar</button>' +
+          '<button class="save" onclick="nextTourStep()">' + (isLast ? 'Listo' : 'Siguiente') + '</button>' +
+        '</div>' +
+      '</div>';
+    const rect = el.getBoundingClientRect();
+    const margin = 12;
+    const tipW = 260;
+    let left = rect.left - tipW - margin;
+    if (left < margin) left = rect.right + margin;
+    if (left + tipW > window.innerWidth - margin) left = window.innerWidth - tipW - margin;
+    tip.style.left = Math.max(margin, left) + 'px';
+    // Alto real recién se sabe con el contenido puesto — se mide después de pintarlo.
+    const tipH = tip.offsetHeight || 140;
+    let top = rect.top + rect.height / 2 - tipH / 2;
+    if (top < margin) top = margin;
+    if (top + tipH > window.innerHeight - margin) top = window.innerHeight - tipH - margin;
+    tip.style.top = Math.max(margin, top) + 'px';
+  }
+  function nextTourStep() {
+    tourStep++;
+    if (tourStep >= TOUR_STEPS.length) { endTour(true); return; }
+    showTourStep();
+  }
+  async function endTour(markDone) {
+    clearTourSpotlight();
+    const tip = $('#tourTip');
+    if (tip) tip.remove();
+    if (markDone && !window._tourDone) {
+      window._tourDone = true;
+      try { await api('POST', '/api/settings', { tourDone: true }); } catch {}
     }
   }
 
@@ -2649,12 +2862,16 @@
       toast('YouTube: esta funcionalidad estará disponible en una próxima versión (en espera de aprobación de Google).', true);
       return;
     }
+    const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
+    if (CONNECT_INFO[platform]) {
+      const ok = await showConfirm(CONNECT_INFO[platform], 'Entendido, continuar', 'Conectar ' + label);
+      if (!ok) return;
+    }
     const btn = $('#pb-' + platform + ' .auth-conn');
     if (btn) { btn.disabled = true; btn.textContent = '...'; }
     try {
       const r = await window.msOAuth.connect(platform);
       if (r.ok) {
-        const label = (AUTH_PLATFORMS.find(p => p.id === platform) || {}).name || platform;
         toast('✓ ' + label + ' conectado' + (r.username ? ' (' + r.username + ')' : ''));
         // Trae la clave de stream lista (p.ej. Twitch) — evita que el usuario tenga que
         // ir a buscarla y pegarla a mano tras conectar.
@@ -2738,9 +2955,9 @@
       pinBtn.onclick = () => pinChatMessageUi(pinBtn, msg.id);
       row.appendChild(pinBtn);
     }
-    // Moderar (timeout/ban): solo Twitch, y no sobre tu propio mensaje.
-    if (msg.platform === 'twitch' && msg.userId && !msg.isBroadcaster) {
-      row.appendChild(createModBtn(msg.userId));
+    // Moderar (timeout/ban): Twitch y YouTube, y no sobre tu propio mensaje.
+    if ((msg.platform === 'twitch' || msg.platform === 'youtube') && msg.userId && !msg.isBroadcaster) {
+      row.appendChild(createModBtn(msg.userId, msg.platform));
     }
     box.appendChild(row);
     while (box.children.length > 200) box.removeChild(box.firstChild);

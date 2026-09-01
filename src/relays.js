@@ -1,10 +1,15 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 import { spawn, execFile } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
-import { isPlayable } from './destinations.js';
+import { isPlayable, isPlayableVertical } from './destinations.js';
 import { FFMPEG } from './ffmpeg.js';
 import { startMonitor, stopMonitor } from './monitor.js';
 import { loadSettings, saveSettings } from './settings.js';
@@ -14,11 +19,22 @@ import { getSessionPeaks, resetSessionPeaks } from './viewers.js';
 import { recordSession } from './sessions.js';
 
 // Gestor de procesos FFmpeg con reconexión automática.
-// Cada destino: name -> { proc, status, attempts, timer, stopping, startedAt, metrics }
+// Cada destino: `${name}::${channel}` -> { proc, status, attempts, timer, stopping,
+// startedAt, metrics }. channel: 'h' (horizontal, el de siempre) o 'v' (vertical — segunda
+// conexión RTMP independiente hacia la URL/clave vertical de la plataforma, ver CLAUDE.md
+// "Dual-format vertical"). Un solo Map para ambos canales, distinguidos por la key — así
+// el resto del código (backoff, métricas, cierre) no se duplica entre canales.
 // Estados: connecting | live | reconnecting | failed | stopped
 const relays = new Map();
-let sourceUrl = null; // URL del ingest local mientras hay emisión; null si no.
-let liveSince = null; // timestamp del inicio del directo (uptime).
+function relayKey(name, channel) { return `${name}::${channel}`; }
+
+let sourceUrl = null; // URL del ingest local horizontal mientras hay emisión; null si no.
+// URL del ingest local VERTICAL — conexión RTMP totalmente aparte de sourceUrl (dos
+// publish distintos de OBS, ver src/index.js). null si esa segunda conexión no está activa.
+// A propósito no comparte ciclo de vida con sourceUrl: el streamer puede conectar/desconectar
+// el canal vertical en cualquier momento sin afectar el horizontal, y viceversa.
+let verticalSourceUrl = null;
+let liveSince = null; // timestamp del inicio del directo (uptime, solo canal horizontal).
 // CN — evita el aviso "estoy en vivo" en falso: onPublish() dispara apenas OBS manda señal
 // al ingest LOCAL, sin importar si algún destino (Twitch/Kick/YouTube/TikTok) llegó a
 // conectar de verdad. Un streamer que prueba la señal con todo apagado, o con una clave
@@ -48,13 +64,19 @@ export function isLive() {
   return sourceUrl !== null;
 }
 
+// Canal vertical conectado (segunda conexión RTMP de OBS, independiente de la horizontal).
+export function isLiveVertical() {
+  return verticalSourceUrl !== null;
+}
+
 export function uptimeSeconds() {
   return liveSince ? Math.floor((Date.now() - liveSince) / 1000) : null;
 }
 
-// Info por destino para el panel (estado, intentos, métricas, rezago).
-export function relayInfo(name) {
-  const r = relays.get(name);
+// Info por destino para el panel (estado, intentos, métricas, rezago). channel: 'h' (default,
+// el de siempre) o 'v' para el estado del canal vertical de ese mismo destino.
+export function relayInfo(name, channel = 'h') {
+  const r = relays.get(relayKey(name, channel));
   if (!r) return { status: 'stopped', attempts: 0, metrics: null, lagging: false, transcoding: false };
   const lagging =
     r.status === 'live' &&
@@ -65,8 +87,8 @@ export function relayInfo(name) {
 }
 
 // Extrae fps/bitrate/speed de las líneas de progreso de FFmpeg y marca el relay como 'live'.
-function parseProgress(name, line) {
-  const r = relays.get(name);
+function parseProgress(name, channel, line) {
+  const r = relays.get(relayKey(name, channel));
   if (!r) return;
   const fps = line.match(/fps=\s*([\d.]+)/);
   const br = line.match(/bitrate=\s*([\d.]+)\s*kbits\/s/i);
@@ -83,8 +105,10 @@ function parseProgress(name, line) {
   // Reset de intentos tras estabilidad: una caída puntual no agota el presupuesto.
   if (r.attempts > 0 && Date.now() - r.startedAt > STABLE_MS) r.attempts = 0;
   // Primer destino que confirma progreso real = ahí sí "estoy en vivo" de verdad. Ver
-  // liveNotified arriba — antes esto se mandaba desde onPublish(), en falso.
-  if (!liveNotified) {
+  // liveNotified arriba — antes esto se mandaba desde onPublish(), en falso. Solo el canal
+  // horizontal dispara este aviso — el vertical es un extra silencioso, avisar dos veces
+  // por la misma transmisión sería confuso.
+  if (channel === 'h' && !liveNotified) {
     liveNotified = true;
     notifyDiscord(); // aviso a Discord (hasta 3 webhooks) si hay configurados — no-op si no
     notifyTelegram(); // ídem Telegram (hasta 3 bots) — ver src/notify.js / src/telegram.js
@@ -99,9 +123,13 @@ const BITRATE_CHECK_SAMPLES = 6; // ~sostenido unos segundos antes de decidir, n
 const bitrateSamples = new Map(); // name -> number[] ventana corta para el chequeo
 const transcodingDecided = new Set(); // nombres que ya decidieron recodificar esta sesión
 
+// Solo aplica al canal horizontal — el vertical siempre queda en -c copy (v1, ver
+// CLAUDE.md "Dual-format vertical"). Su bitrate típico es más bajo (menor resolución) y
+// todavía no tiene su propio campo de cap configurable; agregarlo es directo si hace
+// falta más adelante, no vale la pena antes de que alguien lo pida.
 function checkBitrateCap(dest) {
   if (!dest.maxBitrate || transcodingDecided.has(dest.name)) return;
-  const r = relays.get(dest.name);
+  const r = relays.get(relayKey(dest.name, 'h'));
   if (!r?.metrics?.bitrate) return;
   const samples = bitrateSamples.get(dest.name) || [];
   samples.push(r.metrics.bitrate);
@@ -127,15 +155,16 @@ function switchToTranscode(dest) {
   if (transcodingDecided.has(dest.name)) return;
   transcodingDecided.add(dest.name);
   console.log(`[relay:${dest.name}] bitrate sostenido por encima del cap (${dest.maxBitrate}k) — recodificando de ahora en más`);
-  const r = relays.get(dest.name);
+  const key = relayKey(dest.name, 'h');
+  const r = relays.get(key);
   if (r?.proc) {
     const proc = r.proc;
     proc.kill('SIGINT');
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1500);
   }
   if (r) { r.stopping = true; if (r.timer) clearTimeout(r.timer); }
-  relays.delete(dest.name);
-  setTimeout(() => startRelay(dest), 400); // startRelay() consulta transcodingDecided para elegir los args
+  relays.delete(key);
+  setTimeout(() => startRelay(dest, 'h'), 400); // startRelay() consulta transcodingDecided para elegir los args
 }
 
 // Kick espera la stream key bajo la ruta /app (rtmps://host/app/<key>). El dashboard
@@ -155,23 +184,32 @@ function normalizeKickUrl(url) {
   return url;
 }
 
-function startRelay(dest) {
-  if (!sourceUrl) return;
-  const prev = relays.get(dest.name);
+// channel: 'h' (default) o 'v'. Usa dest.url/sourceUrl para 'h' y dest.verticalUrl/
+// verticalSourceUrl para 'v' — mismo manejo de reconexión y métricas para ambos, la única
+// diferencia real es de qué ingest local lee y a qué campo de dest apunta.
+function startRelay(dest, channel = 'h') {
+  const isVertical = channel === 'v';
+  const src = isVertical ? verticalSourceUrl : sourceUrl;
+  if (!src) return;
+  const key = relayKey(dest.name, channel);
+  const prev = relays.get(key);
   if (prev && (prev.status === 'connecting' || prev.status === 'live')) return; // ya corre
 
+  const destUrl = isVertical ? dest.verticalUrl : dest.url;
   // -c copy = reenvío sin recodificar (carga mínima de CPU) — el caso normal, para
   // TODOS los destinos salvo que tengan maxBitrate Y ya se haya decidido recodificar
-  // (ver checkBitrateCap/switchToTranscode). Sin cap configurado, nunca cambia.
-  const fmt = dest.url.startsWith('srt://') ? 'mpegts' : 'flv';
-  const targetUrl = normalizeKickUrl(dest.url);
-  const useTranscode = !!dest.maxBitrate && transcodingDecided.has(dest.name);
+  // (ver checkBitrateCap/switchToTranscode). Sin cap configurado, nunca cambia. El cap
+  // solo existe para el canal horizontal por ahora (ver checkBitrateCap) — el vertical
+  // siempre va en copy.
+  const fmt = destUrl.startsWith('srt://') ? 'mpegts' : 'flv';
+  const targetUrl = normalizeKickUrl(destUrl);
+  const useTranscode = !isVertical && !!dest.maxBitrate && transcodingDecided.has(dest.name);
   const args = useTranscode
-    ? ['-rw_timeout', '5000000', '-i', sourceUrl,
+    ? ['-rw_timeout', '5000000', '-i', src,
        '-c:v', 'libx264', '-preset', 'veryfast',
        '-b:v', `${dest.maxBitrate}k`, '-maxrate', `${dest.maxBitrate}k`, '-bufsize', `${dest.maxBitrate * 2}k`,
        '-c:a', 'copy', '-f', fmt, targetUrl]
-    : ['-rw_timeout', '5000000', '-i', sourceUrl, '-c', 'copy', '-f', fmt, targetUrl];
+    : ['-rw_timeout', '5000000', '-i', src, '-c', 'copy', '-f', fmt, targetUrl];
   const proc = spawn(FFMPEG, args);
 
   const entry = {
@@ -184,38 +222,43 @@ function startRelay(dest) {
     metrics: null,
     transcoding: useTranscode,
   };
-  relays.set(dest.name, entry);
+  relays.set(key, entry);
 
+  const tag = isVertical ? `${dest.name}:vertical` : dest.name;
   proc.on('error', (err) => {
-    console.error(`[relay:${dest.name}] no se pudo lanzar ffmpeg: ${err.message}`);
+    console.error(`[relay:${tag}] no se pudo lanzar ffmpeg: ${err.message}`);
   });
   proc.stderr.on('data', (d) => {
     for (const line of d.toString().split(/[\r\n]+/)) {
       if (!line.trim()) continue;
-      parseProgress(dest.name, line);
-      if (dest.maxBitrate && !useTranscode) checkBitrateCap(dest);
+      parseProgress(dest.name, channel, line);
+      if (!isVertical && dest.maxBitrate && !useTranscode) checkBitrateCap(dest);
       if (/error|failed|unable|refused|denied/i.test(line)) {
-        console.log(`[ffmpeg:${dest.name}] ${line}`);
+        console.log(`[ffmpeg:${tag}] ${line}`);
       }
     }
   });
-  proc.on('close', (code) => onRelayClose(dest, code));
+  proc.on('close', (code) => onRelayClose(dest, channel, code));
 
-  console.log(`[relay:${dest.name}] iniciado${useTranscode ? ` (recodificando a ${dest.maxBitrate}kbps)` : ''} -> ${maskUrl(dest.url)}`);
+  console.log(`[relay:${tag}] iniciado${useTranscode ? ` (recodificando a ${dest.maxBitrate}kbps)` : ''} -> ${maskUrl(destUrl)}`);
 }
 
 // Un relay murió: decide si fue parada manual, fin de emisión, o caída a reintentar.
-function onRelayClose(dest, code) {
-  const r = relays.get(dest.name);
+function onRelayClose(dest, channel, code) {
+  const key = relayKey(dest.name, channel);
+  const r = relays.get(key);
   if (!r) return;
-  if (r.stopping) { relays.delete(dest.name); return; } // parada intencional
-  if (!isLive() || !isPlayable(dest)) { relays.delete(dest.name); return; }
+  if (r.stopping) { relays.delete(key); return; } // parada intencional
+  const liveNow = channel === 'v' ? isLiveVertical() : isLive();
+  const playableNow = channel === 'v' ? isPlayableVertical(dest) : isPlayable(dest);
+  if (!liveNow || !playableNow) { relays.delete(key); return; }
 
+  const tag = channel === 'v' ? `${dest.name}:vertical` : dest.name;
   if (r.attempts >= MAX_ATTEMPTS) {
     r.status = 'failed';
     r.proc = null;
     r.metrics = null;
-    console.error(`[relay:${dest.name}] agotados ${MAX_ATTEMPTS} intentos. Marcado como failed.`);
+    console.error(`[relay:${tag}] agotados ${MAX_ATTEMPTS} intentos. Marcado como failed.`);
     return; // queda en el Map como 'failed' para que el panel lo muestre
   }
   const delay = Math.min(BASE_DELAY * 2 ** r.attempts, MAX_DELAY);
@@ -223,12 +266,13 @@ function onRelayClose(dest, code) {
   r.status = 'reconnecting';
   r.proc = null;
   r.metrics = null;
-  console.warn(`[relay:${dest.name}] caído (code ${code}). Reintento ${r.attempts}/${MAX_ATTEMPTS} en ${delay}ms`);
-  r.timer = setTimeout(() => startRelay(dest), delay);
+  console.warn(`[relay:${tag}] caído (code ${code}). Reintento ${r.attempts}/${MAX_ATTEMPTS} en ${delay}ms`);
+  r.timer = setTimeout(() => startRelay(dest, channel), delay);
 }
 
-function stopRelay(name) {
-  const r = relays.get(name);
+function stopRelay(name, channel = 'h') {
+  const key = relayKey(name, channel);
+  const r = relays.get(key);
   if (!r) return;
   r.stopping = true; // distingue parada manual de caída
   if (r.timer) clearTimeout(r.timer);
@@ -241,17 +285,29 @@ function stopRelay(name) {
     proc.kill('SIGINT');
     setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 2000);
   }
-  relays.delete(name);
-  console.log(`[relay:${name}] detenido`);
+  relays.delete(key);
+  console.log(`[relay:${channel === 'v' ? name + ':vertical' : name}] detenido`);
 }
 
-// OBS empezó a publicar: guarda el origen y arranca todos los destinos reproducibles.
+// Para todos los relays de UN canal (usado por onUnpublish/onUnpublishVertical) — filtra
+// por sufijo de key en vez de recorrer destinations, así también limpia relays de destinos
+// que ya se hayan borrado del config mientras estaban en vivo.
+function stopAllInChannel(channel) {
+  const suffix = `::${channel}`;
+  for (const key of [...relays.keys()]) {
+    if (key.endsWith(suffix)) stopRelay(key.slice(0, -suffix.length), channel);
+  }
+}
+
+// OBS empezó a publicar en el ingest HORIZONTAL: guarda el origen y arranca todos los
+// destinos reproducibles de ese canal. No toca el canal vertical — tiene su propio ciclo
+// de vida independiente, ver onPublishVertical más abajo.
 export function onPublish(url, destinations) {
   sourceUrl = url;
   liveSince = Date.now();
   sessionDestNames = destinations.filter(isPlayable).map((d) => d.name);
   resetSessionPeaks(); // nueva sesión = nuevo pico de espectadores desde cero
-  destinations.filter(isPlayable).forEach(startRelay);
+  destinations.filter(isPlayable).forEach((d) => startRelay(d, 'h'));
   startMonitor(url); // métricas del ingest + niveles de audio
   // Buffer/grabación completa "armados" (prendidos sin señal, ver arm*() más abajo) —
   // arrancan solos apenas hay con qué. Server-side a propósito: funciona igual sea el
@@ -264,7 +320,8 @@ export function onPublish(url, destinations) {
   // real, no con la mera señal de OBS al ingest local.
 }
 
-// OBS dejó de publicar: para todo y olvida el origen.
+// OBS dejó de publicar en el ingest HORIZONTAL: para esos relays y olvida el origen. El
+// canal vertical (si está conectado) sigue su curso — ver onUnpublishVertical.
 export function onUnpublish() {
   // Si nunca se avisó "estoy en vivo" (ningún destino llegó a conectar de verdad — ver
   // liveNotified/parseProgress arriba), tampoco se avisa "terminó" NI se guarda un
@@ -277,7 +334,7 @@ export function onUnpublish() {
   const durationSeconds = uptimeSeconds() || 0;
   const peakViewers = getSessionPeaks();
   const destNames = sessionDestNames;
-  for (const name of [...relays.keys()]) stopRelay(name);
+  stopAllInChannel('h');
   stopRecording();
   stopFullRecording();
   stopMonitor();
@@ -301,30 +358,60 @@ export function onUnpublish() {
   }
 }
 
-// Aplica un cambio de un destino en caliente. Sin emisión activa no hace nada.
+// OBS empezó a publicar en el ingest VERTICAL (segunda conexión aparte, ver src/index.js).
+// Arranca solo los destinos con verticalUrl+verticalEnabled — sin tocar grabación/monitor
+// ni el aviso de Discord/Telegram, todo eso sigue atado únicamente al canal horizontal.
+export function onPublishVertical(url, destinations) {
+  verticalSourceUrl = url;
+  destinations.filter(isPlayableVertical).forEach((d) => startRelay(d, 'v'));
+}
+
+// OBS dejó de publicar en el ingest VERTICAL: para solo esos relays.
+export function onUnpublishVertical() {
+  stopAllInChannel('v');
+  verticalSourceUrl = null;
+}
+
+// Aplica un cambio de un destino en caliente, en AMBOS canales (cada uno según su propia
+// señal enabled/URL) — así el caller (guardar en el panel, aplicar un preset) no necesita
+// saber de canales: un solo llamado ajusta horizontal y vertical del mismo destino.
 export function applyChange(dest) {
-  if (!isLive()) return;
-  const r = relays.get(dest.name);
-  const active = r && ['connecting', 'live', 'reconnecting'].includes(r.status);
-  if (isPlayable(dest) && !active) retry(dest);
-  else if (!isPlayable(dest) && r) stopRelay(dest.name);
+  if (isLive()) {
+    const r = relays.get(relayKey(dest.name, 'h'));
+    const active = r && ['connecting', 'live', 'reconnecting'].includes(r.status);
+    if (isPlayable(dest) && !active) retry(dest, 'h');
+    else if (!isPlayable(dest) && r) stopRelay(dest.name, 'h');
+  }
+  if (isLiveVertical()) {
+    const rv = relays.get(relayKey(dest.name, 'v'));
+    const activeV = rv && ['connecting', 'live', 'reconnecting'].includes(rv.status);
+    if (isPlayableVertical(dest) && !activeV) retry(dest, 'v');
+    else if (!isPlayableVertical(dest) && rv) stopRelay(dest.name, 'v');
+  }
 }
 
 // Reintento manual (botón del panel para destinos 'failed'): arranca limpio con attempts=0.
-export function retry(dest) {
-  if (!isLive() || !isPlayable(dest)) return;
-  const r = relays.get(dest.name);
+// channel: 'h' (default) o 'v' — applyChange() llama a ambos por separado según corresponda.
+export function retry(dest, channel = 'h') {
+  const live = channel === 'v' ? isLiveVertical() : isLive();
+  const playable = channel === 'v' ? isPlayableVertical(dest) : isPlayable(dest);
+  if (!live || !playable) return;
+  const key = relayKey(dest.name, channel);
+  const r = relays.get(key);
   if (r) {
     if (r.timer) clearTimeout(r.timer);
     if (r.proc) { r.stopping = true; r.proc.kill('SIGKILL'); }
   }
-  relays.delete(dest.name); // entry nuevo => attempts arranca en 0
-  startRelay(dest);
+  relays.delete(key); // entry nuevo => attempts arranca en 0
+  startRelay(dest, channel);
 }
 
-// El destino cambió de nombre o se borró: para el relay viejo por su nombre anterior.
+// El destino cambió de nombre o se borró: para el relay viejo por su nombre anterior, en
+// AMBOS canales (no hay forma de saber cuál estaba activo desde acá, y parar el que no
+// corre es un no-op inofensivo — ver stopRelay).
 export function stopByName(name) {
-  stopRelay(name);
+  stopRelay(name, 'h');
+  stopRelay(name, 'v');
 }
 
 // ── Grabador de buffer rodante ────────────────────────────────────────────

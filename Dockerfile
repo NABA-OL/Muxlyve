@@ -9,8 +9,9 @@ FROM node:20.18.1-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.24.0 --activate \
+    && pnpm install --prod --frozen-lockfile
 COPY . .
 
 # Usuario no-root (CN-005) — sin esto, el proceso y cada hijo de FFmpeg corren como root
@@ -26,7 +27,7 @@ EXPOSE 19350 19000 19080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PANEL_PORT||19080)+'/api/state',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-# Exec directo a node en vez de "npm start" (CN-008) — así el proceso Node (dueño de los
+# Exec directo a node en vez de "pnpm start" (CN-008) — así el proceso Node (dueño de los
 # handlers SIGINT/SIGTERM que paran limpio los hijos de FFmpeg, ver src/index.js) es PID 1,
-# no el wrapper de npm, que no reenvía señales de forma confiable ni reapea huérfanos.
+# no el wrapper del package manager, que no reenvía señales de forma confiable ni reapea huérfanos.
 CMD ["node", "--env-file-if-exists=.env", "src/index.js"]

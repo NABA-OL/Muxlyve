@@ -11,30 +11,30 @@ El reenvío usa FFmpeg en modo copia (`-c copy`), sin recodificar: carga mínima
 ### Desarrollo
 
 ```bash
-npm run dev          # Motor headless con hot-reload (Node --watch)
-npm run electron     # App de escritorio Electron (abre ventana con el panel)
+pnpm dev              # Motor headless con hot-reload (Node --watch)
+pnpm electron         # App de escritorio Electron (abre ventana con el panel)
 ```
 
 ### Producción (headless)
 
 ```bash
-npm start            # Motor solo, sin UI — para Docker / servidor
+pnpm start            # Motor solo, sin UI — para Docker / servidor
 ```
 
 ### Builds e instaladores
 
 ```bash
 # Windows — genera instalador .exe en dist-app/
-npm run dist
+pnpm dist
 
 # Windows — genera .exe Y lo publica en GitHub Releases
-npm run dist:publish
+pnpm dist:publish
 
 # Mac — descarga FFmpeg + genera .dmg localmente (ejecutar en Mac)
-npm run dist:mac
+pnpm dist:mac
 
 # Mac — publica .dmg en GitHub Releases (ejecutar después de dist:mac)
-npm run dist:publish
+pnpm dist:publish
 ```
 
 > `dist:publish` auto-detecta plataforma: en Windows publica `.exe`, en Mac publica `.dmg`. Requiere `GH_TOKEN` en `.env`.
@@ -42,15 +42,15 @@ npm run dist:publish
 ### Utilidades
 
 ```bash
-npm run validate     # Valida config/destinations.json
-npm test             # Smoke test — verifica que el motor arranca
+pnpm validate         # Valida config/destinations.json
+pnpm test             # Smoke test — verifica que el motor arranca
 ```
 
 ---
 
 ## Requisitos
 
-- **Node.js 20+** y **FFmpeg** instalados (o usa Docker).
+- **Node.js 20+**, **pnpm** y **FFmpeg** instalados (o usa Docker).
 - OBS Studio.
 - Para el `.exe`: ejecutar en Windows (ffmpeg-static descarga el binario de la plataforma).
 - Para el `.dmg`: ejecutar en Mac.
@@ -61,7 +61,7 @@ npm test             # Smoke test — verifica que el motor arranca
 
 ```bash
 # 1. Instalar dependencias
-npm install
+pnpm install
 
 # 2. Crear config a partir de los ejemplos
 cp .env.example .env
@@ -71,10 +71,10 @@ cp config/destinations.example.json config/destinations.json
 #    (pon "enabled": true en las plataformas que quieras usar)
 
 # 4. Arrancar la app de escritorio
-npm run electron
+pnpm electron
 
 # — o el motor headless —
-npm start
+pnpm start
 ```
 
 ## Puesta en marcha (Docker)

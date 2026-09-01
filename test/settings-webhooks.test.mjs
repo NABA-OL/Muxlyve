@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Migración de la versión anterior (un solo discordWebhookUrl/discordMessage) a la
 // multi-webhook (discordWebhooks[]/liveMessage) — y el tope de 3 al leer un
 // settings.json que alguien pudo haber editado a mano con más. Mismo patrón que

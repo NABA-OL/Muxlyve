@@ -1,3 +1,8 @@
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-25
+ */
   :root {
     --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2a3140;
     --text: #e6edf3; --muted: #8b949e; --accent: #7c5cff; --accent-2: #2ea043;
@@ -224,6 +229,35 @@
   }
   .prefs-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
   .prefs-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+
+  /* Recorrido guiado de primer uso (ver startTour(), panel-client.js). El "apagado" de
+     fondo NO es un overlay aparte — es el propio box-shadow del elemento resaltado con un
+     spread gigante (9999px), truco clásico que evita tener que armar un mask/cutout SVG:
+     cubre toda la pantalla salvo el propio elemento, que queda arriba con z-index. */
+  .tour-spotlight {
+    position: relative !important;
+    z-index: 200 !important;
+    border-radius: 10px;
+    box-shadow: 0 0 0 4px var(--accent), 0 0 0 9999px rgba(0,0,0,.72);
+    transition: box-shadow .2s var(--ease-out);
+  }
+  .tour-tip {
+    position: fixed;
+    z-index: 201;
+    max-width: 260px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: .9rem 1rem;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    font-size: .85rem;
+  }
+  .tour-tip h3 { margin: 0 0 .4rem; font-size: .95rem; }
+  .tour-tip p { margin: 0 0 .8rem; color: var(--muted); line-height: 1.4; }
+  .tour-tip .row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+  .tour-step-count { font-size: .72rem; color: var(--muted); }
+  .tour-skip-btn { background: transparent; border: none; color: var(--muted); font-size: .78rem; cursor: pointer; padding: 0; }
+  .tour-skip-btn:hover { color: var(--text); }
   .prefs-close { background: transparent; color: var(--muted); border: 1px solid transparent;
     font-size: 1rem; padding: .2rem .45rem; border-radius: 6px; }
   .prefs-close:hover { color: var(--text); background: var(--surface-2); }
@@ -415,7 +449,13 @@
      pintar la fila con el valor viejo, borrando lo recién tecleado. El token ocupa su
      propia línea completa para que el chat ID + los 3 botones entren cómodos debajo. */
   .webhook-row-telegram .tg-token { flex: 1 1 100%; }
+  /* Tema es un número corto (message_thread_id de Telegram), no necesita el mismo ancho
+     que chat ID — angosto y con flex-grow en 0 para no robarle espacio a los botones. */
+  .webhook-row-telegram .tg-topic { flex: 0 1 90px; }
   .webhook-save-btn, .webhook-test-btn { flex-shrink: 0; width: auto; padding: .35rem .7rem; font-size: .75rem; }
+  /* Ícono en vez de texto ("Guardar") — libera ancho para que chat ID/tema no queden tan
+     apretados al lado (ver conversación: los placeholders casi no se leían). */
+  .webhook-save-btn { display: flex; align-items: center; justify-content: center; padding: .35rem .5rem; }
   .webhook-del-btn { flex-shrink: 0; background: transparent; border: none; color: var(--muted);
     cursor: pointer; padding: .3rem .5rem; border-radius: 6px; transition: background .15s, color .15s; }
   .webhook-del-btn:hover { background: rgba(229,72,77,.15); color: #e5484d; }
@@ -720,7 +760,12 @@
   .pb-subblock > .pb-head { background: transparent; padding: .3rem .1rem; }
   .pb-subblock > .pb-head:hover { background: transparent; }
   .pb-subblock > .pb-head:hover .pb-head-name { color: var(--text); }
-  .pb-subblock.open > .pb-body { border-top-width: 0; }
+  .pb-subblock.open > .pb-head .pb-chevron { transform: rotate(90deg); }
+  /* .pb-subblock nunca se había usado hasta ahora (ver Vertical dentro de cada tarjeta
+     de plataforma) — .pb-block.open ya trae grid-template-rows:1fr, pero esa regla no
+     alcanza acá porque .pb-subblock no lleva la clase .pb-block. Sin esto el toggle
+     cambiaba la clase .open pero no pasaba nada visualmente. */
+  .pb-subblock.open > .pb-body { grid-template-rows: 1fr; border-top-width: 0; }
   /* .conn en el wrapper del submenú no alcanza a los .field (quedan 2 niveles más abajo,
      dentro de .pb-body-inner) — el gap real va acá, donde sí son hijos directos. */
   .pb-subblock.open > .pb-body > .pb-body-inner { display: flex; flex-direction: column; gap: .6rem; padding: .5rem .1rem .15rem; }

@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Round-trip en texto plano (sin MASTER_KEY) + validación de URLs. MS_CONFIG_DIR/MASTER_KEY
 // se leen en destinations.js al importar el módulo, por eso van antes del import dinámico.
 import { test, after } from 'node:test';

@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Historial de sesiones de transmisión — un registro por vez que la app avisó "estoy en
 // vivo" de verdad (mismo criterio que el webhook de inicio/fin, ver relays.js
 // onUnpublish(): si nunca se avisó el inicio, tampoco se guarda un registro — sería una

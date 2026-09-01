@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // ffmpeg-static descarga el binario que corresponde a la plataforma donde corrió
-// `npm install` (postinstall), NO a la plataforma target de electron-builder — si
+// `pnpm install` (postinstall), NO a la plataforma target de electron-builder — si
 // dist:linux corre en una Mac (o Windows), este binario sigue siendo el de esa
 // plataforma y electron-builder lo empaqueta igual, sin avisar. El resultado: un
 // AppImage con un ffmpeg que no ejecuta en Linux (visto en pruebas: seguía siendo
@@ -35,7 +40,7 @@ const isElf = header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && 
 if (!isElf) {
   console.error(
     `✗ ${ffmpegPath} no es un binario ELF de Linux (probablemente quedó el de la plataforma\n` +
-    '  donde corrió "npm install"). dist:linux debe correr en una máquina Linux real (o un\n' +
+    '  donde corrió "pnpm install"). dist:linux debe correr en una máquina Linux real (o un\n' +
     '  contenedor Docker linux/amd64 o linux/arm64) para que el postinstall de ffmpeg-static\n' +
     '  baje el binario correcto — no funciona cross-build desde macOS/Windows.',
   );

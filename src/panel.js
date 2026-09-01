@@ -1,13 +1,18 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { timingSafeEqual, createHash } from 'node:crypto';
-import { isLive, relayInfo, uptimeSeconds, recorderInfo, fullRecordingInfo } from './relays.js';
-import { loadAll, isPlayable } from './destinations.js';
+import { isLive, isLiveVertical, relayInfo, uptimeSeconds, recorderInfo, fullRecordingInfo } from './relays.js';
+import { loadAll, isPlayable, isPlayableVertical } from './destinations.js';
 import { ingestInfo } from './monitor.js';
 import { tMap } from './i18n.js';
 import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
@@ -147,6 +152,7 @@ function serveWithEtag(req, res, contentType, item) {
 function buildState() {
   const destinations = loadAll().map((d) => {
     const info = relayInfo(d.name);
+    const vInfo = relayInfo(d.name, 'v');
     return {
       name: d.name,
       url: d.url || '',
@@ -160,9 +166,19 @@ function buildState() {
       lagging: info.lagging,
       maxBitrate: d.maxBitrate || null,
       transcoding: info.transcoding,
+      // Canal vertical — segunda conexión RTMP independiente (ver CLAUDE.md "Dual-format
+      // vertical"). Mismas formas que los campos de arriba, con prefijo vertical*.
+      verticalUrl: d.verticalUrl || '',
+      verticalEnabled: Boolean(d.verticalEnabled),
+      verticalPlayable: isPlayableVertical(d),
+      verticalRelaying: vInfo.status === 'live' || vInfo.status === 'connecting',
+      verticalStatus: vInfo.status,
+      verticalAttempts: vInfo.attempts,
+      verticalMetrics: vInfo.metrics,
+      verticalLagging: vInfo.lagging,
     };
   });
-  return { live: isLive(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), fullRecorder: fullRecordingInfo(), ingest: ingestInfo() };
+  return { live: isLive(), liveVertical: isLiveVertical(), uptime: uptimeSeconds(), destinations, recorder: recorderInfo(), fullRecorder: fullRecordingInfo(), ingest: ingestInfo() };
 }
 
 function readBody(req) {
@@ -656,6 +672,11 @@ export const PANEL_HTML = /* html */ `<!doctype html>
                 <button class="browse-btn" onclick="saveStreamKey()">Guardar</button>
               </div>
             </details>
+            <!-- Nota de vertical PAUSADA a pedido del usuario 2026-08-25, junto con
+                 VERTICAL_UI_ENABLED en panel-client.js — no se borra, solo se oculta.
+                 Descomentar ambas al reactivar la feature.
+            <p class="auto-note">&#8505; Para transmitir también en vertical (ver la sección "Vertical" en cada tarjeta de plataforma que lo soporte): configura una SEGUNDA salida en tu software de streaming, mismo servidor de arriba, con la clave <b>+ "-vertical"</b> (ej. si tu clave es <code>mistream</code>, usa <code>mistream-vertical</code>). Twitch es la excepción: su dual format se configura directo en OBS con Enhanced Broadcasting + tu cuenta de Twitch conectada, aparte de esta clave.</p>
+            -->
           </div>
           <div class="field" id="lanField" style="display:none">
             <label>Desde otra máquina en tu red</label>
@@ -710,7 +731,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <button onclick="copy('panelTokenCode')" class="copy-btn" title="copiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
             </div>
           </div>
-          <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Sistema → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
+          <p class="auto-note" id="panelTokenHint">Actívalo en <a href="#" onclick="closeConnInfoAndOpenPrefs(event)">Preferencias → Stream Deck → "Permitir Stream Deck / chat desde otra máquina"</a> y reinicia Muxlyve para generar el token.</p>
         </div></div>
       </div>
     </div>
@@ -807,6 +828,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <span>Webhooks</span>
           <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <button class="prefs-nav-item" data-tab="streamdeck" id="prefsNavStreamDeck" onclick="switchPrefsTab('streamdeck')" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="10" r="1.5"/><circle cx="12" cy="10" r="1.5"/><circle cx="16" cy="10" r="1.5"/><circle cx="8" cy="14" r="1.5"/><circle cx="12" cy="14" r="1.5"/><circle cx="16" cy="14" r="1.5"/>
+          </svg>
+          <span>Stream Deck</span>
+          <svg class="prefs-nav-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
         <button class="prefs-nav-item" data-tab="history" onclick="switchPrefsTab('history')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>
@@ -901,20 +929,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
               <div class="pref-desc" id="updateCheckDesc">Revisa si hay una versión nueva disponible</div>
             </div>
             <button id="updateCheckBtn" onclick="checkForUpdates()">Buscar</button>
-          </div>
-          <div class="pref-row">
-            <div>
-              <div>Permitir Stream Deck / chat desde otra máquina</div>
-              <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
-            </div>
-            <label class="sys-toggle">
-              <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
-              <span class="sys-toggle-track"></span>
-            </label>
-          </div>
-          <div class="pref-row" id="allowLanRestartRow" style="display:none">
-            <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
-            <button onclick="relaunchApp()">Reiniciar ahora</button>
           </div>
           <!-- Exportar/importar configuración (Fase 1 del lote 2,
                docs/PLAN_FEATURES_LOTE2.md). Se cifra con la contraseña que pidas al
@@ -1015,6 +1029,13 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           </div>
         </div>
         <div class="prefs-panel" id="prefsWebhooksBlock" data-panel="webhooks">
+          <a href="https://muxlyve.com/ayuda/avisos-discord-telegram" target="_blank" class="about-link"
+            style="display:inline-flex;align-items:center;gap:.35rem;margin-bottom:1rem;font-size:.8rem">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            ¿Cómo consigo el webhook / chat ID? ↗
+          </a>
           <div class="field">
             <label>Webhooks de Discord <span class="pref-desc" style="display:inline">(hasta 3)</span></label>
             <div class="pref-desc" style="margin-bottom:.5rem">Ajustes del canal → Integraciones → Webhooks. Avisa apenas empieza la transmisión — el mensaje se edita aparte, desde el botón de aviso en la pantalla principal.</div>
@@ -1026,6 +1047,34 @@ export const PANEL_HTML = /* html */ `<!doctype html>
             <div class="pref-desc" style="margin-bottom:.5rem">Crea un bot con @BotFather en Telegram, copia el token, y el chat ID del canal o grupo donde quieres enviar el aviso.</div>
             <div id="telegramBotsList"></div>
             <button type="button" class="preset-save-btn" id="addTelegramBotBtn" onclick="addTelegramBotRow()" style="margin-top:.4rem">+ Añadir bot</button>
+          </div>
+        </div>
+        <!-- Stream Deck — antes vivía como toggle suelto dentro de Sistema, movido acá
+             a su propio menú (ver conversación) junto con el link al plugin. -->
+        <div class="prefs-panel" id="prefsStreamDeckBlock" data-panel="streamdeck">
+          <div class="pref-row">
+            <div>
+              <div>Permitir Stream Deck / chat desde otra máquina</div>
+              <div class="pref-desc">Abre el panel a tu red local (LAN). Sin esto, el plugin de Stream Deck y el overlay de chat en OBS solo funcionan en este mismo equipo. Cualquiera en tu red podría controlar tus destinos mientras esté activo.</div>
+            </div>
+            <label class="sys-toggle">
+              <input type="checkbox" id="allowLanChk" onchange="toggleAllowLan()">
+              <span class="sys-toggle-track"></span>
+            </label>
+          </div>
+          <div class="pref-row" id="allowLanRestartRow" style="display:none">
+            <div class="pref-desc" style="color:var(--warn)">Reinicia Muxlyve para aplicar este cambio — no corta ninguna transmisión en curso hasta que lo hagas.</div>
+            <button onclick="relaunchApp()">Reiniciar ahora</button>
+          </div>
+          <!-- TODO: cambiar por la URL del producto real apenas el plugin esté publicado
+               en el Marketplace — de momento apunta a la búsqueda por "Muxlyve", nunca da
+               un link roto aunque el producto todavía no exista. -->
+          <div class="pref-row" style="margin-top:.5rem">
+            <div>
+              <div>Plugin de Stream Deck</div>
+              <div class="pref-desc">Prende/apaga destinos y guarda clips desde botones físicos, sin tocar la app.</div>
+            </div>
+            <button onclick="window.open('https://marketplace.elgato.com/product/muxlyve-3bb96a31-6c46-4a52-be62-9868e624b117','_blank')">Abrir en Marketplace ↗</button>
           </div>
         </div>
         <!-- Historial de sesiones (Fase 6, docs/PLAN_FEATURES_LOTE2.md) — tabla simple,
@@ -1056,6 +1105,10 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         <div class="prefs-panel" id="prefsProfileBlock" data-panel="profile">
           <div class="lic-row" style="align-items:center">
             <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;width:100%">
+              <!-- Mismo saludo que splash.html/onboarding.html/el header cuando no hay
+                   transmisión — se llena en loadLicenseInfo() (panel-client.js), a la vez
+                   que window._nickname. -->
+              <h2 id="profileGreeting" style="margin:0;font-size:1.1rem;font-weight:600">¡Hola!</h2>
               <div style="position:relative;flex-shrink:0">
                 <img id="profileAvatarImg" src="" alt="" style="width:72px;height:72px;border-radius:50%;
                   object-fit:cover;background:var(--surface-2);border:1px solid var(--border);display:none">
@@ -1207,6 +1260,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
       <div class="about-footer">
         <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
         <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
+        <a class="about-link" href="#" onclick="event.preventDefault();closeAbout();startTour()">Ver recorrido de bienvenida</a>
         <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
       </div>
     </div>

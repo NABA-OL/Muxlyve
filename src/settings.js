@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Ajustes editables desde el panel que no son "destinos" (config/destinations.json) —
 // hoy solo la clave de retransmisión. Mismo criterio que destinations.js: JSON en
 // MS_CONFIG_DIR (o config/ del paquete), funciona igual en Electron y headless/Docker.
@@ -46,6 +51,11 @@ const DEFAULT_SETTINGS = {
   // Apagado por defecto a propósito — pega a un endpoint no-oficial de traducción (ver
   // src/translate.js), quien lo prenda lo hace sabiendo que es best-effort.
   chatTranslateEnabled: false,
+  // Recorrido guiado de primer uso (ver startTour() en panel-client.js) — false hasta
+  // que el usuario lo termine o lo salte, una sola vez por instalación. Server-side
+  // (no localStorage) a propósito: mismo criterio que recArmed/clipsDir, sobrevive un
+  // reinstall que reuse MS_CONFIG_DIR y no depende de qué navegador/ventana lo abrió.
+  tourDone: false,
 };
 
 function validDir(d) {
@@ -108,11 +118,17 @@ function validDiscordWebhooks(list) {
 // grupos/canales) o "@usuario_del_canal" — no se valida el formato exacto, Telegram lo
 // rechaza solo si está mal, no vale la pena duplicar esa validación acá.
 const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{30,}$/;
+// topicId: el número de tema dentro de un grupo con "Temas" (modo foro) activado — Telegram
+// lo llama message_thread_id. Opcional a propósito: la mayoría de los grupos/canales no
+// tienen temas, y un chat normal (sin foro) rechaza el aviso entero si se manda este campo
+// sin que aplique — por eso solo se agrega al pedido si el usuario puso algo acá.
+const TELEGRAM_TOPIC_RE = /^\d+$/;
 export function isValidTelegramBot(bot) {
   if (!bot || typeof bot !== 'object') return false;
   const token = typeof bot.botToken === 'string' ? bot.botToken.trim() : '';
   const chatId = typeof bot.chatId === 'string' ? bot.chatId.trim() : '';
-  return TELEGRAM_TOKEN_RE.test(token) && chatId.length > 0;
+  const topicId = typeof bot.topicId === 'string' ? bot.topicId.trim() : '';
+  return TELEGRAM_TOKEN_RE.test(token) && chatId.length > 0 && (!topicId || TELEGRAM_TOPIC_RE.test(topicId));
 }
 
 function validTelegramBots(list) {
@@ -123,6 +139,7 @@ function validTelegramBots(list) {
     const bot = {
       botToken: typeof raw.botToken === 'string' ? raw.botToken.trim() : '',
       chatId: typeof raw.chatId === 'string' ? raw.chatId.trim() : '',
+      topicId: typeof raw.topicId === 'string' ? raw.topicId.trim() : '',
     };
     if (!isValidTelegramBot(bot)) continue;
     // enabled: default true — bots guardados antes del toggle no tenían este campo,
@@ -190,6 +207,7 @@ export function loadSettings() {
       destinationPresets: validPresets(data.destinationPresets),
       audioSilenceAlertEnabled: data.audioSilenceAlertEnabled === undefined ? true : !!data.audioSilenceAlertEnabled,
       chatTranslateEnabled: !!data.chatTranslateEnabled,
+      tourDone: !!data.tourDone,
     };
   } catch (err) {
     console.error('[config] No se pudo leer settings.json:', err.message);

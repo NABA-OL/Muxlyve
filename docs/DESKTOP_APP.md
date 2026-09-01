@@ -72,7 +72,7 @@ Ninguna protección local es 100% incrackeable (Electron es JavaScript inspeccio
 
 ### Modo desarrollador / dueño (la app desbloqueada para ti)
 El dueño no debe necesitar comprar su propia app. Tres mecanismos, conviene tenerlos todos:
-- **Builds de desarrollo** (`npm run dev`): la validación de licencia se omite siempre → pruebas sin fricción.
+- **Builds de desarrollo** (`pnpm dev`): la validación de licencia se omite siempre → pruebas sin fricción.
 - **Variable de entorno** `MS_DEV_UNLOCK=1`: salta la validación aunque sea build de producción.
 - **Llave de dueño**: una key tuya que el backend marca como `unlimited` (sin límite de equipos), para probar el build final empaquetado tal como lo recibe un cliente.
 

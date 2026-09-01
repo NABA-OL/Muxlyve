@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Contrato del refactor de docs/PLAN_REFACTOR_PANEL.md — este test tiene que pasar ANTES
 // y DESPUÉS de cada fase. Si pasa en ambos lados, el ruteo/servido no se rompió al mover
 // código. No valida contenido pixel a pixel, solo que cada endpoint/asset siga

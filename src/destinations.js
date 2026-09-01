@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
@@ -68,35 +73,46 @@ function decrypt(enc) {
   return Buffer.concat([decipher.update(Buffer.from(enc.data, 'base64')), decipher.final()]).toString('utf8');
 }
 
-// Pasa un destino del disco a memoria: descifra urlEnc -> url (texto plano en memoria).
-function decode(d) {
-  if (d.urlEnc) {
-    if (!cryptoKey) {
-      console.warn(`[crypto] ${d.name}: clave cifrada pero falta MASTER_KEY en .env`);
-      return { ...d, url: '', urlEnc: undefined };
-    }
-    try {
-      return { ...d, url: decrypt(d.urlEnc), urlEnc: undefined };
-    } catch {
-      console.error(`[crypto] ${d.name}: no se pudo descifrar (¿MASTER_KEY incorrecta?)`);
-      return { ...d, url: '', urlEnc: undefined };
-    }
+// Descifra un solo campo *Enc -> su nombre en claro, con el mismo fallback que decode()
+// (clave faltante o incorrecta -> string vacío, nunca revienta la carga del resto).
+function decryptField(d, encField, plainField) {
+  if (!d[encField]) return d[plainField] ?? '';
+  if (!cryptoKey) {
+    console.warn(`[crypto] ${d.name}: clave cifrada (${plainField}) pero falta MASTER_KEY en .env`);
+    return '';
   }
-  return d; // texto plano (legado / ejemplo)
+  try {
+    return decrypt(d[encField]);
+  } catch {
+    console.error(`[crypto] ${d.name}: no se pudo descifrar ${plainField} (¿MASTER_KEY incorrecta?)`);
+    return '';
+  }
 }
 
-// Pasa un destino de memoria al disco: cifra url -> urlEnc si hay MASTER_KEY.
+// Pasa un destino del disco a memoria: descifra urlEnc/verticalUrlEnc -> texto plano.
+function decode(d) {
+  const { urlEnc, verticalUrlEnc, ...rest } = d;
+  return {
+    ...rest,
+    url: decryptField(d, 'urlEnc', 'url'),
+    verticalUrl: decryptField(d, 'verticalUrlEnc', 'verticalUrl'),
+  };
+}
+
+// Pasa un destino de memoria al disco: cifra url/verticalUrl -> *Enc si hay MASTER_KEY.
 function encode(d) {
-  const { urlEnc, ...rest } = d;
-  if (cryptoKey && rest.url) {
-    const { url, ...noUrl } = rest;
-    return { ...noUrl, urlEnc: encrypt(url) };
+  const { urlEnc, verticalUrlEnc, url, verticalUrl, ...rest } = d;
+  if (cryptoKey) {
+    const out = { ...rest };
+    if (url) out.urlEnc = encrypt(url);
+    if (verticalUrl) out.verticalUrlEnc = encrypt(verticalUrl);
+    return out;
   }
-  if (!cryptoKey && !warnedPlain) {
+  if (!warnedPlain) {
     console.warn('[crypto] MASTER_KEY no definida: las claves se guardan en TEXTO PLANO. Define MASTER_KEY en .env para cifrarlas.');
     warnedPlain = true;
   }
-  return rest;
+  return { ...rest, ...(url ? { url } : {}), ...(verticalUrl ? { verticalUrl } : {}) };
 }
 
 // Valida que la URL sea un destino RTMP real y no un placeholder de la plantilla.
@@ -109,6 +125,14 @@ export function isValidUrl(url) {
 // Un destino se reenvía si está habilitado y su URL es válida.
 export function isPlayable(dest) {
   return Boolean(dest && dest.enabled && isValidUrl(dest.url));
+}
+
+// Mismo criterio que isPlayable(), para el canal vertical (segunda conexión RTMP
+// independiente hacia la URL/clave vertical de la plataforma — ver CLAUDE.md, "Dual-format
+// vertical"). Campo separado (verticalEnabled/verticalUrl) para poder prender/apagar cada
+// orientación por separado sin que una dependa de la otra.
+export function isPlayableVertical(dest) {
+  return Boolean(dest && dest.verticalEnabled && isValidUrl(dest.verticalUrl));
 }
 
 // Lee la lista completa (incluye deshabilitados/incompletos), con url descifrada en memoria.

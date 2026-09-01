@@ -1,5 +1,10 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // savePreset() sí toca settings.json (a diferencia de las funciones puras probadas en
 // presets.test.mjs) — mismo patrón que destinations.test.mjs con MS_CONFIG_DIR temporal.
 import { test, after } from 'node:test';

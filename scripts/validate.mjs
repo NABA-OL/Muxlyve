@@ -1,7 +1,12 @@
-// Propiedad de BlacKraken Solutions
-// Desarrollado por NABA-OL
+/*
+ * Propiedad de BlacKraken Solutions
+ * Desarrollado por: NABAOL
+ * Fecha de creación: 2026-07-01
+ * Correo: nabaol.dev@gmail.com
+ * Copyright (c) 2026 BlacKraken Solutions. Todos los derechos reservados.
+ */
 // Valida config/destinations.json sin exponer las claves.
-// Uso: npm run validate
+// Uso: pnpm run validate
 import { loadAll, isValidUrl } from '../src/destinations.js';
 
 const HOST_HINTS = {

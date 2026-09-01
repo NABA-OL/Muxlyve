@@ -31,7 +31,7 @@ n.run();
 " >/tmp/smoke_sink.log 2>&1 &
 SINK=$!
 
-npm start >/tmp/smoke_app.log 2>&1 &
+pnpm start >/tmp/smoke_app.log 2>&1 &
 APP=$!
 sleep 2.5
 
