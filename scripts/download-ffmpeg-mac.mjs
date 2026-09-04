@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Propiedad de BlacKraken Solutions
+ * Propiedad de BlacKraken Solutions <blackraken.com>
  * Desarrollado por: NABAOL
  * Fecha de creación: 2026-07-01
  * Correo: nabaol.dev@gmail.com

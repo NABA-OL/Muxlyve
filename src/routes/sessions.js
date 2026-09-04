@@ -1,4 +1,4 @@
-// Desarrollado por "BlacKraken Solutions"
+// Desarrollado por "BlacKraken Solutions" <blackraken.com>
 // Correo: nabaol.dev@gmail.com
 // Fecha: 2026-07-30
 // Fase 6 del lote 2 (docs/PLAN_FEATURES_LOTE2.md) — historial de sesiones de transmisión.
