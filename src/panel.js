@@ -1,5 +1,5 @@
 /*
- * Propiedad de BlacKraken Solutions
+ * Propiedad de BlacKraken Solutions <blackraken.com>
  * Desarrollado por: NABAOL
  * Fecha de creación: 2026-07-01
  * Correo: nabaol.dev@gmail.com
@@ -1261,7 +1261,7 @@ export const PANEL_HTML = /* html */ `<!doctype html>
         <div class="about-dev">Desarrollado por <strong>BlacKraken Solutions</strong></div>
         <div class="about-copy" id="aboutCopy">© 2026 Muxlyve. Todos los derechos reservados.<br>Muxlyve es software propietario. Prohibida su distribución sin autorización.</div>
         <a class="about-link" href="#" onclick="event.preventDefault();closeAbout();startTour()">Ver recorrido de bienvenida</a>
-        <a class="about-link" href="https://blackraken.vercel.app" target="_blank">BlacKraken ↗</a>
+        <a class="about-link" href="https://blackraken.com" target="_blank">BlacKraken ↗</a>
       </div>
     </div>
   </div>

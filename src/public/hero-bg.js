@@ -1,5 +1,5 @@
 /*
- * Propiedad de BlacKraken Solutions
+ * Propiedad de BlacKraken Solutions <blackraken.com>
  * Desarrollado por: NABAOL
  * Fecha de creación: [FECHA_ACTUAL: 2026-08-07]
  * Correo: nabaol.dev@gmail.com

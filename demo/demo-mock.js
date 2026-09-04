@@ -1,4 +1,4 @@
-// Desarrollado por "BlacKraken Solutions"
+// Desarrollado por "BlacKraken Solutions" <blackraken.com>
 // Correo: nabaol.dev@gmail.com
 // Fecha: 2026-08-05
 //

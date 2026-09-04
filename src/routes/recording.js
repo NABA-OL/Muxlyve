@@ -1,4 +1,4 @@
-// Desarrollado por "BlacKraken Solutions"
+// Desarrollado por "BlacKraken Solutions" <blackraken.com>
 // Correo: nabaol.dev@gmail.com
 // Fecha: 2026-07-25
 // Fase 3 del refactor (docs/PLAN_REFACTOR_PANEL.md) — buffer rodante, grabación completa,
