@@ -1,5 +1,45 @@
 [
   {
+    "startedAt": 1789576819486,
+    "endedAt": 1789578633355,
+    "durationSeconds": 1813,
+    "destinations": [
+      "Kick"
+    ],
+    "peakViewers": {
+      "kick": 2,
+      "youtube": 1
+    }
+  },
+  {
+    "startedAt": 1789006891340,
+    "endedAt": 1789009625060,
+    "durationSeconds": 2733,
+    "destinations": [
+      "Twitch",
+      "YouTube"
+    ],
+    "peakViewers": {}
+  },
+  {
+    "startedAt": 1788835705511,
+    "endedAt": 1788840506005,
+    "durationSeconds": 4800,
+    "destinations": [
+      "YouTube"
+    ],
+    "peakViewers": {
+      "twitch": 2
+    }
+  },
+  {
+    "startedAt": 1788823069077,
+    "endedAt": 1788824157417,
+    "durationSeconds": 1088,
+    "destinations": [],
+    "peakViewers": {}
+  },
+  {
     "startedAt": 1787880710134,
     "endedAt": 1787880743288,
     "durationSeconds": 33,

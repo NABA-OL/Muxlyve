@@ -23,6 +23,7 @@ dist-app/
 /ffmpeg-*.7z
 /capture.flv
 demo/dist/
+graphify-out/
 build/mac/
 build/icon.icns
 .DS_Store
