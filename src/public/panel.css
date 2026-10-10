@@ -808,4 +808,3 @@
     font-size: .88rem; font-weight: 600;
     transition: border-color .15s var(--ease-out), color .15s var(--ease-out); }
   .custom-add-card:hover { border-color: var(--accent); color: var(--accent); }
-  .custom-sep { height: 1px; background: var(--border); margin: .65rem 0; }

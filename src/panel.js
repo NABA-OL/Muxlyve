@@ -15,7 +15,7 @@ import { isLive, isLiveVertical, relayInfo, uptimeSeconds, recorderInfo, fullRec
 import { loadAll, isPlayable, isPlayableVertical } from './destinations.js';
 import { ingestInfo } from './monitor.js';
 import { tMap } from './i18n.js';
-import { getOrCreatePanelToken, isLoopback } from './panelAuth.js';
+import { getOrCreatePanelToken, isLoopback, hostAllowed } from './panelAuth.js';
 import * as systemRoutes from './routes/system.js';
 import * as chatRoutes from './routes/chat.js';
 import * as destinationsRoutes from './routes/destinations.js';
@@ -318,6 +318,9 @@ export function startPanel(port, config = {}) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     try {
+      if (isLoopback(req) && !hostAllowed(req)) {
+        return json(res, 403, { error: t('Host no permitido.') });
+      }
       if (STATE_CHANGING_METHODS.has(req.method) && !originAllowed(req, port)) {
         return json(res, 403, { error: t('Origen no permitido.') });
       }
@@ -625,7 +628,6 @@ export const PANEL_HTML = /* html */ `<!doctype html>
           <div id="presetChips" class="preset-chips"></div>
         </div>
         <div id="platformList"></div>
-        <div id="customList"></div>
 
         <details class="add" id="addDestDetails">
           <summary class="custom-add-card" style="margin-bottom:0">

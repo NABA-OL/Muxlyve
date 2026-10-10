@@ -28,13 +28,28 @@
     document.body?.appendChild(d);
   };
   const $ = (s) => document.querySelector(s);
-  const PLATFORM_IDS = ['twitch', 'youtube', 'kick', 'tiktok'];
+  const PLATFORM_IDS = ['twitch', 'youtube', 'kick', 'tiktok', 'starvios'];
+  // manual: true = sin OAuth ni clave automática — el usuario pega URL+clave a mano. Sin
+  // logo propio todavía: cae al punto de color (platformIconSvg devuelve '' sin glifo);
+  // cuando exista, se suma a PLATFORM_ICON_GLYPHS/COLORS en chat-render.js.
   const AUTH_PLATFORMS = [
-    { id: 'twitch',  name: 'Twitch',  color: '#9147ff' },
-    { id: 'youtube', name: 'YouTube', color: '#ff0000' },
-    { id: 'kick',    name: 'Kick',    color: '#53fc18' },
-    { id: 'tiktok',  name: 'TikTok',  color: '#fe2c55' },
+    { id: 'twitch',   name: 'Twitch',   color: '#9147ff' },
+    { id: 'youtube',  name: 'YouTube',  color: '#ff0000' },
+    { id: 'kick',     name: 'Kick',     color: '#53fc18' },
+    { id: 'tiktok',   name: 'TikTok',   color: '#fe2c55' },
+    { id: 'starvios', name: 'Starvios', color: '#22d3ee', manual: true },
   ];
+
+  // El nombre de un destino personalizado es texto libre del usuario (solo se valida el
+  // largo, ver validateDestination) y acá termina dentro de innerHTML/atributos.
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  // id de DOM estable y seguro para un destino personalizado (el nombre puede traer
+  // espacios o símbolos que rompen selectores como '#pb-' + id).
+  function customBlockId(name) {
+    return 'c' + Array.from(name).map((ch) => ch.codePointAt(0).toString(16)).join('-');
+  }
   // Google aprobó la verificación OAuth (2026-08-16) — login de YouTube habilitado en
   // producción empaquetada, no solo en dev.
   const YOUTUBE_OAUTH_PENDING = false;
@@ -214,7 +229,8 @@
   // - TikTok: sin verificar todavía contra doc oficial (mecanismo real desconocido) —
   //   fuera por ahora, no por descartado sino por prudencia tras el caso Twitch. Sacar
   //   de este set en cuanto se confirme cómo funciona de verdad.
-  const NO_VERTICAL = new Set(['kick', 'twitch', 'tiktok']);
+  // - Starvios: plataforma nueva sin documentación pública encontrada, sin vertical.
+  const NO_VERTICAL = new Set(['kick', 'twitch', 'tiktok', 'starvios']);
 
   // Feature completa (motor + UI) pausada a pedido del usuario 2026-08-25 — no se borra
   // nada, solo se oculta de la interfaz por ahora. Poner en true para reactivarla (junto
@@ -228,7 +244,7 @@
   // existe una fila de destino para la plataforma (rtmpDest) — v1 asume que el usuario
   // configura horizontal primero; agregar vertical "desde cero" es directo si hace falta.
   function verticalSectionHtml(p, d) {
-    if (!VERTICAL_UI_ENABLED || NO_VERTICAL.has(p.id)) return '';
+    if (!VERTICAL_UI_ENABLED || p.custom || NO_VERTICAL.has(p.id)) return '';
     const vOpen = localStorage.getItem('ms_pbv_' + p.id) === '1';
     const vPill = pillFor({ status: d.verticalStatus, lagging: d.verticalLagging, attempts: d.verticalAttempts, enabled: d.verticalEnabled });
     const vMetrics = metricsFor({ status: d.verticalStatus, metrics: d.verticalMetrics });
@@ -441,7 +457,6 @@
     updateFullRecorder(state);
     updateIngest(state);
     renderPlatforms();
-    renderCustom(state);
   }
 
   function renderPlatforms() {
@@ -450,8 +465,15 @@
     const authSt = lastAuthStatus;
     const pl = $('#platformList');
     pl.innerHTML = '';
-    for (const p of AUTH_PLATFORMS) {
-      const rtmpDest = state.destinations.find(d => d.name.toLowerCase() === p.id) || null;
+    // Los destinos personalizados reusan la misma tarjeta colapsable con glow que las
+    // plataformas fijas — antes iban por una tarjeta plana aparte (sin colapsar ni alumbrar).
+    const customPlatforms = state.destinations
+      .filter(d => !PLATFORM_IDS.includes(d.name.toLowerCase()))
+      .map(d => ({ id: customBlockId(d.name), name: d.name, color: '#8b949e', custom: true }));
+    for (const p of [...AUTH_PLATFORMS, ...customPlatforms]) {
+      const rtmpDest = (p.custom
+        ? state.destinations.find(d => d.name === p.name)
+        : state.destinations.find(d => d.name.toLowerCase() === p.id)) || null;
       const authS = authSt[p.id] || {};
       const storedOpen = localStorage.getItem('ms_pb_' + p.id);
       const isOpen = storedOpen === '1';
@@ -470,7 +492,9 @@
 
       // OAuth header part
       let oauthHtml = '';
-      if (p.soon) {
+      if (p.manual || p.custom) {
+        oauthHtml = '';
+      } else if (p.soon) {
         oauthHtml = '<span class="pb-soon-tag">OAuth próx.</span>';
       } else if (authS.connected) {
         const user = authS.username || 'conectado';
@@ -498,7 +522,8 @@
       let bodyHtml = '';
       if (rtmpDest) {
         const d = rtmpDest;
-        const isTikTok = p.id === 'tiktok';
+        const dn = escHtml(d.name);
+        const isTikTok = p.id === 'tiktok' || (p.custom && /tiktok/i.test(p.name));
         const pill = pillFor(d);
         const metrics = metricsFor(d);
         bodyHtml += '<div class="pb-rtmp">';
@@ -513,13 +538,14 @@
         bodyHtml += '<summary>Bitrate máximo (kbps) — opcional</summary>';
         bodyHtml += '<input type="number" class="pb-maxbitrate" min="500" step="500" placeholder="Vacio = Mismo Bitrate origen" value="' + (d.maxBitrate || '') + '"></details>';
         bodyHtml += '<div class="row"><label class="switch">';
-        bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + d.name + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
+        bodyHtml += '<input type="checkbox" class="pb-toggle-cb" data-name="' + dn + '"' + (d.enabled ? ' checked' : '') + ' onchange="togglePbRtmp(this)">';
         bodyHtml += '<span class="thumb"></span></label>';
-        bodyHtml += '<button class="save" data-name="' + d.name + '" onclick="savePbRtmp(this)">Guardar</button>';
-        if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + d.name + '" onclick="retryPbRtmp(this)">Reintentar</button>';
-        bodyHtml += '<button class="del" data-name="' + d.name + '" onclick="delPbRtmp(this)">Borrar</button></div>';
+        bodyHtml += '<button class="save" data-name="' + dn + '" onclick="savePbRtmp(this)">Guardar</button>';
+        if (d.status === 'failed') bodyHtml += '<button class="retry" data-name="' + dn + '" onclick="retryPbRtmp(this)">Reintentar</button>';
+        bodyHtml += '<button class="del" data-name="' + dn + '" onclick="delPbRtmp(this)">Borrar</button></div>';
         if (d.enabled && !state.live) bodyHtml += '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>';
         if (isTikTok) bodyHtml += '<p class="auto-note">&#9651; La clave de TikTok caduca si pasa mucho sin usarse (no mientras estés en vivo) — si dejaste de transmitir hace rato, puede que ya no sirva.</p>';
+        if (d.note) bodyHtml += '<p class="note">&#9651; ' + escHtml(d.note) + '</p>';
         bodyHtml += verticalSectionHtml(p, d);
         bodyHtml += '</div>';
       } else {
@@ -550,8 +576,8 @@
       block.innerHTML =
         '<div class="pb-head" data-pid="' + p.id + '" onclick="togglePlatformBlock(this.dataset.pid)">' +
         '<i class="pb-chevron">&#9654;</i>' +
-        (platformIconSvg(p.id) || '<span class="p-dot" style="background:' + p.color + '"></span>') +
-        '<span class="pb-head-name">' + p.name + '</span>' +
+        (platformIconSvg(p.custom ? matchPlatformId(p.name) : p.id) || '<span class="p-dot" style="background:' + p.color + '"></span>') +
+        '<span class="pb-head-name">' + escHtml(p.name) + '</span>' +
         headSparkHtml +
         oauthHtml +
         '</div>' +
@@ -575,70 +601,6 @@
   function onPbDraftInput(input) {
     const pid = input.id.replace('pb-new-url-', '');
     pbAddDraft[pid] = input.value;
-  }
-
-  function renderCustom(state) {
-    const cl = $('#customList');
-    const custom = state.destinations.filter(d => !PLATFORM_IDS.includes(d.name.toLowerCase()));
-    cl.innerHTML = '';
-    if (custom.length === 0) return;
-    cl.appendChild(Object.assign(document.createElement('div'), { className: 'custom-sep' }));
-    for (const d of custom) {
-      const isTikTok = /tiktok/i.test(d.name);
-      const pill = pillFor(d);
-      const metrics = metricsFor(d);
-      const matchedId = matchPlatformId(d.name);
-      const icon = matchedId ? platformIconSvg(matchedId, 16) : '';
-      const card = document.createElement('div');
-      card.className = 'card' + (isTikTok ? ' tiktok' : '');
-      card.innerHTML = `
-        <div class="card-head">
-          ${icon}
-          <span class="name"></span>
-          <span class="pill ${pill.cls}"></span>
-          ${d.transcoding ? '<span class="pill" style="color:var(--warn);background:rgba(240,162,58,.15)" title="Bitrate máximo activo — este destino se está recodificando">&#9889; recodificando</span>' : ''}
-          <span class="metrics"></span>
-          <span class="spark-slot"></span>
-        </div>
-        <div class="field">
-          <label>URL RTMP${isTikTok ? ' &#8212; clave temporal TikTok' : ''}</label>
-          <div class="eyerow">
-            <input type="password" class="url" value="" autocomplete="off">
-            <button type="button" class="eye-btn" onclick="toggleFieldEye(this)" title="Mostrar/ocultar">${eyeSvg(false)}</button>
-          </div>
-        </div>
-        <details class="bitrate-collapse">
-          <summary>Bitrate máximo (kbps) — opcional</summary>
-          <input type="number" class="max-bitrate" min="500" step="500" placeholder="Vacio = Mismo Bitrate origen">
-        </details>
-        <div class="row">
-          <label class="switch" title="${d.enabled ? 'Desactivar' : 'Activar'}">
-            <input type="checkbox" class="toggle-cb"${d.enabled ? ' checked' : ''}>
-            <span class="thumb"></span>
-          </label>
-          <button class="save">Guardar</button>
-          ${d.status === 'failed' ? '<button class="retry">Reintentar</button>' : ''}
-          <button class="del">Borrar</button>
-        </div>
-        ${d.enabled && !state.live ? '<p class="auto-note">* Arrancará cuando empiece la transmisión.</p>' : ''}
-        ${d.note ? '<p class="note"></p>' : ''}
-      `;
-      card.querySelector('.name').textContent = d.name;
-      card.querySelector('.pill').textContent = pill.text;
-      card.querySelector('.metrics').textContent = metrics;
-      card.querySelector('.spark-slot').innerHTML = sparklineSvg(metricsHistory[d.name], sparkColor(pill.cls));
-      const urlInput = card.querySelector('.url');
-      urlInput.value = d.url;
-      const bitrateInput = card.querySelector('.max-bitrate');
-      bitrateInput.value = d.maxBitrate || '';
-      if (d.note) card.querySelector('.note').textContent = '&#9651; ' + d.note;
-      card.querySelector('.toggle-cb').onchange = (e) => save(d.name, urlInput.value, e.target.checked, bitrateInput.value);
-      card.querySelector('.save').onclick = () => save(d.name, urlInput.value, d.enabled, bitrateInput.value);
-      card.querySelector('.del').onclick = () => del(d.name);
-      const retryBtn = card.querySelector('.retry');
-      if (retryBtn) retryBtn.onclick = () => doRetry(d.name);
-      cl.appendChild(card);
-    }
   }
 
   function togglePlatformBlock(pid) {

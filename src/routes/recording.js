@@ -9,7 +9,7 @@ import {
   isLive, recorderInfo, startRecording, stopRecording, saveClip, listRecentClips, deleteClip,
   fullRecordingInfo, startFullRecording, stopFullRecording, listRecentRecordings, deleteRecording,
   armRecording, armFullRecording, setRecDuration, setClipsDir, setRecordingsDir,
-  listOrphanRecordings, convertOrphanRecording, resolveClipsDir, resolveRecordingsDir,
+  listOrphanRecordings, convertOrphanRecording, resolveClipsDir, resolveRecordingsDir, isManagedFile,
 } from '../relays.js';
 
 // Duraciones del buffer rodante: 1/5/10/15 min. Ver src/relays.js — la nota sobre
@@ -223,7 +223,10 @@ export async function handle(req, res, url, ctx) {
     const clipsDir = path.resolve(resolveClipsDir(input.outputDir));
     const recordingsDir = path.resolve(resolveRecordingsDir(input.outputDir));
     const isAllowedDir = resolved === clipsDir || resolved === recordingsDir;
-    const isAllowedFile = path.dirname(resolved) === clipsDir || path.dirname(resolved) === recordingsDir;
+    // Solo carpeta exacta, o un archivo que la app misma generó dentro de ella — shell.openPath
+    // EJECUTA un .exe/.app, así que "cualquier archivo de la carpeta" no alcanza.
+    const isAllowedFile = (path.dirname(resolved) === clipsDir && isManagedFile(resolved, 'clip'))
+      || (path.dirname(resolved) === recordingsDir && isManagedFile(resolved, 'recording'));
     if (!isAllowedDir && !isAllowedFile) {
       json(res, 400, { error: t('Ruta fuera de la carpeta de clips.') });
       return true;

@@ -17,6 +17,7 @@ import { notifyDiscord } from './notify.js';
 import { notifyTelegram } from './telegram.js';
 import { getSessionPeaks, resetSessionPeaks } from './viewers.js';
 import { recordSession } from './sessions.js';
+import { redactStreamUrls } from './redact.js';
 
 // Gestor de procesos FFmpeg con reconexión automática.
 // Cada destino: `${name}::${channel}` -> { proc, status, attempts, timer, stopping,
@@ -55,10 +56,6 @@ const MAX_DELAY = 30000; // tope del backoff
 const STABLE_MS = 15000; // vivo este tiempo sin morir => resetea intentos
 const LAG_SPEED = 0.85; // speed < 0.85x sostenido => rezagado
 const STALE_MS = 6000; // sin progreso este tiempo => rezagado
-
-function maskUrl(url) {
-  return url.replace(/\/[^/]+$/, '/****');
-}
 
 export function isLive() {
   return sourceUrl !== null;
@@ -234,13 +231,13 @@ function startRelay(dest, channel = 'h') {
       parseProgress(dest.name, channel, line);
       if (!isVertical && dest.maxBitrate && !useTranscode) checkBitrateCap(dest);
       if (/error|failed|unable|refused|denied/i.test(line)) {
-        console.log(`[ffmpeg:${tag}] ${line}`);
+        console.log(`[ffmpeg:${tag}] ${redactStreamUrls(line)}`);
       }
     }
   });
   proc.on('close', (code) => onRelayClose(dest, channel, code));
 
-  console.log(`[relay:${tag}] iniciado${useTranscode ? ` (recodificando a ${dest.maxBitrate}kbps)` : ''} -> ${maskUrl(destUrl)}`);
+  console.log(`[relay:${tag}] iniciado${useTranscode ? ` (recodificando a ${dest.maxBitrate}kbps)` : ''} -> ${redactStreamUrls(destUrl)}`);
 }
 
 // Un relay murió: decide si fue parada manual, fin de emisión, o caída a reintentar.
@@ -544,13 +541,25 @@ function defaultMediaBase() {
   return path.join(homedir(), videosFolder, 'Muxlyve');
 }
 
+// Defensa en profundidad: aun con la carpeta bien resuelta, solo se toca lo que la propia
+// app genera (clip_*.mp4, grabacion_*.mp4|ts). setClipsDir/setRecordingsDir aceptan cualquier
+// carpeta, así que sin esto un "borrar clip" podía apuntar a cualquier archivo de ella.
+export const CLIP_NAME_RE = /^clip_.*\.mp4$/;
+export const RECORDING_NAME_RE = /^grabacion_.*\.(mp4|ts)$/;
+export function isManagedFile(resolvedPath, kind) {
+  return (kind === 'clip' ? CLIP_NAME_RE : RECORDING_NAME_RE).test(path.basename(resolvedPath));
+}
+
 // Mismo folder para guardar y para listar/abrir — un solo lugar donde vive esta cuenta.
-// outputDir explícito > carpeta configurada (settings.json, ver setClipsDir) > env var >
-// default. El paso por settings.json es el que faltaba: sin esto, el plugin de Stream
-// Deck (que nunca manda outputDir, no tiene cómo saber la carpeta elegida en el panel)
-// siempre guardaba en la carpeta default aunque el usuario hubiera configurado otra.
-export function resolveClipsDir(outputDir) {
-  return outputDir || loadSettings().clipsDir || process.env.MS_CLIPS_DIR || path.join(defaultMediaBase(), 'Clips');
+// Carpeta configurada (settings.json, ver setClipsDir) > env var > default. El paso por
+// settings.json es el que permite que el plugin de Stream Deck (que no sabe la carpeta
+// elegida en el panel) guarde en la misma carpeta y no en la default.
+// `_outputDir` se ignora a propósito: llega del cliente HTTP y era la base del chequeo de
+// contención de deleteClip/deleteRecording/convertOrphanRecording/POST /api/clips/open —
+// mandando {path: X, outputDir: dirname(X)} cualquier archivo "estaba dentro". La carpeta
+// sale solo de settings.json (el panel la sincroniza ahí, ver setClipsDirServer) o del env.
+export function resolveClipsDir(_outputDir) {
+  return loadSettings().clipsDir || process.env.MS_CLIPS_DIR || path.join(defaultMediaBase(), 'Clips');
 }
 
 export function setClipsDir(dir) {
@@ -560,8 +569,8 @@ export function setClipsDir(dir) {
 // Folder de la grabación completa — configurable aparte de resolveClipsDir(), para que
 // clips (buffer rodante) y grabaciones (archivo único de toda la transmisión) no se
 // mezclen en la misma carpeta ni haya que compartir el mismo ajuste para ambas cosas.
-export function resolveRecordingsDir(outputDir) {
-  return outputDir || loadSettings().recordingsDir || process.env.MS_RECORDINGS_DIR || path.join(defaultMediaBase(), 'Grabaciones');
+export function resolveRecordingsDir(_outputDir) {
+  return loadSettings().recordingsDir || process.env.MS_RECORDINGS_DIR || path.join(defaultMediaBase(), 'Grabaciones');
 }
 
 export function setRecordingsDir(dir) {
@@ -593,7 +602,7 @@ export function listRecentClips(outputDir, limit = 5) {
 export function deleteClip(clipPath, outputDir) {
   const dir = resolveClipsDir(outputDir);
   const resolved = path.resolve(clipPath);
-  if (path.dirname(resolved) !== path.resolve(dir)) {
+  if (path.dirname(resolved) !== path.resolve(dir) || !isManagedFile(resolved, 'clip')) {
     throw new Error('Ruta fuera de la carpeta de clips.');
   }
   unlinkSync(resolved);
@@ -624,7 +633,7 @@ export function listRecentRecordings(outputDir, limit = 5) {
 export function deleteRecording(recordingPath, outputDir) {
   const dir = resolveRecordingsDir(outputDir);
   const resolved = path.resolve(recordingPath);
-  if (path.dirname(resolved) !== path.resolve(dir)) {
+  if (path.dirname(resolved) !== path.resolve(dir) || !isManagedFile(resolved, 'recording')) {
     throw new Error('Ruta fuera de la carpeta de grabaciones.');
   }
   unlinkSync(resolved);
@@ -657,7 +666,7 @@ export function listOrphanRecordings(outputDir) {
 export function convertOrphanRecording(tsPath, outputDir) {
   const dir = resolveRecordingsDir(outputDir);
   const resolvedTs = path.resolve(tsPath);
-  if (path.dirname(resolvedTs) !== path.resolve(dir) || !/\.ts$/.test(resolvedTs)) {
+  if (path.dirname(resolvedTs) !== path.resolve(dir) || !/^grabacion_.*\.ts$/.test(path.basename(resolvedTs))) {
     throw new Error('Ruta fuera de la carpeta de grabaciones.');
   }
   const mp4Path = resolvedTs.replace(/\.ts$/, '.mp4');

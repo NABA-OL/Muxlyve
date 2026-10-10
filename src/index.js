@@ -11,7 +11,7 @@ import { networkInterfaces } from 'node:os';
 import { loadAll, isPlayable, isPlayableVertical } from './destinations.js';
 import { onPublish, onUnpublish, onPublishVertical, onUnpublishVertical } from './relays.js';
 import { startPanel } from './panel.js';
-import { loadSettings } from './settings.js';
+import { loadSettings, ensureStreamKey } from './settings.js';
 import { initChatCommands } from './chatcommands.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -34,12 +34,15 @@ const PANEL_PORT = Number(process.env.PANEL_PORT || 19080);
 // Snapshot solo para el log de arranque y como valor inicial del panel — la
 // validación real en prePublish llama loadSettings() de nuevo en cada intento, así el
 // usuario puede cambiar la clave desde el panel sin reiniciar la app (ver settings.js).
-const STREAM_KEY = loadSettings().streamKey;
+const { key: STREAM_KEY, generated: STREAM_KEY_GENERATED } = ensureStreamKey();
 
 const config = {
   // ping cada 10s, timeout en 15s: OBS que se cierra sin avisar se detecta ~15s después.
   rtmp: { port: RTMP_PORT, chunk_size: 60000, gop_cache: true, ping: 10, ping_timeout: 15 },
-  http: { port: HTTP_PORT, allow_origin: '*' },
+  // api:false — la API REST de node-media-server (/api/streams, /api/server) no la usa esta
+  // app y entregaba la clave de ingest en vivo + IPs de los suscriptores a cualquiera que
+  // alcance el puerto. allow_origin: solo el panel (antes '*', cualquier web podía leer).
+  http: { port: HTTP_PORT, allow_origin: `http://localhost:${PANEL_PORT}`, api: false },
 };
 
 const nms = new NodeMediaServer(config);
@@ -117,6 +120,9 @@ console.log(` Ingest RTMP:  rtmp://localhost:${RTMP_PORT}/live`);
 // Enmascarada acá igual que ya hace la UI del panel del lado del cliente.
 console.log(` Clave:    ${STREAM_KEY.slice(0, 3)}${'•'.repeat(Math.max(STREAM_KEY.length - 3, 4))}`);
 console.log(` API HTTP:     http://localhost:${HTTP_PORT}`);
+if (STREAM_KEY_GENERATED) {
+  console.warn(' Se generó una clave de ingest aleatoria (la anterior, "mistream", era pública). Cópiala en OBS: panel → Ajustes → Conexión RTMP.');
+}
 console.log(' Edita destinos en el panel web.');
 console.log('============================================');
 

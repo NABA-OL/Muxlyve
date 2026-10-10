@@ -1,3 +1,11 @@
 allowBuilds:
   electron-winstaller: true
   ffmpeg-static: true
+
+# Vulnerabilidades transitivas reportadas por `pnpm audit --prod` (2026-10-10). Mismo major,
+# solo parches: proxy-addr (spoofing de IP), qs (DoS), js-yaml (DoS). Quitar cuando
+# node-media-server / electron-updater suban sus propias dependencias.
+overrides:
+  proxy-addr: ^2.0.8
+  qs: ^6.16.0
+  js-yaml: ^4.3.2
