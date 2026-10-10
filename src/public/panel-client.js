@@ -37,7 +37,7 @@
     { id: 'youtube',  name: 'YouTube',  color: '#ff0000' },
     { id: 'kick',     name: 'Kick',     color: '#53fc18' },
     { id: 'tiktok',   name: 'TikTok',   color: '#fe2c55' },
-    { id: 'starvios', name: 'Starvios', color: '#22d3ee', manual: true },
+    { id: 'starvios', name: 'Starvios', color: '#ff4f9a', manual: true },
   ];
 
   // El nombre de un destino personalizado es texto libre del usuario (solo se valida el
