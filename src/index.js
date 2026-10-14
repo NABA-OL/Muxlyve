@@ -41,8 +41,11 @@ const config = {
   rtmp: { port: RTMP_PORT, chunk_size: 60000, gop_cache: true, ping: 10, ping_timeout: 15 },
   // api:false — la API REST de node-media-server (/api/streams, /api/server) no la usa esta
   // app y entregaba la clave de ingest en vivo + IPs de los suscriptores a cualquiera que
-  // alcance el puerto. allow_origin: solo el panel (antes '*', cualquier web podía leer).
-  http: { port: HTTP_PORT, allow_origin: `http://localhost:${PANEL_PORT}`, api: false },
+  // alcance el puerto. allow_origin se queda en '*' a propósito: NMS solo admite UN origen
+  // fijo y la app de escritorio carga el panel desde http://127.0.0.1:PORT (electron/main.js)
+  // mientras el navegador lo abre en http://localhost:PORT — restringirlo a uno de los dos
+  // rompía la previsualización del video. Con la API apagada, lo único legible es el .flv.
+  http: { port: HTTP_PORT, allow_origin: '*', api: false },
 };
 
 const nms = new NodeMediaServer(config);

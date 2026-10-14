@@ -9,6 +9,7 @@
 // (justinfanNNNNN) — Twitch permite lectura pública sin autenticación, no requiere el
 // OAuth del usuario para esto en absoluto, solo su channel login para saber a qué unirse.
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { loadSettings } from './settings.js';
 import { translateText } from './translate.js';
 
@@ -302,17 +303,35 @@ export function getYoutubeLiveChatId() {
 
 // ── Kick chat (fase 3) ───────────────────────────────────────────────────────
 // Chat público de Kick, SIN OAuth — igual que Twitch, no como YouTube (el token que se
-// obtiene al conectar Kick es solo para saber el slug del canal, no se usa acá). Va por
-// Pusher (Kick no expone WebSocket propio). Esto NO es una API oficial documentada por
-// Kick — es protocolo reverse-engineered por la comunidad, a diferencia de la IRC de
-// Twitch que sí es pública y estable. El app key de Pusher puede rotar sin aviso de Kick.
-// Si deja de llegar chat: abrir kick.com en vivo, Chrome DevTools → Network → filtro
-// "pusher", y copiar el app key nuevo de la URL del WebSocket a KICK_PUSHER_APP_KEY.
-const KICK_PUSHER_APP_KEY = '32cbd69e4b950bf97679';
-const KICK_WS_URL = `wss://ws-us2.pusher.com/app/${KICK_PUSHER_APP_KEY}?protocol=7&client=js&version=8.4.0&flash=false`;
+// obtiene al conectar Kick es solo para saber el slug del canal, no se usa acá). Esto NO es
+// una API oficial documentada por Kick — es el protocolo que usa su propio sitio web,
+// reverse-engineered, a diferencia de la IRC de Twitch que sí es pública y estable.
+//
+// Historia: hasta 2026-10 iba por Pusher (app key fijo). Kick lo migró a Centrifugo y el
+// app key viejo devuelve 4001 "not in this cluster". Flujo actual (verificado 2026-10-13
+// contra canales reales y contra el JS de kick.com, chunk con "realtime/connection"):
+//   1. kick.com/api/v2/channels/<slug>  → id de canal + id de chatroom (Cloudflare: solo
+//      pasa con el fetch de Chromium que inyecta electron/oauth.js, ver setKickFetchImpl).
+//   2. POST web.kick.com/api/v1/realtime/channels/<channelId>/chat/connection
+//      { client:{id:<uuid>,type:'web'}, capabilities:{accepted_providers:[...]} }
+//      → { data:{ connections:[{ provider:'centrifugo', credentials:{ url } }] } }
+//   3. POST web.kick.com/api/v1/realtime/auth/connection { client_id } → JWT anónimo
+//      (vive ~45 min: el servidor avisa `ttl` y hay que mandar un `refresh`).
+//   4. WebSocket al `url`, protocolo JSON de Centrifugo: connect{token} → subscribe
+//      {channel:'chatrooms.<chatroomId>.v2'} (el id de CHATROOM, no el de canal) → llegan
+//      push.pub.data = { event:'App\Events\ChatMessageEvent', data:'<json string>' }.
+//      El servidor manda `{}` cada ~25 s y exige responder `{}` (pong:true).
+// Si deja de llegar chat: repetir el procedimiento de arriba mirando la pestaña Network de
+// kick.com en un canal en vivo (filtro "realtime") y comparar con este flujo.
+const KICK_WEB_API = 'https://web.kick.com/api/v1/realtime';
+const KICK_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const KICK_TOKEN_REFRESH_LEAD_S = 60; // refrescar el JWT un minuto antes de que expire
+const KICK_SERVER_PING_SLACK_S = 10;  // tolerancia sobre el ping del servidor antes de dar la conexión por muerta
 
 let kickWs = null;
 let kickReconnectTimer = null;
+let kickWatchdogTimer = null;
+let kickRefreshTimer = null;
 let kickReconnectDelay = 2000;
 let kickSlug = null;
 let kickStopped = true;
@@ -327,24 +346,53 @@ let kickBroadcasterName = null;
 // electron.net.fetch al arrancar — corre por el stack de red de Chromium, mismo que un
 // navegador real, y ese sí pasa. src/ no importa 'electron' directo (debe poder correr
 // headless — Docker, npm start) por eso queda como inyección en vez de import fijo.
+// (web.kick.com, en cambio, responde bien al fetch global — probado — pero se usa el mismo
+// inyectable para no depender de eso.)
 let kickFetchImpl = (...args) => fetch(...args);
 export function setKickFetchImpl(fn) { kickFetchImpl = fn; }
 
 // Endpoint interno del sitio de Kick (no el oficial de dev.kick.com) — es lo que usa el
-// propio frontend de Kick para resolver slug → chatroom id, no hay equivalente en la API
-// pública documentada todavía.
-async function findKickChatroomId(slug) {
+// propio frontend de Kick para resolver slug → ids, no hay equivalente en la API pública
+// documentada todavía.
+async function findKickChannelIds(slug) {
   const r = await kickFetchImpl(`https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-      Accept: 'application/json',
-    },
+    headers: { 'User-Agent': KICK_UA, Accept: 'application/json' },
   });
   if (!r.ok) throw new Error(`lookup de canal falló (status ${r.status})`);
   const d = await r.json();
-  const id = d.chatroom?.id;
-  if (!id) throw new Error('respuesta sin chatroom.id — ¿cambió el formato?');
-  return id;
+  const channelId = d.id;
+  const chatroomId = d.chatroom?.id;
+  if (!channelId || !chatroomId) throw new Error('respuesta sin id de canal/chatroom — ¿cambió el formato?');
+  return { channelId, chatroomId };
+}
+
+async function kickRealtimePost(path, body) {
+  const r = await kickFetchImpl(`${KICK_WEB_API}${path}`, {
+    method: 'POST',
+    headers: { 'User-Agent': KICK_UA, Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${path} respondió ${r.status}`);
+  return r.json();
+}
+
+async function fetchKickConnectionToken(clientId) {
+  const token = (await kickRealtimePost('/auth/connection', { client_id: clientId })).data?.token;
+  if (!token) throw new Error('auth/connection sin token — ¿cambió el formato?');
+  return token;
+}
+
+// Pide a Kick dónde conectarse y un token anónimo. Solo anunciamos `centrifugo`: es lo que
+// habla este cliente — si Kick no puede ofrecerlo, mejor fallar claro que recibir otro proveedor.
+async function openKickRealtime(channelId) {
+  const clientId = randomUUID();
+  const res = await kickRealtimePost(`/channels/${channelId}/chat/connection`, {
+    client: { id: clientId, type: 'web' },
+    capabilities: { accepted_providers: [{ provider: 'centrifugo' }] },
+  });
+  const url = res.data?.connections?.find((c) => c.provider === 'centrifugo')?.credentials?.url;
+  if (!url) throw new Error('Kick no ofreció el proveedor centrifugo — ¿cambió el protocolo?');
+  return { url, clientId, token: await fetchKickConnectionToken(clientId) };
 }
 
 // Los nombres de evento/campos documentados por distintas fuentes comunitarias no
@@ -370,25 +418,38 @@ function parseKickEmotes(text) {
   return out;
 }
 
-function handleKickPusherEvent(raw) {
-  let outer;
-  try { outer = JSON.parse(raw); } catch { return; }
-  if (outer.event !== 'App\\Events\\ChatMessageEvent' && outer.event !== 'App\\Events\\ChatMessageSentEvent') return;
-  let payload;
-  try { payload = JSON.parse(outer.data); } catch { return; }
-  const text = payload.content || payload.message?.message;
-  const username = payload.sender?.username || payload.user?.username;
-  if (!text || !username) return;
-  pushMessage({
+// Un WebSocket de Centrifugo puede juntar varios comandos JSON separados por salto de línea
+// en un solo mensaje.
+export function parseKickFrames(raw) {
+  const out = [];
+  for (const line of String(raw).split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* frame corrupto: se ignora */ }
+  }
+  return out;
+}
+
+// Sobre de una publicación ({ event, data }) → mensaje del chat unificado, o null si no es
+// un mensaje de chat (borrados, bans, etc. llegan por el mismo canal y no se usan acá).
+export function kickEnvelopeToMessage(envelope, broadcasterName) {
+  if (envelope?.event !== 'App\\Events\\ChatMessageEvent' && envelope?.event !== 'App\\Events\\ChatMessageSentEvent') return null;
+  let payload = envelope.data;
+  if (typeof payload === 'string') {
+    try { payload = JSON.parse(payload); } catch { return null; }
+  }
+  const text = payload?.content || payload?.message?.message;
+  const username = payload?.sender?.username || payload?.user?.username;
+  if (!text || !username) return null;
+  return {
     platform: 'kick',
     username,
     message: text,
     color: payload.sender?.identity?.color || null,
     emotes: parseKickEmotes(text),
-    isBroadcaster: !!kickBroadcasterName && username.toLowerCase() === kickBroadcasterName.toLowerCase(),
+    isBroadcaster: !!broadcasterName && username.toLowerCase() === broadcasterName.toLowerCase(),
     isMod: isModFromKickBadges(payload.sender?.identity?.badges),
     timestamp: Date.now(),
-  });
+  };
 }
 
 // Kick manda los badges como array de objetos { type, ... } — defensivo porque no siempre
@@ -398,27 +459,92 @@ function isModFromKickBadges(badges) {
   return badges.some((b) => b?.type === 'moderator' || b?.type === 'broadcaster');
 }
 
+function clearKickTimers() {
+  clearTimeout(kickWatchdogTimer);
+  clearTimeout(kickRefreshTimer);
+  kickWatchdogTimer = kickRefreshTimer = null;
+}
+
 async function connectKick() {
   if (kickStopped || !kickSlug) return;
-  let chatroomId;
+  let ids, rt;
   try {
-    chatroomId = await findKickChatroomId(kickSlug);
+    ids = await findKickChannelIds(kickSlug);
+    rt = await openKickRealtime(ids.channelId);
   } catch (err) {
-    console.error('[chat] Kick: no se pudo resolver el chatroom —', err.message);
+    console.error('[chat] Kick: no se pudo abrir la conexión en tiempo real —', err.message);
     if (!kickStopped) scheduleKickReconnect();
     return;
   }
   if (kickStopped) return;
 
-  kickWs = new WebSocket(KICK_WS_URL);
-  kickWs.onopen = () => {
-    kickReconnectDelay = 2000;
-    kickWs.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: `chatrooms.${chatroomId}.v2` } }));
-    console.log(`[chat] Kick: conectado al canal #${kickSlug} (chatroom ${chatroomId})`);
+  const sock = new WebSocket(rt.url);
+  kickWs = sock;
+  const channel = `chatrooms.${ids.chatroomId}.v2`;
+  const pending = new Map(); // id de comando → 'connect' | 'subscribe' | 'refresh'
+  let cmdId = 0;
+  const command = (kind, body) => {
+    pending.set(++cmdId, kind);
+    sock.send(JSON.stringify({ id: cmdId, [kind]: body }));
   };
-  kickWs.onmessage = (event) => handleKickPusherEvent(event.data);
-  kickWs.onclose = () => { kickWs = null; if (!kickStopped) scheduleKickReconnect(); };
-  kickWs.onerror = () => { /* onclose se dispara después — la reconexión se maneja ahí */ };
+  // Un socket viejo (reemplazado por stopKickChat→startKickChat) no debe tocar el estado del nuevo.
+  const onClosed = () => {
+    if (kickWs !== sock) return;
+    kickWs = null;
+    clearKickTimers();
+    if (!kickStopped) scheduleKickReconnect();
+  };
+  const dropConnection = () => { try { sock.close(); } catch {} onClosed(); };
+  // Sin ningún frame (ni el ping cada ~25 s) la conexión está muerta aunque el socket siga "abierto".
+  const armWatchdog = (pingSecs) => {
+    clearTimeout(kickWatchdogTimer);
+    kickWatchdogTimer = setTimeout(() => {
+      console.warn('[chat] Kick: el servidor dejó de responder, reconectando…');
+      dropConnection();
+    }, (pingSecs + KICK_SERVER_PING_SLACK_S) * 1000);
+  };
+  const scheduleTokenRefresh = (ttlSecs) => {
+    clearTimeout(kickRefreshTimer);
+    kickRefreshTimer = setTimeout(async () => {
+      try {
+        command('refresh', { token: await fetchKickConnectionToken(rt.clientId) });
+      } catch (err) {
+        console.warn('[chat] Kick: no se pudo renovar el token, reconectando —', err.message);
+        dropConnection();
+      }
+    }, Math.max(ttlSecs - KICK_TOKEN_REFRESH_LEAD_S, 30) * 1000);
+  };
+
+  let pingSecs = 25;
+  armWatchdog(pingSecs);
+  sock.onopen = () => command('connect', { token: rt.token, name: 'muxlyve' });
+  sock.onmessage = (event) => {
+    if (kickWs !== sock) return;
+    armWatchdog(pingSecs);
+    for (const m of parseKickFrames(event.data)) {
+      if (Object.keys(m).length === 0) { sock.send('{}'); continue; } // ping del servidor → pong
+      if (m.error) {
+        console.error(`[chat] Kick: el servidor rechazó "${pending.get(m.id) ?? 'comando'}" (código ${m.error.code}: ${m.error.message})`);
+        dropConnection(); // se reconecta con token y conexión nuevos (con backoff)
+        return;
+      }
+      if (m.connect) {
+        if (m.connect.ping) pingSecs = m.connect.ping;
+        if (m.connect.expires) scheduleTokenRefresh(m.connect.ttl);
+        command('subscribe', { channel });
+      } else if (m.refresh) {
+        if (m.refresh.expires) scheduleTokenRefresh(m.refresh.ttl);
+      } else if (m.subscribe) {
+        kickReconnectDelay = 2000; // recién acá la conexión es útil: se resetea el backoff
+        console.log(`[chat] Kick: conectado al canal #${kickSlug} (chatroom ${ids.chatroomId})`);
+      } else if (m.push?.pub && m.push.channel === channel) {
+        const msg = kickEnvelopeToMessage(m.push.pub.data, kickBroadcasterName);
+        if (msg) pushMessage(msg);
+      }
+    }
+  };
+  sock.onclose = onClosed;
+  sock.onerror = () => { /* onclose se dispara después — la reconexión se maneja ahí */ };
 }
 
 function scheduleKickReconnect() {
@@ -441,6 +567,9 @@ export function stopKickChat() {
   kickStopped = true;
   kickBroadcasterName = null;
   clearTimeout(kickReconnectTimer);
+  clearKickTimers();
   kickSlug = null;
-  if (kickWs) { try { kickWs.close(); } catch {} kickWs = null; }
+  const sock = kickWs;
+  kickWs = null;
+  if (sock) { try { sock.close(); } catch {} }
 }

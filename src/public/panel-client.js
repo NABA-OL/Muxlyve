@@ -22,6 +22,7 @@
     document.body?.appendChild(d);
   };
   window.onunhandledrejection = (e) => {
+    console.error('[unhandledrejection]', e.reason?.stack || e.reason);
     const d = document.createElement('div');
     d.style.cssText = 'position:fixed;top:40px;left:0;right:0;z-index:9999;background:#d29922;color:#fff;padding:8px 12px;font:13px monospace;white-space:pre-wrap';
     d.textContent = '[PROMISE] ' + (e.reason?.message || e.reason || 'rejected');
