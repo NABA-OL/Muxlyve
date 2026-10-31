@@ -1,0 +1,135 @@
+name: Build and Release Electron
+
+# Se dispara al subir un tag vX.Y.Z (debe coincidir con "version" de package.json).
+# Flujo (mismo que el release manual: predist:publish -> dist:publish -> postdist:publish):
+#   prepare  -> tests + draft release vacío (evita que Windows y macOS creen uno cada uno)
+#   build    -> Windows y macOS en paralelo, suben sus instaladores al draft
+#   finalize -> publica el draft SOLO si ambos builds salieron bien; si no, limpia el draft vacío
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Check tag matches package.json version
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::El tag $GITHUB_REF_NAME no coincide con la versión de package.json ($expected)."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests and panel script check
+        run: |
+          pnpm test:unit
+          pnpm validate:panel
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/create-draft-release.mjs
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            builder-flag: --win
+          - os: macos-latest
+            builder-flag: --mac
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # electron/oauth-credentials.js está en .gitignore: sin este paso el instalador sale sin
+      # client IDs/secrets y el login de Twitch/YouTube/Kick/TikTok queda roto. El script
+      # falla con un mensaje claro si falta algún secret obligatorio.
+      - name: Generate OAuth credentials
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          KICK_CLIENT_ID: ${{ secrets.KICK_CLIENT_ID }}
+          KICK_CLIENT_SECRET: ${{ secrets.KICK_CLIENT_SECRET }}
+          TIKTOK_CLIENT_ID: ${{ secrets.TIKTOK_CLIENT_ID }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+        run: node scripts/generate-oauth-credentials.mjs
+
+      # macOS: el ffmpeg con TLS completo (Homebrew + dylibs) y el .icns no están en git.
+      - name: Prepare macOS assets
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg
+          node scripts/download-ffmpeg-mac.mjs
+          bash scripts/make-icns.sh
+
+      - name: Build and publish to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder ${{ matrix.builder-flag }} --publish always
+
+  finalize:
+    needs: build
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Publish release (all builds succeeded)
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"
+
+      - name: Remove empty draft (a build failed)
+        if: needs.build.result != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::warning::Un build falló: el release queda en borrador con lo que alcanzó a subirse."
+          node scripts/cleanup-orphan-releases.mjs
