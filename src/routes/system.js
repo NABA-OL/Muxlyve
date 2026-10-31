@@ -12,7 +12,7 @@ import { audioBus } from '../monitor.js';
 import { getViewerCounts } from '../viewers.js';
 import { getOrCreatePanelToken } from '../panelAuth.js';
 import {
-  loadSettings, saveSettings, isValidStreamKey,
+  loadSettings, saveSettings, isValidStreamKey, WEAK_DEFAULT_STREAM_KEY,
   isValidDiscordWebhook, isValidTelegramBot, MAX_DISCORD_WEBHOOKS, MAX_TELEGRAM_BOTS,
 } from '../settings.js';
 import { testDiscordWebhook } from '../notify.js';
@@ -158,6 +158,10 @@ export async function handle(req, res, url, ctx) {
     const streamKey = typeof input.streamKey === 'string' ? input.streamKey.trim() : '';
     if (!isValidStreamKey(streamKey)) {
       json(res, 400, { error: t('La clave debe tener 3-64 caracteres: letras, números, guion o guion bajo.') });
+      return true;
+    }
+    if (streamKey === WEAK_DEFAULT_STREAM_KEY) {
+      json(res, 400, { error: t('Esa clave es el valor por defecto inseguro; elige otra.') });
       return true;
     }
     saveSettings({ streamKey });

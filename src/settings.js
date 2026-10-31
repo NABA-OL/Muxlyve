@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Función, no const — electron/oauth.js importa este módulo (vía src/chat.js) en su
@@ -24,7 +25,17 @@ function settingsPath() {
   return path.join(configDir, 'settings.json');
 }
 
-const DEFAULT_STREAM_KEY = process.env.STREAM_KEY || 'mistream';
+// "mistream" fue la clave por defecto pública de siempre: cualquiera que alcance el puerto
+// de ingest (LAN, o internet en Docker/VPS) podía publicar con ella y el relay la empujaba
+// a los canales del dueño. Ya no se acepta como clave real — se reemplaza por una aleatoria.
+export const WEAK_DEFAULT_STREAM_KEY = 'mistream';
+let generatedStreamKey = null;
+function defaultStreamKey() {
+  const fromEnv = process.env.STREAM_KEY;
+  if (isValidStreamKey(fromEnv) && fromEnv !== WEAK_DEFAULT_STREAM_KEY) return fromEnv;
+  // Estable durante el proceso aunque no se pueda persistir (ver ensureStreamKey).
+  return (generatedStreamKey ??= randomBytes(12).toString('base64url'));
+}
 // Segmento de URL RTMP y del path del flv — mismo criterio que las claves de destino,
 // sin espacios ni caracteres que puedan romper la ruta.
 const STREAM_KEY_RE = /^[A-Za-z0-9_-]{3,64}$/;
@@ -44,7 +55,7 @@ export function isValidRecDuration(d) {
 }
 
 const DEFAULT_SETTINGS = {
-  streamKey: DEFAULT_STREAM_KEY, recArmed: false, fullRecArmed: false, recDuration: 60,
+  recArmed: false, fullRecArmed: false, recDuration: 60,
   clipsDir: null, recordingsDir: null, chatCommandsEnabled: true, discordWebhooks: [],
   telegramBots: [], liveMessage: null, endMessage: null, destinationPresets: [],
   audioSilenceAlertEnabled: true,
@@ -182,11 +193,11 @@ function validPresets(list) {
 // nunca en la que el usuario configuró.
 export function loadSettings() {
   const settingsPathValue = settingsPath();
-  if (!existsSync(settingsPathValue)) return { ...DEFAULT_SETTINGS };
+  if (!existsSync(settingsPathValue)) return { ...DEFAULT_SETTINGS, streamKey: defaultStreamKey() };
   try {
     const data = JSON.parse(readFileSync(settingsPathValue, 'utf-8'));
     return {
-      streamKey: isValidStreamKey(data.streamKey) ? data.streamKey : DEFAULT_STREAM_KEY,
+      streamKey: isValidStreamKey(data.streamKey) && data.streamKey !== WEAK_DEFAULT_STREAM_KEY ? data.streamKey : defaultStreamKey(),
       recArmed: !!data.recArmed,
       fullRecArmed: !!data.fullRecArmed,
       recDuration: isValidRecDuration(data.recDuration) ? Number(data.recDuration) : 60,
@@ -211,7 +222,7 @@ export function loadSettings() {
     };
   } catch (err) {
     console.error('[config] No se pudo leer settings.json:', err.message);
-    return { ...DEFAULT_SETTINGS };
+    return { ...DEFAULT_SETTINGS, streamKey: defaultStreamKey() };
   }
 }
 
@@ -220,4 +231,20 @@ export function loadSettings() {
 export function saveSettings(partial) {
   const next = { ...loadSettings(), ...partial };
   writeFileSync(settingsPath(), JSON.stringify(next, null, 2) + '\n', 'utf-8');
+}
+
+// Llamar una vez al arrancar el motor: si la clave vigente es la aleatoria generada acá (no
+// una elegida por el usuario ni de env), la persiste para que OBS no tenga que cambiarla en
+// cada reinicio. Devuelve { key, generated } para poder avisar de que cambió.
+export function ensureStreamKey() {
+  const key = loadSettings().streamKey;
+  const generated = generatedStreamKey !== null && key === generatedStreamKey;
+  if (generated) {
+    try {
+      // Un settings.json ilegible no se pisa con valores por defecto (perdería webhooks, perfiles…).
+      if (existsSync(settingsPath())) JSON.parse(readFileSync(settingsPath(), 'utf-8'));
+      saveSettings({ streamKey: key });
+    } catch (err) { console.warn('[config] No se pudo guardar la clave de ingest — cambiará en el próximo arranque:', err.message); }
+  }
+  return { key, generated };
 }

@@ -41,6 +41,18 @@ export function getOrCreatePanelToken() {
   return token;
 }
 
+// DNS rebinding: una web puede hacer que SU dominio resuelva a 127.0.0.1 y así leer el panel
+// (claves RTMP en /api/state) desde loopback, sin token y same-origin para el navegador. Lo
+// que no puede falsificar es el header Host: sigue siendo SU dominio. Se acepta solo
+// localhost o una IP literal (un literal no se puede "re-resolver"). Solo se exige a
+// requests de loopback — los de LAN ya exigen el bearer token.
+export function hostAllowed(req) {
+  const host = req.headers.host;
+  if (!host) return true; // HTTP/1.0 sin Host: no es un navegador
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
+  return /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:.]+\])$/i.test(name);
+}
+
 export function isLoopback(req) {
   const ip = req.socket.remoteAddress || '';
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';

@@ -11,6 +11,7 @@
 import { app } from 'electron';
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from 'node:fs';
 import path from 'node:path';
+import { redactStreamUrls } from '../src/redact.js';
 
 const MAX_LINES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB antes de rotar
@@ -23,7 +24,7 @@ function safeStringify(x) {
 }
 
 function push(level, args) {
-  const line = `[${new Date().toISOString()}] [${level}] ` + args.map(safeStringify).join(' ');
+  const line = redactStreamUrls(`[${new Date().toISOString()}] [${level}] ` + args.map(safeStringify).join(' '));
   buffer.push(line);
   if (buffer.length > MAX_LINES) buffer.shift();
   if (logPath) {

@@ -37,6 +37,11 @@ const keys = ['TWITCH_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'K
 // Kick y TikTok, en cambio, SIEMPRE exigen client_secret (clientes confidenciales) — por
 // eso sus *_CLIENT_SECRET van en la lista obligatoria de arriba, no acá.
 const optionalKeys = ['TWITCH_CLIENT_SECRET'];
+// En CI (GitHub Actions) no hay .env: las credenciales llegan como variables de entorno
+// desde los secrets del repo. Si existen, mandan sobre el .env local.
+for (const k of [...keys, ...optionalKeys]) {
+  if (process.env[k]) env[k] = process.env[k];
+}
 const missing = keys.filter((k) => !env[k]);
 if (missing.length) {
   console.error(`[oauth-credentials] ERROR: falta en .env: ${missing.join(', ')}`);

@@ -135,7 +135,7 @@ En OBS → Ajustes → Emisión:
 |---|---|
 | Servicio | Personalizado |
 | Servidor | `rtmp://localhost:1935/live` |
-| Clave | valor de `STREAM_KEY` en `.env` (por defecto: `mistream`) |
+| Clave | valor de `STREAM_KEY` en `.env` (vacío = se genera una clave aleatoria al primer arranque; `mistream` ya no se acepta) |
 
 Dale a **Iniciar transmisión** — el motor detecta la señal y reenvía a los destinos activos.
 
